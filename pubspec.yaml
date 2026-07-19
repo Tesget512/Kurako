@@ -45,7 +45,7 @@ dependencies:
   flutter_riverpod: ^2.6.1
 
   # Folder picker
-  file_picker: ^8.1.7
+  file_picker: ^10.3.3
 
   # App data directory
   path_provider: ^2.1.5
