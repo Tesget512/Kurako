@@ -50,3 +50,11 @@ app.*.map.json
 
 # Claude Code local settings (machine-specific paths, permissions)
 /.claude/
+
+# Android build artifacts and local config
+/android/build/
+/android/.gradle/
+/android/app/build/
+/android/local.properties
+/android/key.properties
+/android/**/GeneratedPluginRegistrant.java
