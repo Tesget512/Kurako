@@ -1,0 +1,80 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LibraryFolder {
+    pub id: i64,
+    pub path: String,
+    pub added_at: i64,
+    /// Unix seconds of the last scan, or None if never scanned. Used to skip
+    /// unchanged folders during incremental scans.
+    pub last_scanned: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Anime {
+    pub id: i64,
+    pub title_raw: String,
+    pub bangumi_id: Option<i64>,
+    pub name: Option<String>,
+    pub name_cn: Option<String>,
+    pub summary: Option<String>,
+    pub cover_url: Option<String>,
+    pub air_date: Option<String>,
+    pub total_eps: Option<i64>,
+    /// Bangumi community score (0-10).
+    pub rating: Option<f64>,
+    /// Broadcast weekday derived from air_date: 1=Mon .. 7=Sun.
+    pub air_weekday: Option<i64>,
+    /// Top Bangumi tags, comma-separated.
+    pub tags: Option<String>,
+    /// Bangumi collection type for the logged-in user:
+    /// 0=none, 1=想看, 2=看过, 3=在看, 4=搁置, 5=抛弃.
+    pub collection: i64,
+    /// "high" | "low" | "none"
+    pub match_confidence: String,
+    pub corrected: bool,
+    /// Distinct numbered episodes on disk (duplicate sources counted once).
+    pub episode_count: i64,
+    pub watched_count: i64,
+    /// Unnumbered files: menus, NCOP/NCED, specials.
+    pub special_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Episode {
+    pub id: i64,
+    pub anime_id: i64,
+    pub file_path: String,
+    pub file_name: String,
+    pub episode_no: Option<i64>,
+    pub title: Option<String>,
+    pub resolution: Option<String>,
+    pub release_group: Option<String>,
+    pub watched: bool,
+    pub last_position_ms: i64,
+    pub duration_ms: i64,
+}
+
+/// A Bangumi search candidate, shown in the manual-correction dialog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BangumiSubject {
+    pub id: i64,
+    pub name: String,
+    pub name_cn: String,
+    pub summary: String,
+    pub cover_url: Option<String>,
+    pub air_date: Option<String>,
+    pub eps: Option<i64>,
+    pub rating: Option<f64>,
+    pub tags: Vec<String>,
+}
+
+/// Progress event streamed back to Dart during a scan.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanProgress {
+    /// "scanning" | "matching" | "done" | "error"
+    pub stage: String,
+    pub current: i64,
+    pub total: i64,
+    pub message: String,
+}
