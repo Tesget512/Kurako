@@ -19,8 +19,10 @@ Future<void> main() async {
 
   await RustLib.init();
 
-  // Open the SQLite database in the app support directory.
-  final dir = await getApplicationSupportDirectory();
+  // Open the SQLite database in the app data directory. On Windows this lives
+  // under Documents/AnimeBDPlayer so it survives installer updates and portable
+  // relocations; other platforms use the sandboxed app-support dir.
+  final dir = await _dataDir();
   final dbPath = p.join(dir.path, 'anime_library.db');
   await rust.initDb(dbPath: dbPath);
 
@@ -44,4 +46,39 @@ Future<void> main() async {
   }
 
   runApp(const ProviderScope(child: AnimeBdApp()));
+}
+
+/// The directory holding the app's SQLite DB and caches.
+///
+/// On Windows we use `Documents/AnimeBDPlayer` so data survives installer
+/// updates and moving the portable folder. An existing DB from the old
+/// app-support location is migrated once. Other platforms keep their sandboxed
+/// app-support directory.
+Future<Directory> _dataDir() async {
+  if (!Platform.isWindows) {
+    return getApplicationSupportDirectory();
+  }
+  final docs = await getApplicationDocumentsDirectory();
+  final dir = Directory(p.join(docs.path, 'AnimeBDPlayer'));
+  if (!await dir.exists()) {
+    await dir.create(recursive: true);
+  }
+  // One-time migration of an existing library DB from the old location.
+  final newDb = File(p.join(dir.path, 'anime_library.db'));
+  if (!await newDb.exists()) {
+    final oldDir = await getApplicationSupportDirectory();
+    for (final name in [
+      'anime_library.db',
+      'anime_library.db-wal',
+      'anime_library.db-shm',
+    ]) {
+      final old = File(p.join(oldDir.path, name));
+      if (await old.exists()) {
+        try {
+          await old.copy(p.join(dir.path, name));
+        } catch (_) {}
+      }
+    }
+  }
+  return dir;
 }
