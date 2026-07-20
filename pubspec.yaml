@@ -56,6 +56,9 @@ dependencies:
   # via ACTION_VIEW. Android-only.
   android_intent_plus: ^5.3.0
 
+  # Open the system browser (OAuth authorize URL) — cross-platform.
+  url_launcher: ^6.3.0
+
   # App data directory
   path_provider: ^2.1.5
   path: ^1.9.0
@@ -85,6 +88,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # The subtitle font is needed both as a Flutter font family AND as a raw asset
+  # (libass on Android loads the .ttf file by asset path — see player_page).
+  assets:
+    - assets/fonts/LXGWWenKaiGBScreen.ttf
 
   fonts:
     - family: LXGWWenKaiGBScreen

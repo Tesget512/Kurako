@@ -56,6 +56,15 @@ async fn current_username() -> Result<String> {
     Ok(me.username)
 }
 
+/// Download raw bytes from a URL through the proxied client (for cover images).
+pub async fn fetch_bytes(url: &str) -> Result<Vec<u8>> {
+    let resp = client()?.get(url).send().await.context("fetch bytes")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("fetch {url} -> {}", resp.status());
+    }
+    Ok(resp.bytes().await?.to_vec())
+}
+
 fn client() -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)

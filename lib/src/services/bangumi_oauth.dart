@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:url_launcher/url_launcher.dart';
+
 import '../rust/api.dart' as rust;
 import '../rust/api.dart' show OAuthResult;
 
@@ -66,7 +68,11 @@ class BangumiOAuth {
 
   /// Open [url] in the system default browser.
   static Future<void> _openBrowser(String url) async {
-    if (Platform.isWindows) {
+    if (Platform.isAndroid || Platform.isIOS) {
+      // Mobile: there's no shell to exec — use url_launcher's platform channel
+      // to hand the URL to the system browser.
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } else if (Platform.isWindows) {
       // Do NOT route through `cmd /c start` — cmd treats `&` as a command
       // separator, so a query string like `?a=1&b=2` gets truncated at the
       // first `&`. rundll32 passes the URL as a single literal argument.

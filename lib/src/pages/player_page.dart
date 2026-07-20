@@ -27,10 +27,15 @@ class PlayerPage extends StatefulWidget {
 }
 
 class _PlayerPageState extends State<PlayerPage> {
-  // Enable libass so ASS/SSA subtitles render with their embedded styling via
-  // mpv, instead of the plain Flutter text renderer that strips styling.
+  // Enable libass so ASS/SSA + embedded subtitles render with their styling via
+  // mpv. On Android libass REQUIRES a bundled font (asset + its internal name),
+  // otherwise NO subtitle renders at all.
   late final Player _player = Player(
-    configuration: const PlayerConfiguration(libass: true),
+    configuration: const PlayerConfiguration(
+      libass: true,
+      libassAndroidFont: 'assets/fonts/LXGWWenKaiGBScreen.ttf',
+      libassAndroidFontName: 'LXGW WenKai GB Screen',
+    ),
   );
   late final VideoController _controller = VideoController(_player);
 
