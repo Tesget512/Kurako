@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -50,9 +51,21 @@ class _PlayerPageState extends State<PlayerPage> {
 
   static const List<double> _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 
+  // On phones the player takes over the whole screen in landscape — there's no
+  // windowed/fullscreen split, so the back button exits straight to the detail
+  // page in one press.
+  bool get _isMobile => Platform.isAndroid || Platform.isIOS;
+
   @override
   void initState() {
     super.initState();
+    if (_isMobile) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
     _openCurrent();
     _listen();
   }
@@ -234,6 +247,11 @@ class _PlayerPageState extends State<PlayerPage> {
     _save();
     _player.dispose();
     _handle?.release();
+    // Restore portrait orientation + system UI when leaving the player.
+    if (_isMobile) {
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    }
     super.dispose();
   }
 
@@ -387,6 +405,13 @@ class _PlayerPageState extends State<PlayerPage> {
               color: _hasNext ? Colors.white : Colors.white30),
           onPressed: _hasNext ? () => _playNext() : () {},
         ),
+      ],
+      // Bottom bar: position only — no fullscreen button, since the mobile
+      // player is already fullscreen+landscape (avoids a redundant nested
+      // fullscreen route and the double-back it caused).
+      bottomButtonBar: const [
+        MaterialPositionIndicator(),
+        Spacer(),
       ],
     );
   }
