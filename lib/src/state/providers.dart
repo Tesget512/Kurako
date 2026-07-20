@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart' show Color;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,7 +35,7 @@ final foldersProvider = FutureProvider.autoDispose<List<LibraryFolder>>((
 
 // ---- Library sorting & grouping ----
 
-enum LibrarySort { normal, year, rating, weekday, yearWeekday }
+enum LibrarySort { normal, year, rating, weekday, yearWeekday, yearQuarter }
 
 /// The active library sort, persisted so the choice carries over across
 /// launches.
@@ -96,6 +97,105 @@ class _BoolPrefNotifier extends StateNotifier<bool> {
     state = value;
   }
 }
+
+/// An int backed by SharedPreferences, clamped to [min, max].
+class _IntPrefNotifier extends StateNotifier<int> {
+  final String key;
+  final int min;
+  final int max;
+  _IntPrefNotifier(this.key,
+      {required int defaultValue, required this.min, required this.max})
+      : super(defaultValue) {
+    _load(defaultValue);
+  }
+  Future<void> _load(int def) async {
+    final prefs = await SharedPreferences.getInstance();
+    state = (prefs.getInt(key) ?? def).clamp(min, max);
+  }
+
+  Future<void> set(int value) async {
+    final v = value.clamp(min, max);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(key, v);
+    state = v;
+  }
+}
+
+// ---- Theme color (preset seed palette + follow-system Monet) ----
+
+/// A selectable seed color for the Material 3 theme.
+class SeedChoice {
+  final String label;
+  final Color color;
+  const SeedChoice(this.label, this.color);
+}
+
+/// Preset MD3 seed palette. Index 0 is the historical default (deep purple).
+const kSeedPalette = <SeedChoice>[
+  SeedChoice('默认紫', Color(0xFF6750A4)),
+  SeedChoice('樱花粉', Color(0xFFB3325A)),
+  SeedChoice('绯红', Color(0xFFBA1A1A)),
+  SeedChoice('琥珀橙', Color(0xFF825500)),
+  SeedChoice('森绿', Color(0xFF386A20)),
+  SeedChoice('青碧', Color(0xFF00696E)),
+  SeedChoice('海蓝', Color(0xFF0061A4)),
+  SeedChoice('靛蓝', Color(0xFF4355B9)),
+];
+
+class ThemeSettings {
+  final int seedIndex;
+  final bool followSystem; // Android Monet
+  const ThemeSettings({this.seedIndex = 0, this.followSystem = true});
+
+  Color get seedColor =>
+      kSeedPalette[seedIndex.clamp(0, kSeedPalette.length - 1)].color;
+
+  ThemeSettings copyWith({int? seedIndex, bool? followSystem}) => ThemeSettings(
+        seedIndex: seedIndex ?? this.seedIndex,
+        followSystem: followSystem ?? this.followSystem,
+      );
+}
+
+final themeProvider =
+    StateNotifierProvider<ThemeNotifier, ThemeSettings>((ref) {
+  return ThemeNotifier();
+});
+
+class ThemeNotifier extends StateNotifier<ThemeSettings> {
+  ThemeNotifier() : super(const ThemeSettings()) {
+    _load();
+  }
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = ThemeSettings(
+      seedIndex: (prefs.getInt('theme_seed_index') ?? 0)
+          .clamp(0, kSeedPalette.length - 1),
+      followSystem: prefs.getBool('theme_follow_system') ?? true,
+    );
+  }
+
+  Future<void> setSeedIndex(int i) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('theme_seed_index', i);
+    state = state.copyWith(seedIndex: i);
+  }
+
+  Future<void> setFollowSystem(bool v) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('theme_follow_system', v);
+    state = state.copyWith(followSystem: v);
+  }
+}
+
+// ---- Player quick-seek duration (double-tap / quick-forward), persisted ----
+
+/// Seconds jumped by the player's quick-seek (double-tap and the forward
+/// button). Adjustable via long-press. Clamped to 5..90.
+final seekDurationProvider =
+    StateNotifierProvider<_IntPrefNotifier, int>((ref) {
+  return _IntPrefNotifier('seek_duration_sec',
+      defaultValue: 10, min: 5, max: 90);
+});
 
 // ---- SMB credentials (persisted; pushed into the Rust smb client) ----
 
@@ -183,8 +283,14 @@ class Settings {
 
 class SettingsNotifier extends StateNotifier<Settings> {
   SettingsNotifier() : super(const Settings()) {
-    _load();
+    ready = _load();
   }
+
+  /// Completes when the persisted settings have been read from disk. Await this
+  /// before reading settings for a decision (e.g. which player to launch) —
+  /// otherwise the very first read after launch sees the default state because
+  /// [_load] hasn't finished yet.
+  late final Future<void> ready;
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();

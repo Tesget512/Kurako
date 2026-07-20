@@ -18,6 +18,7 @@ class LibraryPage extends ConsumerWidget {
     LibrarySort.rating: '按评分',
     LibrarySort.weekday: '按周更时间',
     LibrarySort.yearWeekday: '按年份的周更时间',
+    LibrarySort.yearQuarter: '按年度季度',
   };
 
   @override

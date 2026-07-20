@@ -68,6 +68,13 @@ dependencies:
 
   # Local settings persistence
   shared_preferences: ^2.3.4
+
+  # Material You / Monet dynamic color (Android 12+)
+  dynamic_color: ^1.7.0
+
+  # Android native picture-in-picture (small window)
+  simple_pip_mode: ^1.1.0
+
   rust_lib_anime_bd_player:
     path: rust_builder
 

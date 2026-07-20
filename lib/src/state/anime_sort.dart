@@ -9,6 +9,25 @@ String animeDisplayName(Anime a) =>
 
 int animeYear(Anime a) => int.tryParse(a.airDate?.split('-').first ?? '') ?? 0;
 
+/// The anime-season quarter an entry belongs to, expressed as its starting
+/// month: 1=冬(Jan–Mar), 4=春(Apr–Jun), 7=夏(Jul–Sep), 10=秋(Oct–Dec).
+/// Returns 0 when the air month is unknown.
+int animeQuarter(Anime a) {
+  final parts = a.airDate?.split('-') ?? const [];
+  if (parts.length < 2) return 0;
+  final m = int.tryParse(parts[1]) ?? 0;
+  if (m < 1 || m > 12) return 0;
+  return ((m - 1) ~/ 3) * 3 + 1; // 1..3→1, 4..6→4, 7..9→7, 10..12→10
+}
+
+const _quarterNames = {1: '冬', 4: '春', 7: '夏', 10: '秋'};
+
+/// Label for a quarter starting month, e.g. `1月冬`. 0 → `未知季度`.
+String quarterLabel(int startMonth) {
+  final name = _quarterNames[startMonth];
+  return name == null ? '未知季度' : '$startMonth月$name';
+}
+
 const _weekdayNames = {
   1: '周一',
   2: '周二',
@@ -62,6 +81,14 @@ int _compareBySort(Anime a, Anime b, LibrarySort sort) {
       final cw =
           (a.airWeekday?.toInt() ?? 8).compareTo(b.airWeekday?.toInt() ?? 8);
       if (cw != 0) return cw;
+    case LibrarySort.yearQuarter:
+      final cy = animeYear(b).compareTo(animeYear(a)); // newest year first
+      if (cy != 0) return cy;
+      // Within a year, newest season first (秋→夏→春→冬); unknown quarter last.
+      final qa = animeQuarter(a) == 0 ? -1 : animeQuarter(a);
+      final qb = animeQuarter(b) == 0 ? -1 : animeQuarter(b);
+      final cq = qb.compareTo(qa);
+      if (cq != 0) return cq;
   }
   return animeDisplayName(a).compareTo(animeDisplayName(b));
 }
@@ -108,6 +135,10 @@ List<AnimeSection> groupAnime(
         final y = animeYear(a);
         final ys = y == 0 ? '未知年份' : '$y 年';
         return '$ys · ${weekdayLabel(a.airWeekday?.toInt())}';
+      case LibrarySort.yearQuarter:
+        final y = animeYear(a);
+        final ys = y == 0 ? '未知年份' : '$y 年';
+        return '$ys · ${quarterLabel(animeQuarter(a))}';
     }
   }
 

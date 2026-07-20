@@ -30,6 +30,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider);
     final settings = ref.watch(settingsProvider);
+    final themeSettings = ref.watch(themeProvider);
 
     // keep controllers in sync with loaded settings
     if (_playerPathController.text.isEmpty &&
@@ -164,7 +165,78 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 ),
               ),
             ),
+          const Divider(height: 32),
+          _section(context, '外观'),
+          _buildAppearanceSection(context, themeSettings),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAppearanceSection(BuildContext context, ThemeSettings theme) {
+    final following = theme.followSystem && Platform.isAndroid;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (Platform.isAndroid)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('跟随系统取色 (Monet)'),
+            subtitle: const Text('使用 Android 12+ 壁纸动态配色，关闭后使用下方预设色'),
+            value: theme.followSystem,
+            onChanged: (v) =>
+                ref.read(themeProvider.notifier).setFollowSystem(v),
+          ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Text(
+            following ? '主题色（跟随系统中，暂不生效）' : '主题色',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+        ),
+        Opacity(
+          opacity: following ? 0.4 : 1.0,
+          child: IgnorePointer(
+            ignoring: following,
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                for (var i = 0; i < kSeedPalette.length; i++)
+                  _seedSwatch(context, i, theme.seedIndex == i),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _seedSwatch(BuildContext context, int index, bool selected) {
+    final choice = kSeedPalette[index];
+    // Contrasting check mark for readability on any swatch.
+    final onColor =
+        ThemeData.estimateBrightnessForColor(choice.color) == Brightness.dark
+            ? Colors.white
+            : Colors.black;
+    return Tooltip(
+      message: choice.label,
+      child: InkResponse(
+        radius: 28,
+        onTap: () => ref.read(themeProvider.notifier).setSeedIndex(index),
+        child: Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            color: choice.color,
+            shape: BoxShape.circle,
+            border: selected
+                ? Border.all(
+                    color: Theme.of(context).colorScheme.onSurface, width: 3)
+                : Border.all(color: Colors.black12, width: 1),
+          ),
+          child: selected ? Icon(Icons.check, color: onColor, size: 22) : null,
+        ),
       ),
     );
   }

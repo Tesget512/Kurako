@@ -3,15 +3,18 @@ import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:simple_pip_mode/simple_pip.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/media_source.dart';
+import '../state/providers.dart';
 
-class PlayerPage extends StatefulWidget {
+class PlayerPage extends ConsumerStatefulWidget {
   /// The full playlist and the index to start at, so 上/下集 and autoplay work.
   final List<Episode> episodes;
   final int initialIndex;
@@ -23,10 +26,10 @@ class PlayerPage extends StatefulWidget {
   });
 
   @override
-  State<PlayerPage> createState() => _PlayerPageState();
+  ConsumerState<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends State<PlayerPage> {
+class _PlayerPageState extends ConsumerState<PlayerPage> {
   // Enable libass so ASS/SSA + embedded subtitles render with their styling via
   // mpv. On Android libass REQUIRES a bundled font (asset + its internal name),
   // otherwise NO subtitle renders at all.
@@ -50,9 +53,23 @@ class _PlayerPageState extends State<PlayerPage> {
   double _rate = 1.0;
   double _subDelay = 0; // seconds
   StreamSubscription? _completedSub;
+  // Active dark color scheme for the player UI (seeded from the app theme).
+  // Set at the top of build(); all controls/sheets read from it for MD3 color.
+  late ColorScheme _cs = ColorScheme.fromSeed(
+      seedColor: const Color(0xFF6750A4), brightness: Brightness.dark);
   // Open SAF file descriptor for the current episode (Android); released when
   // switching episodes or closing so the fd doesn't leak.
   PlayableHandle? _handle;
+
+  // Quick-seek jump (seconds), read from [seekDurationProvider] each build.
+  int _seekSec = 10;
+
+  // Android picture-in-picture entry point. enterPipMode() works through the
+  // plugin's method channel with a plain FlutterActivity; the enter/exit
+  // callbacks (which would need a native Activity wrapper) are intentionally
+  // not used — media_kit's controls auto-hide and PiP has no touch focus, so
+  // the small window stays clean on its own.
+  SimplePip? _pip;
 
   static const List<double> _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -71,8 +88,21 @@ class _PlayerPageState extends State<PlayerPage> {
         DeviceOrientation.landscapeRight,
       ]);
     }
+    // Android-only native picture-in-picture (button-triggered).
+    if (Platform.isAndroid) {
+      _pip = SimplePip();
+    }
     _openCurrent();
     _listen();
+  }
+
+  Future<void> _enterPip() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _pip?.enterPipMode();
+    } catch (_) {
+      // Device without PiP support; ignore.
+    }
   }
 
   Future<void> _openCurrent() async {
@@ -238,6 +268,14 @@ class _PlayerPageState extends State<PlayerPage> {
     if (mounted) setState(() => _rate = rate);
   }
 
+  // Jump forward by the configured quick-seek duration.
+  Future<void> _quickSeekForward() async {
+    final target = Duration(milliseconds: _positionMs) +
+        Duration(seconds: _seekSec);
+    final max = Duration(milliseconds: _durationMs);
+    await _player.seek(_durationMs > 0 && target > max ? max : target);
+  }
+
   Future<void> _setSubDelay(double seconds) async {
     _subDelay = seconds;
     // mpv property: positive delay shows subtitles later.
@@ -262,6 +300,14 @@ class _PlayerPageState extends State<PlayerPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Live values from providers: quick-seek duration (also feeds double-tap).
+    _seekSec = ref.watch(seekDurationProvider);
+    // The player lives over a black video surface, so its UI is always dark —
+    // seed a dark MD3 scheme from the active theme color so controls, the seek
+    // bar and bottom sheets are all on-brand regardless of app light/dark mode.
+    final seed = ref.watch(themeProvider).seedColor;
+    _cs = ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
+
     // Desktop (mouse/keyboard) and mobile (touch) need different control sets:
     // MaterialDesktopVideoControls has hover seek bar + keyboard shortcuts;
     // MaterialVideoControls has the touch gestures (double-tap seek, swipe
@@ -272,9 +318,8 @@ class _PlayerPageState extends State<PlayerPage> {
 
     final video = Video(
       controller: _controller,
-      controls: isDesktop
-          ? MaterialDesktopVideoControls
-          : MaterialVideoControls,
+      controls:
+          isDesktop ? MaterialDesktopVideoControls : MaterialVideoControls,
       subtitleViewConfiguration: const SubtitleViewConfiguration(
         // libass draws subtitles onto the video texture; hide the Flutter
         // overlay to avoid double text.
@@ -294,7 +339,12 @@ class _PlayerPageState extends State<PlayerPage> {
             child: video,
           );
 
-    return Scaffold(backgroundColor: Colors.black, body: themed);
+    final dark = Theme.of(context).copyWith(colorScheme: _cs);
+
+    return Theme(
+      data: dark,
+      child: Scaffold(backgroundColor: Colors.black, body: themed),
+    );
   }
 
   // ---- Desktop controls (mouse + keyboard) ----
@@ -317,6 +367,10 @@ class _PlayerPageState extends State<PlayerPage> {
           ),
         ),
         _desktopRateButton(),
+        MaterialDesktopCustomButton(
+          icon: const Icon(Icons.forward_10),
+          onPressed: _quickSeekForward,
+        ),
         MaterialDesktopCustomButton(
           icon: const Icon(Icons.subtitles_outlined),
           onPressed: _showTrackSheet,
@@ -369,9 +423,21 @@ class _PlayerPageState extends State<PlayerPage> {
       seekGesture: true,
       speedUpOnLongPress: true,
       speedUpFactor: 2.0,
-      seekOnDoubleTapBackwardDuration: const Duration(seconds: 10),
-      seekOnDoubleTapForwardDuration: const Duration(seconds: 10),
-      // Top bar: back + title + rate + tracks + subtitle-delay.
+      seekOnDoubleTapBackwardDuration: Duration(seconds: _seekSec),
+      seekOnDoubleTapForwardDuration: Duration(seconds: _seekSec),
+      // MD3 seek bar: theme-colored, thicker, and lifted off the very bottom
+      // edge so it's not easily mis-tapped (VLC-style). Extra height + a bigger
+      // thumb make it a comfortable touch target.
+      seekBarThumbColor: _cs.primary,
+      seekBarColor: Colors.white24,
+      seekBarPositionColor: _cs.primary,
+      seekBarBufferColor: Colors.white38,
+      seekBarHeight: 4.2,
+      seekBarThumbSize: 13,
+      seekBarMargin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      bottomButtonBarMargin:
+          const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+      // Top bar: back + title + quick-seek + rate + tracks + subtitle-delay.
       topButtonBar: [
         MaterialCustomButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -385,6 +451,12 @@ class _PlayerPageState extends State<PlayerPage> {
             style: const TextStyle(color: Colors.white, fontSize: 14),
           ),
         ),
+        _seekButton(),
+        if (Platform.isAndroid)
+          MaterialCustomButton(
+            icon: const Icon(Icons.picture_in_picture_alt, color: Colors.white),
+            onPressed: _enterPip,
+          ),
         _rateButton(),
         MaterialCustomButton(
           icon: const Icon(Icons.subtitles_outlined, color: Colors.white),
@@ -439,10 +511,81 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  void _showRateSheet() {
+  // Quick-seek button: tap jumps forward by the configured duration; long-press
+  // opens the duration setting. The label watches the provider directly via
+  // Consumer — media_kit's controls theme has a broken updateShouldNotify, so
+  // the button bar isn't rebuilt when we hand it a fresh theme; watching here
+  // keeps the shown duration live regardless.
+  Widget _seekButton() {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _quickSeekForward,
+      onLongPress: _showSeekDurationSheet,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.fast_forward, color: Colors.white, size: 20),
+            const SizedBox(width: 2),
+            Consumer(
+              builder: (context, ref, _) {
+                final s = ref.watch(seekDurationProvider);
+                return Text('${s}s',
+                    style: const TextStyle(color: Colors.white, fontSize: 11));
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSeekDurationSheet() {
+    final cs = Theme.of(context).colorScheme;
+    int local = _seekSec; // immediate feedback; provider write is async
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: cs.surfaceContainerHigh,
+      showDragHandle: true,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setSheet) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('快进 / 快退时长：$local 秒',
+                    style: TextStyle(color: cs.onSurface, fontSize: 16)),
+                const SizedBox(height: 4),
+                Text('双击画面或点击顶部按钮时跳转的时长',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+                Slider(
+                  value: local.toDouble(),
+                  min: 5,
+                  max: 90,
+                  divisions: 17, // steps of 5
+                  label: '$local 秒',
+                  onChanged: (v) {
+                    local = v.round();
+                    ref.read(seekDurationProvider.notifier).set(local);
+                    setSheet(() {});
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showRateSheet() {
+    final cs = Theme.of(context).colorScheme;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: cs.surfaceContainerHigh,
       showDragHandle: true,
       builder: (context) => SafeArea(
         child: Wrap(
@@ -451,10 +594,11 @@ class _PlayerPageState extends State<PlayerPage> {
               ListTile(
                 dense: true,
                 leading: s == _rate
-                    ? const Icon(Icons.check, color: Colors.lightBlueAccent)
+                    ? Icon(Icons.check, color: cs.primary)
                     : const SizedBox(width: 24),
-                title: Text('${s}x',
-                    style: const TextStyle(color: Colors.white)),
+                title: Text('${s}x', style: TextStyle(color: cs.onSurface)),
+                selected: s == _rate,
+                selectedTileColor: cs.secondaryContainer,
                 onTap: () {
                   _setRate(s);
                   Navigator.pop(context);
@@ -467,9 +611,10 @@ class _PlayerPageState extends State<PlayerPage> {
   }
 
   void _showSubDelaySheet() {
+    final cs = Theme.of(context).colorScheme;
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: cs.surfaceContainerHigh,
       showDragHandle: true,
       builder: (context) => StatefulBuilder(
         builder: (context, setSheet) => SafeArea(
@@ -480,10 +625,10 @@ class _PlayerPageState extends State<PlayerPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text('字幕延迟：${_subDelay.toStringAsFixed(1)} 秒',
-                    style: const TextStyle(color: Colors.white, fontSize: 16)),
+                    style: TextStyle(color: cs.onSurface, fontSize: 16)),
                 const SizedBox(height: 4),
-                const Text('正值让字幕更晚出现，负值更早',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
+                Text('正值让字幕更晚出现，负值更早',
+                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                   children: [
@@ -521,9 +666,10 @@ class _PlayerPageState extends State<PlayerPage> {
       OutlinedButton(onPressed: onTap, child: Text(label));
 
   void _showTrackSheet() {
+    final cs = Theme.of(context).colorScheme;
     showModalBottomSheet<void>(
       context: context,
-      backgroundColor: const Color(0xFF1E1E1E),
+      backgroundColor: cs.surfaceContainerHigh,
       showDragHandle: true,
       builder: (context) {
         final tracks = _player.state.tracks;
@@ -547,7 +693,7 @@ class _PlayerPageState extends State<PlayerPage> {
                         _rememberSub(t);
                       },
                     ),
-                const Divider(color: Colors.white24, height: 1),
+                Divider(color: cs.outlineVariant, height: 1),
                 _trackHeader(Icons.audiotrack, '音轨'),
                 for (final t in tracks.audio)
                   if (t.id != 'auto' && t.id != 'no')
@@ -568,30 +714,36 @@ class _PlayerPageState extends State<PlayerPage> {
     );
   }
 
-  Widget _trackHeader(IconData icon, String label) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: Colors.white70),
-            const SizedBox(width: 8),
-            Text(label,
-                style: const TextStyle(
-                    color: Colors.white70, fontWeight: FontWeight.bold)),
-          ],
-        ),
-      );
+  Widget _trackHeader(IconData icon, String label) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: cs.onSurfaceVariant),
+          const SizedBox(width: 8),
+          Text(label,
+              style: TextStyle(
+                  color: cs.onSurfaceVariant, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
 
-  Widget _trackTile(String label, bool selected, VoidCallback onTap) => ListTile(
-        dense: true,
-        title: Text(label, style: const TextStyle(color: Colors.white)),
-        trailing: selected
-            ? const Icon(Icons.check, color: Colors.lightBlueAccent)
-            : null,
-        onTap: () {
-          onTap();
-          Navigator.pop(context);
-        },
-      );
+  Widget _trackTile(String label, bool selected, VoidCallback onTap) {
+    final cs = Theme.of(context).colorScheme;
+    return ListTile(
+      dense: true,
+      title: Text(label, style: TextStyle(color: cs.onSurface)),
+      selected: selected,
+      selectedTileColor: cs.secondaryContainer,
+      trailing: selected ? Icon(Icons.check, color: cs.primary) : null,
+      onTap: () {
+        onTap();
+        Navigator.pop(context);
+      },
+    );
+  }
 
   String _trackLabel(String? title, String? language, String id) {
     final parts = <String>[];

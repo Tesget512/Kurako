@@ -176,6 +176,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   }
 
   Future<void> _play(BuildContext context, WidgetRef ref, Episode ep) async {
+    // Ensure persisted settings are loaded before choosing a player — on the
+    // first play right after launch the async load may not have finished, which
+    // used to fall back to the built-in player on the first tap.
+    await ref.read(settingsProvider.notifier).ready;
     final settings = ref.read(settingsProvider);
     if (settings.useExternalPlayer) {
       try {

@@ -34,6 +34,7 @@ class CollectionPage extends ConsumerWidget {
           title: const Text('追番'),
           bottom: TabBar(
             isScrollable: true,
+            tabAlignment: TabAlignment.center,
             tabs: [
               for (final t in _tabs)
                 Tab(

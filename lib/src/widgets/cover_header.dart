@@ -25,105 +25,127 @@ class CoverHeader extends StatelessWidget {
         .toList();
     return Padding(
       padding: const EdgeInsets.all(16),
-      child: Row(
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: SizedBox(
-              width: 140,
-              height: 200,
-              child: CoverImage(url: anime.coverUrl),
-            ),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(_title, style: theme.textTheme.headlineSmall),
-                if (anime.name != null &&
-                    anime.name!.isNotEmpty &&
-                    anime.name != _title) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    anime.name!,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 4,
+          // Top: cover beside title + key facts (chips). Kept compact so the
+          // summary below can use the full width instead of a narrow column.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: 130,
+                  height: 185,
+                  child: CoverImage(url: anime.coverUrl),
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (anime.airDate != null)
-                      Chip(label: Text(anime.airDate!)),
-                    if (anime.airWeekday != null)
-                      Chip(
-                        label: Text('${weekdays[anime.airWeekday!.toInt()]}更新'),
-                      ),
-                    if (anime.totalEps != null)
-                      Chip(label: Text('${anime.totalEps} 话')),
-                    if (anime.rating != null)
-                      Chip(
-                        avatar: Icon(
-                          Icons.star,
-                          size: 16,
-                          color: theme.colorScheme.primary,
+                    Text(_title, style: theme.textTheme.titleLarge),
+                    if (anime.name != null &&
+                        anime.name!.isNotEmpty &&
+                        anime.name != _title) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        anime.name!,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
                         ),
-                        label: Text(anime.rating!.toStringAsFixed(1)),
                       ),
-                    if (collectionLabels[anime.collection] != null)
-                      Chip(
-                        label: Text(collectionLabels[anime.collection]!),
-                        backgroundColor: theme.colorScheme.primaryContainer,
-                      ),
-                    if (anime.bangumiId == null)
-                      Chip(
-                        label: const Text('待匹配'),
-                        backgroundColor: theme.colorScheme.errorContainer,
-                      ),
+                    ],
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (anime.airDate != null)
+                          Chip(
+                            label: Text(anime.airDate!),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        if (anime.airWeekday != null)
+                          Chip(
+                            label: Text(
+                                '${weekdays[anime.airWeekday!.toInt()]}更新'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        if (anime.totalEps != null)
+                          Chip(
+                            label: Text('${anime.totalEps} 话'),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        if (anime.rating != null)
+                          Chip(
+                            avatar: Icon(
+                              Icons.star,
+                              size: 16,
+                              color: theme.colorScheme.primary,
+                            ),
+                            label: Text(anime.rating!.toStringAsFixed(1)),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        if (collectionLabels[anime.collection] != null)
+                          Chip(
+                            label:
+                                Text(collectionLabels[anime.collection]!),
+                            backgroundColor:
+                                theme.colorScheme.primaryContainer,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        if (anime.bangumiId == null)
+                          Chip(
+                            label: const Text('待匹配'),
+                            backgroundColor:
+                                theme.colorScheme.errorContainer,
+                            visualDensity: VisualDensity.compact,
+                          ),
+                      ],
+                    ),
                   ],
                 ),
-                if (tags.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: [
-                      for (final t in tags)
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            t.trim(),
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: theme.colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ],
-                const SizedBox(height: 12),
-                if (anime.summary != null && anime.summary!.isNotEmpty)
-                  Text(
-                    anime.summary!,
-                    maxLines: 8,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall,
+              ),
+            ],
+          ),
+          // Full-width tags + summary below, so long text isn't crammed into a
+          // narrow column next to the cover.
+          if (tags.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final t in tags)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      t.trim(),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                   ),
               ],
             ),
-          ),
+          ],
+          if (anime.summary != null && anime.summary!.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              anime.summary!,
+              style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+            ),
+          ],
         ],
       ),
     );
