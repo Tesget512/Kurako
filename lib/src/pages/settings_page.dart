@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
-import '../rust/models.dart';
 import '../services/bangumi_oauth.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
@@ -115,9 +114,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ),
           const Divider(height: 32),
-          _section(context, 'SMB 快照同步'),
-          _buildSnapshotSection(context, foldersAsync),
-          const Divider(height: 32),
           _section(context, 'Bangumi 账号'),
           _buildBangumiSection(context, settings),
           const Divider(height: 32),
@@ -178,73 +174,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(title, style: Theme.of(context).textTheme.titleMedium),
     );
-  }
-
-  Widget _buildSnapshotSection(
-      BuildContext context, AsyncValue<List<LibraryFolder>> foldersAsync) {
-    final hasSmb = foldersAsync.maybeWhen(
-      data: (folders) => folders.any((f) => f.sourceType == 'smb'),
-      orElse: () => false,
-    );
-    if (!hasSmb) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 4),
-        child: Text(
-          '添加 SMB 共享后，可把扫描+匹配结果存到共享上，其他设备一键恢复，避免重扫。',
-          style: TextStyle(color: Colors.grey, fontSize: 13),
-        ),
-      );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        const Text(
-          '把本机的番剧库快照上传到 SMB 共享；或从共享恢复到本机（多端同步）。',
-          style: TextStyle(color: Colors.grey, fontSize: 13),
-        ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.cloud_upload_outlined),
-                label: const Text('上传快照'),
-                onPressed: _uploadSnapshot,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.cloud_download_outlined),
-                label: const Text('从共享恢复'),
-                onPressed: _restoreSnapshot,
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Future<void> _uploadSnapshot() async {
-    _snack('正在上传快照…');
-    try {
-      await rust.snapshotUploadToSmb();
-      _snack('快照已上传到 SMB');
-    } catch (e) {
-      _snack('上传失败：$e');
-    }
-  }
-
-  Future<void> _restoreSnapshot() async {
-    _snack('正在从 SMB 恢复…');
-    try {
-      final n = await rust.snapshotRestoreFromSmb();
-      ref.invalidate(animeListProvider);
-      _snack(n > 0 ? '已从快照恢复 $n 部番剧' : '共享上还没有快照');
-    } catch (e) {
-      _snack('恢复失败：$e');
-    }
   }
 
   Widget _buildBangumiSection(BuildContext context, Settings settings) {

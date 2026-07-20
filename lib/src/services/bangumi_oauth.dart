@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:android_intent_plus/android_intent.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as rust;
@@ -68,9 +69,17 @@ class BangumiOAuth {
 
   /// Open [url] in the system default browser.
   static Future<void> _openBrowser(String url) async {
-    if (Platform.isAndroid || Platform.isIOS) {
-      // Mobile: there's no shell to exec — use url_launcher's platform channel
-      // to hand the URL to the system browser.
+    if (Platform.isAndroid) {
+      // Use an ACTION_VIEW intent with the raw URL as data. This is the same
+      // reliable path the external player uses; it avoids url_launcher's
+      // Uri round-trip, which could re-encode the already-percent-encoded
+      // redirect_uri and make Bangumi report "No redirect URI was supplied".
+      final intent = AndroidIntent(
+        action: 'action_view',
+        data: url,
+      );
+      await intent.launch();
+    } else if (Platform.isIOS) {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } else if (Platform.isWindows) {
       // Do NOT route through `cmd /c start` — cmd treats `&` as a command

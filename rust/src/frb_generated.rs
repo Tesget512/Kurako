@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1167946053;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -219256208;
 
 // Section: executor
 
@@ -179,38 +179,6 @@ fn wire__crate__api__clear_library_impl(
         },
     )
 }
-fn wire__crate__api__export_snapshot_json_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "export_snapshot_json",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::export_snapshot_json()?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__get_anime_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -238,39 +206,6 @@ fn wire__crate__api__get_anime_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::get_anime(api_id)?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__import_snapshot_json_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "import_snapshot_json",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_json = <String>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::import_snapshot_json(api_json)?;
                     Ok(output_ok)
                 })())
             }
@@ -786,41 +721,6 @@ fn wire__crate__api__set_bangumi_token_impl(
         },
     )
 }
-fn wire__crate__api__set_cache_dir_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "set_cache_dir",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_path = <String>::sse_decode(&mut deserializer);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, ()>((move || {
-                    let output_ok = Result::<_, ()>::Ok({
-                        crate::api::set_cache_dir(api_path);
-                    })?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
 fn wire__crate__api__set_collection_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1064,70 +964,6 @@ fn wire__crate__api__smb_set_credentials_impl(
                             api_password,
                         );
                     })?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__snapshot_restore_from_smb_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "snapshot_restore_from_smb",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::snapshot_restore_from_smb()?;
-                    Ok(output_ok)
-                })())
-            }
-        },
-    )
-}
-fn wire__crate__api__snapshot_upload_to_smb_impl(
-    port_: flutter_rust_bridge::for_generated::MessagePort,
-    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
-    rust_vec_len_: i32,
-    data_len_: i32,
-) {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
-        flutter_rust_bridge::for_generated::TaskInfo {
-            debug_name: "snapshot_upload_to_smb",
-            port: Some(port_),
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
-        },
-        move || {
-            let message = unsafe {
-                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
-                    ptr_,
-                    rust_vec_len_,
-                    data_len_,
-                )
-            };
-            let mut deserializer =
-                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            deserializer.end();
-            move |context| {
-                transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::snapshot_upload_to_smb()?;
                     Ok(output_ok)
                 })())
             }
@@ -1620,37 +1456,32 @@ fn pde_ffi_dispatcher_primary_impl(
         2 => wire__crate__api__bind_anime_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__clear_collection_impl(port, ptr, rust_vec_len, data_len),
         4 => wire__crate__api__clear_library_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__export_snapshot_json_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__get_anime_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__import_snapshot_json_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__init_db_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__list_anime_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__list_episodes_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__list_library_folders_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__oauth_authorize_url_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__oauth_exchange_code_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__oauth_redirect_uri_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__oauth_refresh_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__refresh_metadata_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__remove_library_folder_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__scan_and_match_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__scan_files_and_match_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__set_cache_dir_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__snapshot_restore_from_smb_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__snapshot_upload_to_smb_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__get_anime_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__init_db_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__list_anime_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__list_episodes_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__list_library_folders_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__oauth_authorize_url_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__oauth_exchange_code_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__oauth_redirect_uri_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__oauth_refresh_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__refresh_metadata_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__remove_library_folder_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__scan_and_match_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__scan_files_and_match_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

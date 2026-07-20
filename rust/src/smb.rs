@@ -158,67 +158,6 @@ pub fn smb_path_from_uri(uri: &str) -> Option<String> {
     Some(parts.next().unwrap_or("").to_string())
 }
 
-// ---- Snapshot file I/O on the share (for multi-device sync) ----
-
-/// Path on the share where the library snapshot lives.
-const SNAPSHOT_PATH: &str = ".animebd/snapshot.json";
-
-/// Write the snapshot JSON to `<share>/.animebd/snapshot.json`.
-pub async fn write_snapshot(json: &str) -> Result<()> {
-    let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    // Ensure the .animebd directory exists (ignore "already exists" errors).
-    let _ = client.create_directory(&mut tree, ".animebd").await;
-    let res = client
-        .write_file(&mut tree, SNAPSHOT_PATH, json.as_bytes())
-        .await;
-    let _ = client.disconnect_share(&tree).await;
-    res.map_err(|e| {
-        anyhow::anyhow!(
-            "写入快照失败：{e}。请确认该 SMB 账号对共享有写入权限（服务器上把共享设为可读写，或用有写权限的账号）。"
-        )
-    })?;
-    Ok(())
-}
-
-/// Read the snapshot JSON from the share, or None if it doesn't exist.
-pub async fn read_snapshot() -> Result<Option<String>> {
-    let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    let data = client.read_file(&mut tree, SNAPSHOT_PATH).await;
-    let _ = client.disconnect_share(&tree).await;
-    match data {
-        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-        Err(_) => Ok(None), // not found / unreadable → treat as no snapshot
-    }
-}
-
-/// Cover image path on the share for a given anime group_key (alphanumeric key).
-fn cover_path(group_key: &str) -> String {
-    format!(".animebd/covers/{group_key}.img")
-}
-
-/// Write a cover image to the share (called during snapshot upload).
-pub async fn write_cover(group_key: &str, bytes: &[u8]) -> Result<()> {
-    let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    let _ = client.create_directory(&mut tree, ".animebd").await;
-    let _ = client.create_directory(&mut tree, ".animebd/covers").await;
-    let res = client.write_file(&mut tree, &cover_path(group_key), bytes).await;
-    let _ = client.disconnect_share(&tree).await;
-    res.map_err(|e| anyhow::anyhow!("write cover: {e}"))?;
-    Ok(())
-}
-
-/// Read a cover image from the share (called during snapshot restore).
-pub async fn read_cover(group_key: &str) -> Result<Vec<u8>> {
-    let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    let data = client.read_file(&mut tree, &cover_path(group_key)).await;
-    let _ = client.disconnect_share(&tree).await;
-    Ok(data?)
-}
-
 // ---- Local HTTP streaming proxy ----
 //
 // libmpv's bundled FFmpeg usually lacks the smb:// protocol, so we serve SMB

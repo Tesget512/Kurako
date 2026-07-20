@@ -23,8 +23,6 @@ Future<void> main() async {
   final dir = await getApplicationSupportDirectory();
   final dbPath = p.join(dir.path, 'anime_library.db');
   await rust.initDb(dbPath: dbPath);
-  // Where Rust caches cover images pulled from SMB snapshots.
-  rust.setCacheDir(path: dir.path);
 
   // Restore the saved Bangumi token, if any.
   final prefs = await SharedPreferences.getInstance();

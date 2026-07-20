@@ -10,10 +10,6 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These functions are ignored because they are not marked as `pub`: `finish_scan`, `now_secs`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
-/// Tell Rust where to cache cover images pulled from SMB snapshots.
-Future<void> setCacheDir({required String path}) =>
-    RustLib.instance.api.crateApiSetCacheDir(path: path);
-
 /// Open (and create if needed) the SQLite database at the given path.
 Future<void> initDb({required String dbPath}) =>
     RustLib.instance.api.crateApiInitDb(dbPath: dbPath);
@@ -147,27 +143,6 @@ Future<String> smbPlayableUrl({required String smbUri}) =>
 /// Release a playback URL when done (frees the proxy token).
 Future<void> smbRelease({required String url}) =>
     RustLib.instance.api.crateApiSmbRelease(url: url);
-
-/// Serialize the whole library (anime + episodes) to a JSON snapshot string.
-Future<String> exportSnapshotJson() =>
-    RustLib.instance.api.crateApiExportSnapshotJson();
-
-/// Import a JSON snapshot into the local library (idempotent upsert).
-Future<int> importSnapshotJson({required String json}) =>
-    RustLib.instance.api.crateApiImportSnapshotJson(json: json);
-
-/// Export the library and upload it to the connected SMB share, together with
-/// each cover image (so devices that can't reach Bangumi's CDN still show
-/// covers after restoring).
-Future<void> snapshotUploadToSmb() =>
-    RustLib.instance.api.crateApiSnapshotUploadToSmb();
-
-/// Download the snapshot from the SMB share and import it. Covers are pulled
-/// from the share into the local cache dir and each anime's cover_url is
-/// rewritten to that local file. Returns the number of anime imported, or 0 if
-/// the share has no snapshot yet.
-Future<int> snapshotRestoreFromSmb() =>
-    RustLib.instance.api.crateApiSnapshotRestoreFromSmb();
 
 /// Refresh Bangumi collection status (想看/在看/看过…) for every bound entry.
 /// Uses a single paginated bulk-fetch — safe to call frequently.

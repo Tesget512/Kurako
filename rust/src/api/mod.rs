@@ -3,17 +3,8 @@ use crate::{bangumi, db, scan, smb};
 use crate::frb_generated::StreamSink;
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
-
-/// App-writable directory for cached cover images (set once at startup).
-static CACHE_DIR: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
-
-/// Tell Rust where to cache cover images pulled from SMB snapshots.
-pub fn set_cache_dir(path: String) {
-    *CACHE_DIR.lock().unwrap() = path;
-}
 
 static RT: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
@@ -274,85 +265,9 @@ pub fn smb_release(url: String) {
 }
 
 // ---- Snapshot sync (multi-device) ----
-
-/// Serialize the whole library (anime + episodes) to a JSON snapshot string.
-pub fn export_snapshot_json() -> Result<String, String> {
-    let items = db::export_snapshot().map_err(|e| e.to_string())?;
-    serde_json::to_string(&items).map_err(|e| e.to_string())
-}
-
-/// Import a JSON snapshot into the local library (idempotent upsert).
-pub fn import_snapshot_json(json: String) -> Result<u32, String> {
-    let items: Vec<db::SnapshotAnime> =
-        serde_json::from_str(&json).map_err(|e| format!("parse snapshot: {e}"))?;
-    let n = items.len() as u32;
-    db::import_snapshot(&items).map_err(|e| e.to_string())?;
-    Ok(n)
-}
-
-/// Export the library and upload it to the connected SMB share, together with
-/// each cover image (so devices that can't reach Bangumi's CDN still show
-/// covers after restoring).
-pub fn snapshot_upload_to_smb() -> Result<(), String> {
-    let items = db::export_snapshot().map_err(|e| e.to_string())?;
-    let json = serde_json::to_string(&items).map_err(|e| e.to_string())?;
-    RT.block_on(async {
-        smb::write_snapshot(&json).await?;
-        // Best-effort: download each cover via the proxied Bangumi client and
-        // store it on the share under .animebd/covers/<group_key>.img.
-        for a in &items {
-            if let Some(url) = &a.cover_url {
-                if url.starts_with("http") {
-                    if let Ok(bytes) = bangumi::fetch_bytes(url).await {
-                        let _ = smb::write_cover(&a.group_key, &bytes).await;
-                    }
-                }
-            }
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .map_err(|e| e.to_string())
-}
-
-/// Download the snapshot from the SMB share and import it. Covers are pulled
-/// from the share into the local cache dir and each anime's cover_url is
-/// rewritten to that local file. Returns the number of anime imported, or 0 if
-/// the share has no snapshot yet.
-pub fn snapshot_restore_from_smb() -> Result<u32, String> {
-    let cache = CACHE_DIR.lock().unwrap().clone();
-    let result = RT.block_on(async {
-        let json = match smb::read_snapshot().await? {
-            Some(j) => j,
-            None => return Ok::<Option<Vec<db::SnapshotAnime>>, anyhow::Error>(None),
-        };
-        let mut items: Vec<db::SnapshotAnime> = serde_json::from_str(&json)?;
-        // Pull covers from SMB into the local cache and repoint cover_url.
-        if !cache.is_empty() {
-            let covers_dir = std::path::Path::new(&cache).join("covers");
-            let _ = std::fs::create_dir_all(&covers_dir);
-            for a in &mut items {
-                if let Ok(bytes) = smb::read_cover(&a.group_key).await {
-                    let local = covers_dir.join(format!("{}.img", a.group_key));
-                    if std::fs::write(&local, &bytes).is_ok() {
-                        a.cover_url = Some(local.to_string_lossy().into_owned());
-                    }
-                }
-            }
-        }
-        Ok(Some(items))
-    })
-    .map_err(|e| e.to_string())?;
-
-    match result {
-        Some(items) => {
-            let n = items.len() as u32;
-            db::import_snapshot(&items).map_err(|e| e.to_string())?;
-            let _ = sync_collections_inner();
-            Ok(n)
-        }
-        None => Ok(0),
-    }
-}
+// Removed: SMB snapshots proved impractical (a snapshot from one device
+// references that device's SMB path, and a restoring device that isn't
+// connected to that same share can't play the entries).
 
 /// Shared tail of a scan: upsert groups/episodes, auto-match against Bangumi,
 /// merge duplicate bindings, sync collection status, emit done.
