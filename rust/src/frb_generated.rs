@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -987744104;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 556759794;
 
 // Section: executor
 
@@ -637,11 +637,16 @@ fn wire__crate__api__scan_files_and_match_impl(
             >>::sse_decode(&mut deserializer);
             let api_folder_id = <i64>::sse_decode(&mut deserializer);
             let api_files = <Vec<crate::models::ScannedFile>>::sse_decode(&mut deserializer);
+            let api_source_type = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::scan_files_and_match(api_sink, api_folder_id, api_files)?;
+                    let output_ok = crate::api::scan_files_and_match(
+                        api_sink,
+                        api_folder_id,
+                        api_files,
+                        api_source_type,
+                    )?;
                     Ok(output_ok)
                 })())
             }
@@ -778,6 +783,119 @@ fn wire__crate__api__set_watched_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::set_watched(api_episode_id, api_watched)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__smb_connect_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "smb_connect",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_host = <String>::sse_decode(&mut deserializer);
+            let api_share = <String>::sse_decode(&mut deserializer);
+            let api_user = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok =
+                        crate::api::smb_connect(api_host, api_share, api_user, api_password)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__smb_enumerate_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "smb_enumerate",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_subdir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::smb_enumerate(api_subdir)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__smb_set_credentials_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "smb_set_credentials",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_host = <String>::sse_decode(&mut deserializer);
+            let api_share = <String>::sse_decode(&mut deserializer);
+            let api_user = <String>::sse_decode(&mut deserializer);
+            let api_password = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::smb_set_credentials(
+                            api_host,
+                            api_share,
+                            api_user,
+                            api_password,
+                        );
+                    })?;
                     Ok(output_ok)
                 })())
             }
@@ -1288,9 +1406,12 @@ fn pde_ffi_dispatcher_primary_impl(
         20 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
         21 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
         22 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

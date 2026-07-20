@@ -1,5 +1,5 @@
 use crate::models::{Anime, BangumiSubject, Episode, LibraryFolder, ScanProgress};
-use crate::{bangumi, db, scan};
+use crate::{bangumi, db, scan, smb};
 use crate::frb_generated::StreamSink;
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
@@ -198,13 +198,15 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
     finish_scan(groups, "local", &sink)
 }
 
-/// Scan a single SAF (Android) folder whose files Dart has already enumerated.
-/// `files` carries content:// URIs + relative folder paths; Rust does only the
-/// recognition/grouping/matching (identical logic to the desktop path).
+/// Scan a folder whose files were enumerated on the Dart side (Android SAF) or
+/// by the Rust SMB client. `files` carries locator URIs + relative folder paths;
+/// Rust does only the recognition/grouping/matching. `source_type` is stored on
+/// each episode so playback knows how to resolve the URI ("saf" | "smb").
 pub fn scan_files_and_match(
     sink: StreamSink<ScanProgress>,
     folder_id: i64,
     files: Vec<crate::models::ScannedFile>,
+    source_type: String,
 ) -> Result<(), String> {
     let scanned: Vec<scan::ScannedFile> = files
         .into_iter()
@@ -216,7 +218,38 @@ pub fn scan_files_and_match(
         .collect();
     let groups = scan::group_files(scanned);
     let _ = db::set_folder_scanned(folder_id, now_secs());
-    finish_scan(groups, "saf", &sink)
+    finish_scan(groups, &source_type, &sink)
+}
+
+// ---- SMB network share ----
+
+/// Test-connect an SMB share and cache the credentials. Returns Err with a
+/// human-readable message on failure so the UI can show it.
+pub fn smb_connect(
+    host: String,
+    share: String,
+    user: String,
+    password: String,
+) -> Result<(), String> {
+    RT.block_on(async { smb::connect(&host, &share, &user, &password).await })
+        .map_err(|e| e.to_string())
+}
+
+/// Restore cached SMB credentials on startup (from Dart's persisted settings)
+/// without a network round-trip. Connection is opened lazily per operation.
+pub fn smb_set_credentials(host: String, share: String, user: String, password: String) {
+    smb::set_creds(Some(smb::SmbCreds {
+        addr: if host.contains(':') { host } else { format!("{host}:445") },
+        share: share.trim_matches('/').to_string(),
+        user,
+        password,
+    }));
+}
+
+/// Recursively enumerate video files under an SMB folder's sub-path.
+pub fn smb_enumerate(subdir: String) -> Result<Vec<crate::models::ScannedFile>, String> {
+    RT.block_on(async { smb::enumerate(&subdir).await })
+        .map_err(|e| e.to_string())
 }
 
 /// Shared tail of a scan: upsert groups/episodes, auto-match against Bangumi,

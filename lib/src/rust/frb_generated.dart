@@ -67,7 +67,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.12.0';
 
   @override
-  int get rustContentHash => -987744104;
+  int get rustContentHash => 556759794;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -122,6 +122,7 @@ abstract class RustLibApi extends BaseApi {
   Stream<ScanProgress> crateApiScanFilesAndMatch({
     required PlatformInt64 folderId,
     required List<ScannedFile> files,
+    required String sourceType,
   });
 
   Future<List<BangumiSubject>> crateApiSearchBangumi({required String keyword});
@@ -136,6 +137,22 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSetWatched({
     required PlatformInt64 episodeId,
     required bool watched,
+  });
+
+  Future<void> crateApiSmbConnect({
+    required String host,
+    required String share,
+    required String user,
+    required String password,
+  });
+
+  Future<List<ScannedFile>> crateApiSmbEnumerate({required String subdir});
+
+  Future<void> crateApiSmbSetCredentials({
+    required String host,
+    required String share,
+    required String user,
+    required String password,
   });
 
   Future<int> crateApiSyncCollections();
@@ -652,6 +669,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Stream<ScanProgress> crateApiScanFilesAndMatch({
     required PlatformInt64 folderId,
     required List<ScannedFile> files,
+    required String sourceType,
   }) {
     final sink = RustStreamSink<ScanProgress>();
     unawaited(
@@ -662,6 +680,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             sse_encode_StreamSink_scan_progress_Sse(sink, serializer);
             sse_encode_i_64(folderId, serializer);
             sse_encode_list_scanned_file(files, serializer);
+            sse_encode_String(sourceType, serializer);
             pdeCallFfi(
               generalizedFrbRustBinding,
               serializer,
@@ -674,7 +693,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
             decodeErrorData: sse_decode_String,
           ),
           constMeta: kCrateApiScanFilesAndMatchConstMeta,
-          argValues: [sink, folderId, files],
+          argValues: [sink, folderId, files, sourceType],
           apiImpl: this,
         ),
       ),
@@ -684,7 +703,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiScanFilesAndMatchConstMeta => const TaskConstMeta(
     debugName: "scan_files_and_match",
-    argNames: ["sink", "folderId", "files"],
+    argNames: ["sink", "folderId", "files", "sourceType"],
   );
 
   @override
@@ -814,6 +833,110 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<void> crateApiSmbConnect({
+    required String host,
+    required String share,
+    required String user,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(host, serializer);
+          sse_encode_String(share, serializer);
+          sse_encode_String(user, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 23,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSmbConnectConstMeta,
+        argValues: [host, share, user, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSmbConnectConstMeta => const TaskConstMeta(
+    debugName: "smb_connect",
+    argNames: ["host", "share", "user", "password"],
+  );
+
+  @override
+  Future<List<ScannedFile>> crateApiSmbEnumerate({required String subdir}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(subdir, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 24,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_list_scanned_file,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSmbEnumerateConstMeta,
+        argValues: [subdir],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSmbEnumerateConstMeta =>
+      const TaskConstMeta(debugName: "smb_enumerate", argNames: ["subdir"]);
+
+  @override
+  Future<void> crateApiSmbSetCredentials({
+    required String host,
+    required String share,
+    required String user,
+    required String password,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(host, serializer);
+          sse_encode_String(share, serializer);
+          sse_encode_String(user, serializer);
+          sse_encode_String(password, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 25,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_unit,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSmbSetCredentialsConstMeta,
+        argValues: [host, share, user, password],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSmbSetCredentialsConstMeta => const TaskConstMeta(
+    debugName: "smb_set_credentials",
+    argNames: ["host", "share", "user", "password"],
+  );
+
+  @override
   Future<int> crateApiSyncCollections() {
     return handler.executeNormal(
       NormalTask(
@@ -822,7 +945,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 26,
             port: port_,
           );
         },
@@ -849,7 +972,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 27,
             port: port_,
           );
         },
@@ -883,7 +1006,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 28,
             port: port_,
           );
         },

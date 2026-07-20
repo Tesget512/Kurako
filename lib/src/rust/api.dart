@@ -89,16 +89,51 @@ Future<void> setWatched({
 Stream<ScanProgress> scanAndMatch({required bool incremental}) =>
     RustLib.instance.api.crateApiScanAndMatch(incremental: incremental);
 
-/// Scan a single SAF (Android) folder whose files Dart has already enumerated.
-/// `files` carries content:// URIs + relative folder paths; Rust does only the
-/// recognition/grouping/matching (identical logic to the desktop path).
+/// Scan a folder whose files were enumerated on the Dart side (Android SAF) or
+/// by the Rust SMB client. `files` carries locator URIs + relative folder paths;
+/// Rust does only the recognition/grouping/matching. `source_type` is stored on
+/// each episode so playback knows how to resolve the URI ("saf" | "smb").
 Stream<ScanProgress> scanFilesAndMatch({
   required PlatformInt64 folderId,
   required List<ScannedFile> files,
+  required String sourceType,
 }) => RustLib.instance.api.crateApiScanFilesAndMatch(
   folderId: folderId,
   files: files,
+  sourceType: sourceType,
 );
+
+/// Test-connect an SMB share and cache the credentials. Returns Err with a
+/// human-readable message on failure so the UI can show it.
+Future<void> smbConnect({
+  required String host,
+  required String share,
+  required String user,
+  required String password,
+}) => RustLib.instance.api.crateApiSmbConnect(
+  host: host,
+  share: share,
+  user: user,
+  password: password,
+);
+
+/// Restore cached SMB credentials on startup (from Dart's persisted settings)
+/// without a network round-trip. Connection is opened lazily per operation.
+Future<void> smbSetCredentials({
+  required String host,
+  required String share,
+  required String user,
+  required String password,
+}) => RustLib.instance.api.crateApiSmbSetCredentials(
+  host: host,
+  share: share,
+  user: user,
+  password: password,
+);
+
+/// Recursively enumerate video files under an SMB folder's sub-path.
+Future<List<ScannedFile>> smbEnumerate({required String subdir}) =>
+    RustLib.instance.api.crateApiSmbEnumerate(subdir: subdir);
 
 /// Refresh Bangumi collection status (想看/在看/看过…) for every bound entry.
 /// Uses a single paginated bulk-fetch — safe to call frequently.
