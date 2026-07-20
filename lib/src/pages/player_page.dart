@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/media_source.dart';
 
 class PlayerPage extends StatefulWidget {
   /// The full playlist and the index to start at, so 上/下集 and autoplay work.
@@ -43,6 +44,9 @@ class _PlayerPageState extends State<PlayerPage> {
   double _rate = 1.0;
   double _subDelay = 0; // seconds
   StreamSubscription? _completedSub;
+  // Open SAF file descriptor for the current episode (Android); released when
+  // switching episodes or closing so the fd doesn't leak.
+  PlayableHandle? _handle;
 
   static const List<double> _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -57,7 +61,18 @@ class _PlayerPageState extends State<PlayerPage> {
     _resumed = false;
     _tracksHandled = false;
     _subDelay = 0;
-    await _player.open(Media('file:///${_ep.filePath}'));
+    // Release the previous episode's SAF fd (if any) before opening the next.
+    await _handle?.release();
+    try {
+      _handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
+      await _player.open(Media(_handle!.uri));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('无法打开视频: $e')),
+        );
+      }
+    }
     if (mounted) setState(() {});
   }
 
@@ -218,6 +233,7 @@ class _PlayerPageState extends State<PlayerPage> {
     _completedSub?.cancel();
     _save();
     _player.dispose();
+    _handle?.release();
     super.dispose();
   }
 

@@ -173,6 +173,9 @@ class Episode {
   final PlatformInt64 lastPositionMs;
   final PlatformInt64 durationMs;
 
+  /// "local" = file_path is a POSIX path; "saf" = file_path is a content:// URI.
+  final String sourceType;
+
   const Episode({
     required this.id,
     required this.animeId,
@@ -185,6 +188,7 @@ class Episode {
     required this.watched,
     required this.lastPositionMs,
     required this.durationMs,
+    required this.sourceType,
   });
 
   @override
@@ -199,7 +203,8 @@ class Episode {
       releaseGroup.hashCode ^
       watched.hashCode ^
       lastPositionMs.hashCode ^
-      durationMs.hashCode;
+      durationMs.hashCode ^
+      sourceType.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -216,7 +221,8 @@ class Episode {
           releaseGroup == other.releaseGroup &&
           watched == other.watched &&
           lastPositionMs == other.lastPositionMs &&
-          durationMs == other.durationMs;
+          durationMs == other.durationMs &&
+          sourceType == other.sourceType;
 }
 
 class LibraryFolder {
@@ -228,16 +234,24 @@ class LibraryFolder {
   /// unchanged folders during incremental scans.
   final PlatformInt64? lastScanned;
 
+  /// Where this folder lives: "local" (POSIX path) or "saf" (Android tree URI).
+  final String sourceType;
+
   const LibraryFolder({
     required this.id,
     required this.path,
     required this.addedAt,
     this.lastScanned,
+    required this.sourceType,
   });
 
   @override
   int get hashCode =>
-      id.hashCode ^ path.hashCode ^ addedAt.hashCode ^ lastScanned.hashCode;
+      id.hashCode ^
+      path.hashCode ^
+      addedAt.hashCode ^
+      lastScanned.hashCode ^
+      sourceType.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -247,7 +261,8 @@ class LibraryFolder {
           id == other.id &&
           path == other.path &&
           addedAt == other.addedAt &&
-          lastScanned == other.lastScanned;
+          lastScanned == other.lastScanned &&
+          sourceType == other.sourceType;
 }
 
 /// Progress event streamed back to Dart during a scan.
@@ -278,4 +293,34 @@ class ScanProgress {
           current == other.current &&
           total == other.total &&
           message == other.message;
+}
+
+/// A video file discovered by a Dart-side enumerator (Android SAF), handed to
+/// Rust for recognition/grouping. Mirrors `scan::ScannedFile` but frb-exported.
+class ScannedFile {
+  /// content:// document URI (Android) — stored as the episode's file_path.
+  final String uri;
+  final String fileName;
+
+  /// Folder path from the library root ("" = root), "/"-separated.
+  final String relativeParent;
+
+  const ScannedFile({
+    required this.uri,
+    required this.fileName,
+    required this.relativeParent,
+  });
+
+  @override
+  int get hashCode =>
+      uri.hashCode ^ fileName.hashCode ^ relativeParent.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ScannedFile &&
+          runtimeType == other.runtimeType &&
+          uri == other.uri &&
+          fileName == other.fileName &&
+          relativeParent == other.relativeParent;
 }

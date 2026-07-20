@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `now_secs`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `finish_scan`, `now_secs`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -40,8 +40,13 @@ Future<OAuthResult> oauthRefresh({required String refreshToken}) =>
 /// proxy the Rust HTTP client uses.
 Future<String?> systemProxy() => RustLib.instance.api.crateApiSystemProxy();
 
-Future<LibraryFolder> addLibraryFolder({required String path}) =>
-    RustLib.instance.api.crateApiAddLibraryFolder(path: path);
+Future<LibraryFolder> addLibraryFolder({
+  required String path,
+  required String sourceType,
+}) => RustLib.instance.api.crateApiAddLibraryFolder(
+  path: path,
+  sourceType: sourceType,
+);
 
 Future<void> removeLibraryFolder({required PlatformInt64 id}) =>
     RustLib.instance.api.crateApiRemoveLibraryFolder(id: id);
@@ -83,6 +88,17 @@ Future<void> setWatched({
 /// large libraries where only a few folders changed.
 Stream<ScanProgress> scanAndMatch({required bool incremental}) =>
     RustLib.instance.api.crateApiScanAndMatch(incremental: incremental);
+
+/// Scan a single SAF (Android) folder whose files Dart has already enumerated.
+/// `files` carries content:// URIs + relative folder paths; Rust does only the
+/// recognition/grouping/matching (identical logic to the desktop path).
+Stream<ScanProgress> scanFilesAndMatch({
+  required PlatformInt64 folderId,
+  required List<ScannedFile> files,
+}) => RustLib.instance.api.crateApiScanFilesAndMatch(
+  folderId: folderId,
+  files: files,
+);
 
 /// Refresh Bangumi collection status (想看/在看/看过…) for every bound entry.
 /// Uses a single paginated bulk-fetch — safe to call frequently.

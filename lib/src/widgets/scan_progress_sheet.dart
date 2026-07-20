@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/media_source.dart';
 
 class ScanProgressSheet extends StatefulWidget {
   /// When true, folders whose files haven't changed since the last scan are
@@ -26,12 +27,29 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
 
   Future<void> _run() async {
     try {
+      // 1. Local (walkdir) folders: Rust enumerates + matches them all at once.
       final stream = rust.scanAndMatch(incremental: widget.incremental);
       await for (final p in stream) {
         if (!mounted) return;
         setState(() => _progress = p);
-        if (p.stage == 'done') {
-          setState(() => _done = true);
+      }
+      // 2. SAF (Android) folders: Dart enumerates the content:// tree, then Rust
+      //    recognizes/matches the file list.
+      final folders = await rust.listLibraryFolders();
+      final saf = SafMediaSource();
+      for (final f in folders.where((f) => f.sourceType == 'saf')) {
+        if (!mounted) return;
+        setState(() => _progress = ScanProgress(
+              stage: 'scanning',
+              current: 0,
+              total: 0,
+              message: '枚举 ${f.path}',
+            ));
+        final files = await saf.enumerate(f.path);
+        final s2 = rust.scanFilesAndMatch(folderId: f.id, files: files);
+        await for (final p in s2) {
+          if (!mounted) return;
+          setState(() => _progress = p);
         }
       }
     } catch (e) {

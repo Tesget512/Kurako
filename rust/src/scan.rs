@@ -33,6 +33,17 @@ pub struct AnimeGroup {
     pub files: Vec<FoundFile>,
 }
 
+/// One video file discovered by a scan, decoupled from HOW it was found. On
+/// desktop `uri` is an absolute path and `relative_parent` is the sub-path from
+/// the library root to the file's folder; on Android (SAF) `uri` is a
+/// `content://` document URI and `relative_parent` is the folder tree Dart
+/// walked. Empty `relative_parent` means the file sits at the library root.
+pub struct ScannedFile {
+    pub uri: String,
+    pub file_name: String,
+    pub relative_parent: String,
+}
+
 /// Recursively collect every video file under `root`.
 pub fn scan_folder(root: &str) -> Vec<(String, String, String)> {
     // returns (full_path, file_name, parent_dir)
@@ -118,15 +129,12 @@ fn is_generic_dir(name: &str) -> bool {
     re_season.is_match(&n) || re_cn_season.is_match(&n) || re_disc.is_match(&n) || re_res.is_match(&n)
 }
 
-/// Derive an anime title for a folder, climbing past generic sub-buckets and
-/// falling back to the library root if needed.
-fn folder_title(dir: &str, library_root: &str) -> Option<ParsedName> {
+/// Derive an anime title for a folder given its path relative to the library
+/// root ("" = root). Climbs past generic sub-buckets (特典/SP/Season N…) toward
+/// the root, returning the first usable title.
+fn folder_title(dir: &str) -> Option<ParsedName> {
     let mut cur = Path::new(dir);
-    let root = Path::new(library_root);
     for _ in 0..4 {
-        if cur == root {
-            return None;
-        }
         let name = cur.file_name()?.to_string_lossy().to_string();
 
         // A folder like "World Dai Star 特典" / "Show SP" / "Show Specials" is a
@@ -174,21 +182,48 @@ fn strip_special_suffix(name: &str) -> Option<String> {
 /// name yields nothing usable do we fall back to per-file parsing.
 pub fn group_library(library_root: &str) -> Vec<AnimeGroup> {
     let files = scan_folder(library_root);
+    // Convert absolute paths into ScannedFile with a relative parent path, so
+    // the grouping logic is shared with the SAF (Android) path.
+    let root = Path::new(library_root);
+    let scanned: Vec<ScannedFile> = files
+        .into_iter()
+        .map(|(path, name, parent)| {
+            let rel = Path::new(&parent)
+                .strip_prefix(root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_default();
+            ScannedFile {
+                uri: path,
+                file_name: name,
+                relative_parent: rel,
+            }
+        })
+        .collect();
+    group_files(scanned)
+}
 
-    // Bucket files by parent directory.
+/// Group a list of already-discovered files into anime. Shared by the desktop
+/// walkdir path ([group_library]) and the Android SAF path (Dart enumerates the
+/// content:// tree). `relative_parent` is the folder path from the library root
+/// ("" = root), using "/" separators.
+pub fn group_files(files: Vec<ScannedFile>) -> Vec<AnimeGroup> {
+    // Bucket files by their (relative) parent directory.
     let mut by_dir: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    for (path, name, parent) in files {
-        by_dir.entry(parent).or_default().push((path, name));
+    for f in files {
+        by_dir
+            .entry(f.relative_parent)
+            .or_default()
+            .push((f.uri, f.file_name));
     }
 
     let mut groups: BTreeMap<String, AnimeGroup> = BTreeMap::new();
 
     for (dir, entries) in by_dir {
-        let dir_is_root = Path::new(&dir) == Path::new(library_root);
-        let folder_parsed = if dir_is_root {
+        // Root files (empty relative parent) have no folder title.
+        let folder_parsed = if dir.is_empty() {
             None
         } else {
-            folder_title(&dir, library_root)
+            folder_title(&dir)
         };
 
         for (path, name) in entries {

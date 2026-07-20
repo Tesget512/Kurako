@@ -47,6 +47,11 @@ dependencies:
   # Folder picker
   file_picker: ^10.3.3
 
+  # Android Storage Access Framework: pick a directory tree, enumerate files,
+  # and read via file descriptor. Only used on Android; no-op elsewhere.
+  saf_util: ^0.9.0
+  saf_stream: ^0.11.1
+
   # App data directory
   path_provider: ^2.1.5
   path: ^1.9.0

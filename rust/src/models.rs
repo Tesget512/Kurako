@@ -8,6 +8,8 @@ pub struct LibraryFolder {
     /// Unix seconds of the last scan, or None if never scanned. Used to skip
     /// unchanged folders during incremental scans.
     pub last_scanned: Option<i64>,
+    /// Where this folder lives: "local" (POSIX path) or "saf" (Android tree URI).
+    pub source_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,19 @@ pub struct Episode {
     pub watched: bool,
     pub last_position_ms: i64,
     pub duration_ms: i64,
+    /// "local" = file_path is a POSIX path; "saf" = file_path is a content:// URI.
+    pub source_type: String,
+}
+
+/// A video file discovered by a Dart-side enumerator (Android SAF), handed to
+/// Rust for recognition/grouping. Mirrors `scan::ScannedFile` but frb-exported.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScannedFile {
+    /// content:// document URI (Android) — stored as the episode's file_path.
+    pub uri: String,
+    pub file_name: String,
+    /// Folder path from the library root ("" = root), "/"-separated.
+    pub relative_parent: String,
 }
 
 /// A Bangumi search candidate, shown in the manual-correction dialog.

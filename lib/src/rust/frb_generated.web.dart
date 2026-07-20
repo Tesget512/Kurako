@@ -81,6 +81,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<ScannedFile> dco_decode_list_scanned_file(dynamic raw);
+
+  @protected
   OAuthResult dco_decode_o_auth_result(dynamic raw);
 
   @protected
@@ -97,6 +100,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ScanProgress dco_decode_scan_progress(dynamic raw);
+
+  @protected
+  ScannedFile dco_decode_scanned_file(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -171,6 +177,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<ScannedFile> sse_decode_list_scanned_file(SseDeserializer deserializer);
+
+  @protected
   OAuthResult sse_decode_o_auth_result(SseDeserializer deserializer);
 
   @protected
@@ -187,6 +196,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ScanProgress sse_decode_scan_progress(SseDeserializer deserializer);
+
+  @protected
+  ScannedFile sse_decode_scanned_file(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -279,6 +291,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_scanned_file(
+    List<ScannedFile> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_o_auth_result(OAuthResult self, SseSerializer serializer);
 
   @protected
@@ -298,6 +316,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_scan_progress(ScanProgress self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_scanned_file(ScannedFile self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

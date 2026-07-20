@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
 import '../services/bangumi_oauth.dart';
+import '../services/media_source.dart';
 import '../state/providers.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -227,9 +228,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _addFolder() async {
-    final path = await FilePicker.platform.getDirectoryPath();
-    if (path == null) return;
-    await rust.addLibraryFolder(path: path);
+    // On Android this opens the SAF directory picker (content:// tree URI);
+    // on desktop it's the native folder picker. The source type is recorded so
+    // the scanner knows how to enumerate it.
+    final source = MediaSource.forNewFolder();
+    final folder = await source.pickFolder();
+    if (folder == null) return;
+    await rust.addLibraryFolder(path: folder, sourceType: source.sourceType);
     ref.invalidate(foldersProvider);
   }
 

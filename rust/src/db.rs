@@ -12,9 +12,10 @@ pub fn init(db_path: &str) -> Result<()> {
         r#"
         PRAGMA journal_mode = WAL;
         CREATE TABLE IF NOT EXISTS library_folders (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            path     TEXT NOT NULL UNIQUE,
-            added_at INTEGER NOT NULL
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            path        TEXT NOT NULL UNIQUE,
+            added_at    INTEGER NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'local'
         );
         CREATE TABLE IF NOT EXISTS anime (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,6 +44,7 @@ pub fn init(db_path: &str) -> Result<()> {
             title            TEXT,
             resolution       TEXT,
             release_group    TEXT,
+            source_type      TEXT NOT NULL DEFAULT 'local',
             watched          INTEGER NOT NULL DEFAULT 0,
             last_position_ms INTEGER NOT NULL DEFAULT 0,
             duration_ms      INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +60,8 @@ pub fn init(db_path: &str) -> Result<()> {
         "ALTER TABLE anime ADD COLUMN tags TEXT",
         "ALTER TABLE anime ADD COLUMN collection INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE library_folders ADD COLUMN last_scanned INTEGER",
+        "ALTER TABLE library_folders ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
+        "ALTER TABLE episodes ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
     ] {
         let _ = conn.execute(ddl, []);
     }
@@ -71,11 +75,11 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     f(&conn)
 }
 
-pub fn add_folder(path: &str, now: i64) -> Result<i64> {
+pub fn add_folder(path: &str, now: i64, source_type: &str) -> Result<i64> {
     with_conn(|c| {
         c.execute(
-            "INSERT OR IGNORE INTO library_folders(path, added_at) VALUES (?1, ?2)",
-            params![path, now],
+            "INSERT OR IGNORE INTO library_folders(path, added_at, source_type) VALUES (?1, ?2, ?3)",
+            params![path, now, source_type],
         )?;
         let id: i64 = c.query_row(
             "SELECT id FROM library_folders WHERE path = ?1",
@@ -96,7 +100,7 @@ pub fn remove_folder(id: i64) -> Result<()> {
 pub fn list_folders() -> Result<Vec<LibraryFolder>> {
     with_conn(|c| {
         let mut stmt = c.prepare(
-            "SELECT id, path, added_at, last_scanned FROM library_folders ORDER BY added_at DESC",
+            "SELECT id, path, added_at, last_scanned, source_type FROM library_folders ORDER BY added_at DESC",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -105,6 +109,9 @@ pub fn list_folders() -> Result<Vec<LibraryFolder>> {
                     path: r.get(1)?,
                     added_at: r.get(2)?,
                     last_scanned: r.get(3)?,
+                    source_type: r
+                        .get::<_, Option<String>>(4)?
+                        .unwrap_or_else(|| "local".to_string()),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -148,17 +155,19 @@ pub fn upsert_episode(
     episode_no: Option<i64>,
     resolution: Option<&str>,
     release_group: Option<&str>,
+    source_type: &str,
 ) -> Result<()> {
     with_conn(|c| {
         c.execute(
-            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, resolution, release_group)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, resolution, release_group, source_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(file_path) DO UPDATE SET
                 anime_id=excluded.anime_id,
                 episode_no=excluded.episode_no,
                 resolution=excluded.resolution,
-                release_group=excluded.release_group",
-            params![anime_id, file_path, file_name, episode_no, resolution, release_group],
+                release_group=excluded.release_group,
+                source_type=excluded.source_type",
+            params![anime_id, file_path, file_name, episode_no, resolution, release_group, source_type],
         )?;
         Ok(())
     })
@@ -227,7 +236,7 @@ pub fn list_episodes(anime_id: i64) -> Result<Vec<Episode>> {
     with_conn(|c| {
         let mut stmt = c.prepare(
             "SELECT id, anime_id, file_path, file_name, episode_no, title, resolution,
-                    release_group, watched, last_position_ms, duration_ms
+                    release_group, watched, last_position_ms, duration_ms, source_type
              FROM episodes WHERE anime_id = ?1
              ORDER BY episode_no IS NULL, episode_no, file_name",
         )?;
@@ -245,6 +254,9 @@ pub fn list_episodes(anime_id: i64) -> Result<Vec<Episode>> {
                     watched: r.get::<_, i64>(8)? != 0,
                     last_position_ms: r.get(9)?,
                     duration_ms: r.get(10)?,
+                    source_type: r
+                        .get::<_, Option<String>>(11)?
+                        .unwrap_or_else(|| "local".to_string()),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;

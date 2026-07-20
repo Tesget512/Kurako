@@ -108,13 +108,14 @@ pub fn system_proxy() -> Option<String> {
 
 // ---- Library folders ----
 
-pub fn add_library_folder(path: String) -> Result<LibraryFolder, String> {
-    let id = db::add_folder(&path, now_secs()).map_err(|e| e.to_string())?;
+pub fn add_library_folder(path: String, source_type: String) -> Result<LibraryFolder, String> {
+    let id = db::add_folder(&path, now_secs(), &source_type).map_err(|e| e.to_string())?;
     Ok(LibraryFolder {
         id,
         path,
         added_at: now_secs(),
         last_scanned: None,
+        source_type,
     })
 }
 
@@ -174,6 +175,11 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
     //    folders when doing an incremental scan.
     let mut groups = Vec::new();
     for f in &folders {
+        // Only walkdir-scannable local folders are handled here; SAF folders are
+        // enumerated on the Dart side and go through scan_files_and_match.
+        if f.source_type != "local" {
+            continue;
+        }
         let mtime = scan::folder_max_mtime(&f.path);
         if incremental {
             if let Some(last) = f.last_scanned {
@@ -189,6 +195,46 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
         let _ = db::set_folder_scanned(f.id, now_secs());
     }
 
+    finish_scan(groups, "local", &sink)
+}
+
+/// Scan a single SAF (Android) folder whose files Dart has already enumerated.
+/// `files` carries content:// URIs + relative folder paths; Rust does only the
+/// recognition/grouping/matching (identical logic to the desktop path).
+pub fn scan_files_and_match(
+    sink: StreamSink<ScanProgress>,
+    folder_id: i64,
+    files: Vec<crate::models::ScannedFile>,
+) -> Result<(), String> {
+    let scanned: Vec<scan::ScannedFile> = files
+        .into_iter()
+        .map(|f| scan::ScannedFile {
+            uri: f.uri,
+            file_name: f.file_name,
+            relative_parent: f.relative_parent,
+        })
+        .collect();
+    let groups = scan::group_files(scanned);
+    let _ = db::set_folder_scanned(folder_id, now_secs());
+    finish_scan(groups, "saf", &sink)
+}
+
+/// Shared tail of a scan: upsert groups/episodes, auto-match against Bangumi,
+/// merge duplicate bindings, sync collection status, emit done.
+fn finish_scan(
+    groups: Vec<scan::AnimeGroup>,
+    source_type: &str,
+    sink: &StreamSink<ScanProgress>,
+) -> Result<(), String> {
+    let emit = |stage: &str, current: i64, total: i64, message: &str| {
+        let _ = sink.add(ScanProgress {
+            stage: stage.to_string(),
+            current,
+            total,
+            message: message.to_string(),
+        });
+    };
+
     let total = groups.len() as i64;
     for (i, g) in groups.iter().enumerate() {
         let anime_id = db::upsert_anime(&g.group_key, &g.title).map_err(|e| e.to_string())?;
@@ -200,10 +246,11 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
                 ff.parsed.episode_no,
                 ff.parsed.resolution.as_deref(),
                 ff.parsed.release_group.as_deref(),
+                source_type,
             )
             .map_err(|e| e.to_string())?;
         }
-        emit("scanning", i as i64 + 1, total, &g.title, &sink);
+        emit("scanning", i as i64 + 1, total, &g.title);
     }
 
     // 2. Auto-match unmatched anime against Bangumi, concurrently (bounded).
@@ -218,7 +265,6 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
             // the full-title query degrades match quality for that title.
             .for_each_concurrent(2, |(anime_id, title)| {
                 let done = &done;
-                let sink = &sink;
                 async move {
                     if let Ok(Some(best)) = bangumi::best_match(&title).await {
                         // Search results often lack images/eps; fetch the
@@ -287,7 +333,7 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
     // Bangumi so the UI can pin them.
     let _ = sync_collections_inner();
 
-    emit("done", total, total, "完成", &sink);
+    emit("done", total, total, "完成");
     Ok(())
 }
 
