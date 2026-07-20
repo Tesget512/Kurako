@@ -76,6 +76,52 @@ class _BoolPrefNotifier extends StateNotifier<bool> {
   }
 }
 
+// ---- SMB credentials (persisted; pushed into the Rust smb client) ----
+
+class SmbCredentials {
+  final String host;
+  final String share;
+  final String user;
+  final String password;
+  const SmbCredentials({
+    required this.host,
+    required this.share,
+    required this.user,
+    required this.password,
+  });
+
+  bool get isConfigured => host.isNotEmpty && share.isNotEmpty;
+
+  static Future<SmbCredentials> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    return SmbCredentials(
+      host: prefs.getString('smb_host') ?? '',
+      share: prefs.getString('smb_share') ?? '',
+      user: prefs.getString('smb_user') ?? '',
+      password: prefs.getString('smb_password') ?? '',
+    );
+  }
+
+  Future<void> save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('smb_host', host);
+    await prefs.setString('smb_share', share);
+    await prefs.setString('smb_user', user);
+    await prefs.setString('smb_password', password);
+  }
+
+  /// Push credentials into the Rust SMB client (no network round-trip).
+  void pushToRust() {
+    if (!isConfigured) return;
+    rust.smbSetCredentials(
+      host: host,
+      share: share,
+      user: user,
+      password: password,
+    );
+  }
+}
+
 // ---- Settings (player choice, OAuth token, external player) ----
 
 class Settings {

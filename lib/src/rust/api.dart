@@ -135,6 +135,32 @@ Future<void> smbSetCredentials({
 Future<List<ScannedFile>> smbEnumerate({required String subdir}) =>
     RustLib.instance.api.crateApiSmbEnumerate(subdir: subdir);
 
+/// Register an SMB file for playback and return a local HTTP URL libmpv can
+/// play (the loopback proxy streams it, honouring Range/seek).
+Future<String> smbPlayableUrl({required String smbUri}) =>
+    RustLib.instance.api.crateApiSmbPlayableUrl(smbUri: smbUri);
+
+/// Release a playback URL when done (frees the proxy token).
+Future<void> smbRelease({required String url}) =>
+    RustLib.instance.api.crateApiSmbRelease(url: url);
+
+/// Serialize the whole library (anime + episodes) to a JSON snapshot string.
+Future<String> exportSnapshotJson() =>
+    RustLib.instance.api.crateApiExportSnapshotJson();
+
+/// Import a JSON snapshot into the local library (idempotent upsert).
+Future<int> importSnapshotJson({required String json}) =>
+    RustLib.instance.api.crateApiImportSnapshotJson(json: json);
+
+/// Export the library and upload it to the connected SMB share.
+Future<void> snapshotUploadToSmb() =>
+    RustLib.instance.api.crateApiSnapshotUploadToSmb();
+
+/// Download the snapshot from the SMB share and import it. Returns the number of
+/// anime imported, or 0 if the share has no snapshot yet.
+Future<int> snapshotRestoreFromSmb() =>
+    RustLib.instance.api.crateApiSnapshotRestoreFromSmb();
+
 /// Refresh Bangumi collection status (想看/在看/看过…) for every bound entry.
 /// Uses a single paginated bulk-fetch — safe to call frequently.
 /// Returns the number of entries updated.

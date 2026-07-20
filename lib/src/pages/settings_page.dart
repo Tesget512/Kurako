@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
+import '../rust/models.dart';
 import '../services/bangumi_oauth.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
@@ -50,8 +51,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 ...folders.map(
                   (f) => ListTile(
-                    leading: const Icon(Icons.folder),
+                    leading: Icon(f.sourceType == 'smb'
+                        ? Icons.lan_outlined
+                        : Icons.folder),
                     title: Text(f.path),
+                    subtitle: f.sourceType == 'smb'
+                        ? const Text('SMB 网络共享')
+                        : null,
                     trailing: IconButton(
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () async {
@@ -65,16 +71,52 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   alignment: Alignment.centerLeft,
                   child: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: FilledButton.icon(
-                      icon: const Icon(Icons.add),
-                      label: const Text('添加文件夹'),
-                      onPressed: _addFolder,
+                    child: PopupMenuButton<String>(
+                      onSelected: (v) {
+                        if (v == 'local') {
+                          _addFolder();
+                        } else if (v == 'smb') {
+                          _addSmbFolder();
+                        }
+                      },
+                      itemBuilder: (context) => const [
+                        PopupMenuItem(
+                          value: 'local',
+                          child: ListTile(
+                            leading: Icon(Icons.folder_outlined),
+                            title: Text('本地文件夹'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'smb',
+                          child: ListTile(
+                            leading: Icon(Icons.lan_outlined),
+                            title: Text('SMB 网络共享'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                      ],
+                      child: const FilledButton(
+                        onPressed: null,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.add, size: 18),
+                            SizedBox(width: 8),
+                            Text('添加文件夹'),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ],
             ),
           ),
+          const Divider(height: 32),
+          _section(context, 'SMB 快照同步'),
+          _buildSnapshotSection(context, foldersAsync),
           const Divider(height: 32),
           _section(context, 'Bangumi 账号'),
           _buildBangumiSection(context, settings),
@@ -136,6 +178,73 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       padding: const EdgeInsets.only(bottom: 8),
       child: Text(title, style: Theme.of(context).textTheme.titleMedium),
     );
+  }
+
+  Widget _buildSnapshotSection(
+      BuildContext context, AsyncValue<List<LibraryFolder>> foldersAsync) {
+    final hasSmb = foldersAsync.maybeWhen(
+      data: (folders) => folders.any((f) => f.sourceType == 'smb'),
+      orElse: () => false,
+    );
+    if (!hasSmb) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 4),
+        child: Text(
+          '添加 SMB 共享后，可把扫描+匹配结果存到共享上，其他设备一键恢复，避免重扫。',
+          style: TextStyle(color: Colors.grey, fontSize: 13),
+        ),
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          '把本机的番剧库快照上传到 SMB 共享；或从共享恢复到本机（多端同步）。',
+          style: TextStyle(color: Colors.grey, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.cloud_upload_outlined),
+                label: const Text('上传快照'),
+                onPressed: _uploadSnapshot,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.cloud_download_outlined),
+                label: const Text('从共享恢复'),
+                onPressed: _restoreSnapshot,
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _uploadSnapshot() async {
+    _snack('正在上传快照…');
+    try {
+      await rust.snapshotUploadToSmb();
+      _snack('快照已上传到 SMB');
+    } catch (e) {
+      _snack('上传失败：$e');
+    }
+  }
+
+  Future<void> _restoreSnapshot() async {
+    _snack('正在从 SMB 恢复…');
+    try {
+      final n = await rust.snapshotRestoreFromSmb();
+      ref.invalidate(animeListProvider);
+      _snack(n > 0 ? '已从快照恢复 $n 部番剧' : '共享上还没有快照');
+    } catch (e) {
+      _snack('恢复失败：$e');
+    }
   }
 
   Widget _buildBangumiSection(BuildContext context, Settings settings) {
@@ -246,6 +355,32 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     ref.invalidate(foldersProvider);
   }
 
+  Future<void> _addSmbFolder() async {
+    final creds = await showDialog<SmbCredentials>(
+      context: context,
+      builder: (_) => const _SmbDialog(),
+    );
+    if (creds == null) return;
+    if (!mounted) return;
+    // Test-connect, then persist credentials + add as a library folder.
+    _snack('正在连接 SMB…');
+    try {
+      await rust.smbConnect(
+        host: creds.host,
+        share: creds.share,
+        user: creds.user,
+        password: creds.password,
+      );
+      await creds.save();
+      final path = 'smb://${creds.host}/${creds.share}';
+      await rust.addLibraryFolder(path: path, sourceType: 'smb');
+      ref.invalidate(foldersProvider);
+      _snack('SMB 共享已添加，去番剧库扫描');
+    } catch (e) {
+      _snack('SMB 连接失败：$e');
+    }
+  }
+
   Future<void> _pickPlayer() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
@@ -255,5 +390,102 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (path == null) return;
     _playerPathController.text = path;
     ref.read(settingsProvider.notifier).setExternalPlayerPath(path);
+  }
+}
+
+/// Dialog collecting SMB share credentials. Returns [SmbCredentials] on submit.
+class _SmbDialog extends StatefulWidget {
+  const _SmbDialog();
+
+  @override
+  State<_SmbDialog> createState() => _SmbDialogState();
+}
+
+class _SmbDialogState extends State<_SmbDialog> {
+  final _host = TextEditingController();
+  final _share = TextEditingController();
+  final _user = TextEditingController();
+  final _password = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    // Prefill with the last-used credentials.
+    SmbCredentials.load().then((c) {
+      if (!mounted) return;
+      _host.text = c.host;
+      _share.text = c.share;
+      _user.text = c.user;
+      _password.text = c.password;
+    });
+  }
+
+  @override
+  void dispose() {
+    _host.dispose();
+    _share.dispose();
+    _user.dispose();
+    _password.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('添加 SMB 网络共享'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _host,
+              decoration: const InputDecoration(
+                labelText: '主机',
+                hintText: '192.168.1.100 或 192.168.1.100:445',
+              ),
+            ),
+            TextField(
+              controller: _share,
+              decoration: const InputDecoration(
+                labelText: '共享名',
+                hintText: 'Anime',
+              ),
+            ),
+            TextField(
+              controller: _user,
+              decoration: const InputDecoration(labelText: '用户名'),
+            ),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: '密码'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final host = _host.text.trim();
+            final share = _share.text.trim();
+            if (host.isEmpty || share.isEmpty) return;
+            Navigator.pop(
+              context,
+              SmbCredentials(
+                host: host,
+                share: share,
+                user: _user.text,
+                password: _password.text,
+              ),
+            );
+          },
+          child: const Text('连接'),
+        ),
+      ],
+    );
   }
 }

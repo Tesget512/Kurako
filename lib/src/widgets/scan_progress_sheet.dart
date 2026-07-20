@@ -33,11 +33,11 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
         if (!mounted) return;
         setState(() => _progress = p);
       }
-      // 2. SAF (Android) folders: Dart enumerates the content:// tree, then Rust
-      //    recognizes/matches the file list.
+      // 2. SAF (Android content://) and SMB (network share) folders: enumerated
+      //    on the Dart/Rust side, then Rust recognizes/matches the file list.
       final folders = await rust.listLibraryFolders();
-      final saf = SafMediaSource();
-      for (final f in folders.where((f) => f.sourceType == 'saf')) {
+      for (final f in folders
+          .where((f) => f.sourceType == 'saf' || f.sourceType == 'smb')) {
         if (!mounted) return;
         setState(() => _progress = ScanProgress(
               stage: 'scanning',
@@ -45,8 +45,15 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
               total: 0,
               message: '枚举 ${f.path}',
             ));
-        final files = await saf.enumerate(f.path);
-        final s2 = rust.scanFilesAndMatch(folderId: f.id, files: files);
+        final source = f.sourceType == 'smb'
+            ? SmbMediaSource()
+            : SafMediaSource();
+        final files = await source.enumerate(f.path);
+        final s2 = rust.scanFilesAndMatch(
+          folderId: f.id,
+          files: files,
+          sourceType: f.sourceType,
+        );
         await for (final p in s2) {
           if (!mounted) return;
           setState(() => _progress = p);

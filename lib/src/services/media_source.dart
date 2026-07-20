@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:saf_util/saf_util.dart';
 import 'package:saf_util/saf_util_platform_interface.dart';
 
+import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 
 /// Abstracts where the library's video files live and how to reach them, so the
@@ -28,25 +29,36 @@ abstract class MediaSource {
   Future<PlayableHandle> resolvePlayable(Episode episode);
 
   /// Pick the source appropriate for this episode's stored source_type.
-  static MediaSource forEpisode(Episode e) =>
-      e.sourceType == 'saf' ? SafMediaSource() : LocalMediaSource();
+  static MediaSource forEpisode(Episode e) => switch (e.sourceType) {
+        'saf' => SafMediaSource(),
+        'smb' => SmbMediaSource(),
+        _ => LocalMediaSource(),
+      };
 
   /// Pick the default source for adding a new folder on this platform.
   static MediaSource forNewFolder() =>
       Platform.isAndroid ? SafMediaSource() : LocalMediaSource();
 }
 
-/// A resolved playable URI plus an optional open file descriptor to close after
-/// playback (SAF). For local files there's nothing to release.
+/// A resolved playable URI plus optional cleanup: SAF opens a file descriptor,
+/// SMB registers a proxy token — both must be released after playback.
 class PlayableHandle {
   final String uri;
   final int? _fd;
-  PlayableHandle(this.uri, [this._fd]);
+  final bool _smb;
+  PlayableHandle(this.uri, {int? fd, bool smb = false})
+      : _fd = fd,
+        _smb = smb;
 
   Future<void> release() async {
     if (_fd != null) {
       try {
         await SafUtil().closeFileDescriptor(_fd);
+      } catch (_) {}
+    }
+    if (_smb) {
+      try {
+        await rust.smbRelease(url: uri);
       } catch (_) {}
     }
   }
@@ -136,6 +148,44 @@ class SafMediaSource extends MediaSource {
     // libmpv can read directly from a file descriptor: fd://<n>. The fd must be
     // kept open for the duration of playback and closed afterwards.
     final fd = await _saf.getFileDescriptor(episode.filePath);
-    return PlayableHandle('fd://$fd', fd);
+    return PlayableHandle('fd://$fd', fd: fd);
+  }
+}
+
+/// SMB network share source. Enumeration + playback go through Rust: the file
+/// list comes from the Rust smb2 client, and playback is served by a local HTTP
+/// proxy (libmpv can't play smb:// directly). Credentials live in Rust (set on
+/// connect / restored at startup), so this class is a thin dispatcher.
+class SmbMediaSource extends MediaSource {
+  @override
+  String get sourceType => 'smb';
+
+  @override
+  Future<String?> pickFolder() async {
+    // SMB folders are added via the credentials dialog in settings, which calls
+    // rust.smbConnect then addLibraryFolder directly — not through here.
+    throw UnsupportedError('SMB folders are added via the settings dialog');
+  }
+
+  @override
+  Future<List<ScannedFile>> enumerate(String folderUri) async {
+    // folderUri is smb://host/share/subdir — enumerate the sub-path.
+    final sub = _subPath(folderUri);
+    return rust.smbEnumerate(subdir: sub);
+  }
+
+  @override
+  Future<PlayableHandle> resolvePlayable(Episode episode) async {
+    // Register with the local proxy; libmpv plays the returned http:// URL.
+    final url = await rust.smbPlayableUrl(smbUri: episode.filePath);
+    return PlayableHandle(url, smb: true);
+  }
+
+  /// smb://host:port/share/sub/dir -> "sub/dir" (path within the share).
+  static String _subPath(String smbUri) {
+    final rest = smbUri.replaceFirst('smb://', '');
+    final parts = rest.split('/');
+    // parts[0]=host:port, parts[1]=share, rest=sub-path
+    return parts.length > 2 ? parts.sublist(2).join('/') : '';
   }
 }

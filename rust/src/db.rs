@@ -425,3 +425,159 @@ pub fn clear_all() -> Result<()> {
         Ok(())
     })
 }
+
+// ---- Snapshot import/export (multi-device sync) ----
+
+/// A self-contained anime row for the snapshot file — includes `group_key`
+/// (the DB-internal dedup key, not on the frb `Anime` model) plus its episodes.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SnapshotAnime {
+    pub group_key: String,
+    pub title_raw: String,
+    pub bangumi_id: Option<i64>,
+    pub name: Option<String>,
+    pub name_cn: Option<String>,
+    pub summary: Option<String>,
+    pub cover_url: Option<String>,
+    pub air_date: Option<String>,
+    pub total_eps: Option<i64>,
+    pub rating: Option<f64>,
+    pub air_weekday: Option<i64>,
+    pub tags: Option<String>,
+    pub collection: i64,
+    pub match_confidence: String,
+    pub corrected: bool,
+    pub episodes: Vec<SnapshotEpisode>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SnapshotEpisode {
+    pub file_path: String,
+    pub file_name: String,
+    pub episode_no: Option<i64>,
+    pub title: Option<String>,
+    pub resolution: Option<String>,
+    pub release_group: Option<String>,
+    pub source_type: String,
+    pub watched: bool,
+    pub last_position_ms: i64,
+    pub duration_ms: i64,
+}
+
+/// Read every anime (with its episodes) for a snapshot export.
+pub fn export_snapshot() -> Result<Vec<SnapshotAnime>> {
+    with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, group_key, title_raw, bangumi_id, name, name_cn, summary, cover_url,
+                    air_date, total_eps, rating, air_weekday, tags, collection,
+                    match_confidence, corrected
+             FROM anime",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    SnapshotAnime {
+                        group_key: r.get(1)?,
+                        title_raw: r.get(2)?,
+                        bangumi_id: r.get(3)?,
+                        name: r.get(4)?,
+                        name_cn: r.get(5)?,
+                        summary: r.get(6)?,
+                        cover_url: r.get(7)?,
+                        air_date: r.get(8)?,
+                        total_eps: r.get(9)?,
+                        rating: r.get(10)?,
+                        air_weekday: r.get(11)?,
+                        tags: r.get(12)?,
+                        collection: r.get::<_, Option<i64>>(13)?.unwrap_or(0),
+                        match_confidence: r.get(14)?,
+                        corrected: r.get::<_, i64>(15)? != 0,
+                        episodes: Vec::new(),
+                    },
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for (aid, mut a) in rows {
+            let mut es = c.prepare(
+                "SELECT file_path, file_name, episode_no, title, resolution, release_group,
+                        source_type, watched, last_position_ms, duration_ms
+                 FROM episodes WHERE anime_id = ?1",
+            )?;
+            a.episodes = es
+                .query_map(params![aid], |r| {
+                    Ok(SnapshotEpisode {
+                        file_path: r.get(0)?,
+                        file_name: r.get(1)?,
+                        episode_no: r.get(2)?,
+                        title: r.get(3)?,
+                        resolution: r.get(4)?,
+                        release_group: r.get(5)?,
+                        source_type: r
+                            .get::<_, Option<String>>(6)?
+                            .unwrap_or_else(|| "local".to_string()),
+                        watched: r.get::<_, i64>(7)? != 0,
+                        last_position_ms: r.get(8)?,
+                        duration_ms: r.get(9)?,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            out.push(a);
+        }
+        Ok(out)
+    })
+}
+
+/// Import a snapshot: upsert every anime (by group_key) + episode (by file_path).
+/// Idempotent — importing the same snapshot twice is a no-op.
+pub fn import_snapshot(items: &[SnapshotAnime]) -> Result<()> {
+    with_conn(|c| {
+        for a in items {
+            c.execute(
+                "INSERT INTO anime(group_key, title_raw, bangumi_id, name, name_cn, summary,
+                    cover_url, air_date, total_eps, rating, air_weekday, tags, collection,
+                    match_confidence, corrected)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
+                 ON CONFLICT(group_key) DO UPDATE SET
+                    title_raw=excluded.title_raw, bangumi_id=excluded.bangumi_id,
+                    name=excluded.name, name_cn=excluded.name_cn, summary=excluded.summary,
+                    cover_url=excluded.cover_url, air_date=excluded.air_date,
+                    total_eps=excluded.total_eps, rating=excluded.rating,
+                    air_weekday=excluded.air_weekday, tags=excluded.tags,
+                    collection=excluded.collection, match_confidence=excluded.match_confidence,
+                    corrected=excluded.corrected",
+                params![
+                    a.group_key, a.title_raw, a.bangumi_id, a.name, a.name_cn, a.summary,
+                    a.cover_url, a.air_date, a.total_eps, a.rating, a.air_weekday, a.tags,
+                    a.collection, a.match_confidence, a.corrected as i64,
+                ],
+            )?;
+            let aid: i64 = c.query_row(
+                "SELECT id FROM anime WHERE group_key = ?1",
+                params![a.group_key],
+                |r| r.get(0),
+            )?;
+            for e in &a.episodes {
+                c.execute(
+                    "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title,
+                        resolution, release_group, source_type, watched, last_position_ms, duration_ms)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+                     ON CONFLICT(file_path) DO UPDATE SET
+                        anime_id=excluded.anime_id, episode_no=excluded.episode_no,
+                        title=excluded.title, resolution=excluded.resolution,
+                        release_group=excluded.release_group, source_type=excluded.source_type,
+                        watched=excluded.watched, last_position_ms=excluded.last_position_ms,
+                        duration_ms=excluded.duration_ms",
+                    params![
+                        aid, e.file_path, e.file_name, e.episode_no, e.title, e.resolution,
+                        e.release_group, e.source_type, e.watched as i64, e.last_position_ms,
+                        e.duration_ms,
+                    ],
+                )?;
+            }
+        }
+        Ok(())
+    })
+}

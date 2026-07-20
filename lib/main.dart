@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'src/rust/frb_generated.dart';
 import 'src/rust/api.dart' as rust;
 import 'src/app.dart';
+import 'src/state/providers.dart';
 import 'src/services/proxy.dart';
 
 Future<void> main() async {
@@ -29,6 +30,10 @@ Future<void> main() async {
   if (token != null && token.isNotEmpty) {
     rust.setBangumiToken(token: token);
   }
+
+  // Restore SMB credentials so network-share folders work without re-entering
+  // the password (connection is opened lazily per operation).
+  (await SmbCredentials.load()).pushToRust();
 
   // Route cover-image downloads through the same system proxy the Rust HTTP
   // client uses (Bangumi's CDN is DNS-poisoned in mainland China).

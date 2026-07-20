@@ -10,7 +10,11 @@
 use crate::models::ScannedFile;
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 const VIDEO_EXTS: &[&str] = &[
     "mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts", "rmvb", "rm", "mpg",
@@ -152,4 +156,196 @@ pub fn smb_path_from_uri(uri: &str) -> Option<String> {
     let _host = parts.next()?;
     let _share = parts.next()?;
     Some(parts.next().unwrap_or("").to_string())
+}
+
+// ---- Snapshot file I/O on the share (for multi-device sync) ----
+
+/// Path on the share where the library snapshot lives.
+const SNAPSHOT_PATH: &str = ".animebd/snapshot.json";
+
+/// Write the snapshot JSON to `<share>/.animebd/snapshot.json`.
+pub async fn write_snapshot(json: &str) -> Result<()> {
+    let c = creds().context("smb not connected")?;
+    let (mut client, mut tree) = open(&c).await?;
+    // Ensure the .animebd directory exists (ignore "already exists" errors).
+    let _ = client.create_directory(&mut tree, ".animebd").await;
+    client
+        .write_file(&mut tree, SNAPSHOT_PATH, json.as_bytes())
+        .await
+        .context("smb write snapshot")?;
+    let _ = client.disconnect_share(&tree).await;
+    Ok(())
+}
+
+/// Read the snapshot JSON from the share, or None if it doesn't exist.
+pub async fn read_snapshot() -> Result<Option<String>> {
+    let c = creds().context("smb not connected")?;
+    let (mut client, mut tree) = open(&c).await?;
+    let data = client.read_file(&mut tree, SNAPSHOT_PATH).await;
+    let _ = client.disconnect_share(&tree).await;
+    match data {
+        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        Err(_) => Ok(None), // not found / unreadable → treat as no snapshot
+    }
+}
+
+// ---- Local HTTP streaming proxy ----
+//
+// libmpv's bundled FFmpeg usually lacks the smb:// protocol, so we serve SMB
+// files over a loopback HTTP server that libmpv CAN play. Each registered file
+// gets an opaque token; `GET /<token>` streams the bytes and honours `Range`
+// requests so seeking works. Bytes are pulled from the share on demand via
+// FileReader.read_at — nothing is buffered to disk.
+
+/// token -> smb share-relative path. Registered by `register_playable`.
+static PLAYABLE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// The port the proxy bound to (0 = not started yet).
+static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
+static TOKEN_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Register an SMB URI for playback and return `http://127.0.0.1:port/<token>`.
+/// Starts the proxy on first use. Must be called from within the tokio runtime.
+pub async fn register_playable(smb_uri: &str) -> Result<String> {
+    let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
+    let port = ensure_proxy().await?;
+    let token = format!("t{}", TOKEN_SEQ.fetch_add(1, Ordering::Relaxed));
+    PLAYABLE.lock().unwrap().insert(token.clone(), path);
+    Ok(format!("http://127.0.0.1:{port}/{token}"))
+}
+
+/// Drop a previously registered token (called when playback ends).
+pub fn unregister_playable(url: &str) {
+    if let Some(token) = url.rsplit('/').next() {
+        PLAYABLE.lock().unwrap().remove(token);
+    }
+}
+
+/// Start the loopback HTTP server once; returns its port.
+async fn ensure_proxy() -> Result<u16> {
+    let existing = PROXY_PORT.load(Ordering::Relaxed);
+    if existing != 0 {
+        return Ok(existing);
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.context("bind proxy")?;
+    let port = listener.local_addr()?.port();
+    PROXY_PORT.store(port, Ordering::Relaxed);
+    tokio::spawn(async move {
+        loop {
+            match listener.accept().await {
+                Ok((stream, _)) => {
+                    tokio::spawn(async move {
+                        let _ = serve(stream).await;
+                    });
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    Ok(port)
+}
+
+/// Handle one HTTP request: parse the token + optional Range, stream the file.
+async fn serve(mut stream: TcpStream) -> Result<()> {
+    // Read headers (until CRLFCRLF). Video requests are tiny, 8KB is plenty.
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut tmp).await?;
+        if n == 0 {
+            return Ok(());
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16384 {
+            break;
+        }
+    }
+    let head = String::from_utf8_lossy(&buf);
+    let mut lines = head.lines();
+    let request_line = lines.next().unwrap_or("");
+    // "GET /<token> HTTP/1.1"
+    let token = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .trim_start_matches('/')
+        .to_string();
+    let mut range: Option<(u64, Option<u64>)> = None;
+    for line in lines {
+        if let Some(v) = line.strip_prefix("Range:").or_else(|| line.strip_prefix("range:")) {
+            range = parse_range(v.trim());
+        }
+    }
+
+    let path = PLAYABLE.lock().unwrap().get(&token).cloned();
+    let Some(path) = path else {
+        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await;
+        return Ok(());
+    };
+
+    let Some(c) = creds() else {
+        let _ = stream.write_all(b"HTTP/1.1 500 No SMB\r\nContent-Length: 0\r\n\r\n").await;
+        return Ok(());
+    };
+
+    // Open a dedicated connection + reader for this request.
+    let mut client = smb2::connect(&c.addr, &c.user, &c.password).await?;
+    let tree = client.connect_share(&c.share).await?;
+    let reader = client.open_file_reader(&tree, &path).await?;
+    let total = reader.size();
+
+    let (start, end) = match range {
+        Some((s, Some(e))) => (s, e.min(total.saturating_sub(1))),
+        Some((s, None)) => (s, total.saturating_sub(1)),
+        None => (0, total.saturating_sub(1)),
+    };
+    let len = end.saturating_sub(start) + 1;
+
+    // Response headers.
+    let status = if range.is_some() {
+        "HTTP/1.1 206 Partial Content"
+    } else {
+        "HTTP/1.1 200 OK"
+    };
+    let mut header = format!(
+        "{status}\r\nContent-Type: video/x-matroska\r\nAccept-Ranges: bytes\r\nContent-Length: {len}\r\n"
+    );
+    if range.is_some() {
+        header.push_str(&format!("Content-Range: bytes {start}-{end}/{total}\r\n"));
+    }
+    header.push_str("\r\n");
+    stream.write_all(header.as_bytes()).await?;
+
+    // Stream in chunks from the share.
+    const CHUNK: u64 = 256 * 1024;
+    let mut off = start;
+    while off <= end {
+        let want = CHUNK.min(end - off + 1);
+        let data = match reader.read_at(off, want).await {
+            Ok(d) => d,
+            Err(_) => break,
+        };
+        if data.is_empty() {
+            break;
+        }
+        if stream.write_all(&data).await.is_err() {
+            break; // client disconnected (seek / closed)
+        }
+        off += data.len() as u64;
+    }
+    let _ = client.disconnect_share(&tree).await;
+    Ok(())
+}
+
+/// Parse a `bytes=start-end` Range header value into (start, Option<end>).
+fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
+    let v = v.strip_prefix("bytes=")?;
+    let (s, e) = v.split_once('-')?;
+    let start: u64 = s.trim().parse().ok()?;
+    let end = e.trim();
+    let end = if end.is_empty() {
+        None
+    } else {
+        Some(end.parse().ok()?)
+    };
+    Some((start, end))
 }

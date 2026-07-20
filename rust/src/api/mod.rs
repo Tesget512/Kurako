@@ -252,6 +252,59 @@ pub fn smb_enumerate(subdir: String) -> Result<Vec<crate::models::ScannedFile>, 
         .map_err(|e| e.to_string())
 }
 
+/// Register an SMB file for playback and return a local HTTP URL libmpv can
+/// play (the loopback proxy streams it, honouring Range/seek).
+pub fn smb_playable_url(smb_uri: String) -> Result<String, String> {
+    RT.block_on(async { smb::register_playable(&smb_uri).await })
+        .map_err(|e| e.to_string())
+}
+
+/// Release a playback URL when done (frees the proxy token).
+pub fn smb_release(url: String) {
+    smb::unregister_playable(&url);
+}
+
+// ---- Snapshot sync (multi-device) ----
+
+/// Serialize the whole library (anime + episodes) to a JSON snapshot string.
+pub fn export_snapshot_json() -> Result<String, String> {
+    let items = db::export_snapshot().map_err(|e| e.to_string())?;
+    serde_json::to_string(&items).map_err(|e| e.to_string())
+}
+
+/// Import a JSON snapshot into the local library (idempotent upsert).
+pub fn import_snapshot_json(json: String) -> Result<u32, String> {
+    let items: Vec<db::SnapshotAnime> =
+        serde_json::from_str(&json).map_err(|e| format!("parse snapshot: {e}"))?;
+    let n = items.len() as u32;
+    db::import_snapshot(&items).map_err(|e| e.to_string())?;
+    Ok(n)
+}
+
+/// Export the library and upload it to the connected SMB share.
+pub fn snapshot_upload_to_smb() -> Result<(), String> {
+    let json = export_snapshot_json()?;
+    RT.block_on(async { smb::write_snapshot(&json).await })
+        .map_err(|e| e.to_string())
+}
+
+/// Download the snapshot from the SMB share and import it. Returns the number of
+/// anime imported, or 0 if the share has no snapshot yet.
+pub fn snapshot_restore_from_smb() -> Result<u32, String> {
+    let json = RT
+        .block_on(async { smb::read_snapshot().await })
+        .map_err(|e| e.to_string())?;
+    match json {
+        Some(j) => {
+            let n = import_snapshot_json(j)?;
+            // Refresh collection pins after import if logged in.
+            let _ = sync_collections_inner();
+            Ok(n)
+        }
+        None => Ok(0),
+    }
+}
+
 /// Shared tail of a scan: upsert groups/episodes, auto-match against Bangumi,
 /// merge duplicate bindings, sync collection status, emit done.
 fn finish_scan(
