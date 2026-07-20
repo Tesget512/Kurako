@@ -48,6 +48,9 @@ app.*.map.json
 # template (see rust/src/secrets.rs.example).
 /rust/src/secrets.rs
 
+# Inno Setup installer output
+/dist/
+
 # Claude Code local settings (machine-specific paths, permissions)
 /.claude/
 

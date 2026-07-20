@@ -36,7 +36,10 @@ UninstallDisplayName={#AppName} ({#AppNameEn})
 UninstallDisplayIcon={app}\{#AppExeName}
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; Inno Setup 6 doesn't bundle a Simplified Chinese .isl (it's an unofficial
+; download), so the wizard uses English. The app itself is Chinese. To get a
+; Chinese wizard, drop ChineseSimplified.isl into Inno Setup's Languages folder
+; and add:  Name: "cn"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
