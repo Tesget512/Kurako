@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -80,12 +82,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _section(context, '播放器'),
           SwitchListTile(
             title: const Text('使用外置播放器'),
-            subtitle: const Text('关闭则使用内置播放器（media_kit，支持硬解与字幕）'),
+            subtitle: Text(
+              Platform.isAndroid
+                  ? '关闭则用内置播放器。开启后点播放会调用系统的外部播放器（如 MX Player / VLC）'
+                  : '关闭则使用内置播放器（media_kit，支持硬解与字幕）',
+            ),
             value: settings.useExternalPlayer,
             onChanged: (v) =>
                 ref.read(settingsProvider.notifier).setUseExternalPlayer(v),
           ),
-          if (settings.useExternalPlayer)
+          // The player-path field only makes sense on desktop; Android picks the
+          // player app via a system intent chooser.
+          if (settings.useExternalPlayer && !Platform.isAndroid)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: TextField(
