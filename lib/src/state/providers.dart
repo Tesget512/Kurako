@@ -36,10 +36,31 @@ final foldersProvider = FutureProvider.autoDispose<List<LibraryFolder>>((
 
 enum LibrarySort { normal, year, rating, weekday, yearWeekday }
 
-/// The active library sort.
-final librarySortProvider = StateProvider<LibrarySort>(
-  (ref) => LibrarySort.normal,
-);
+/// The active library sort, persisted so the choice carries over across
+/// launches.
+final librarySortProvider =
+    StateNotifierProvider<_SortNotifier, LibrarySort>((ref) {
+  return _SortNotifier();
+});
+
+class _SortNotifier extends StateNotifier<LibrarySort> {
+  _SortNotifier() : super(LibrarySort.normal) {
+    _load();
+  }
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final i = prefs.getInt('library_sort') ?? 0;
+    if (i >= 0 && i < LibrarySort.values.length) {
+      state = LibrarySort.values[i];
+    }
+  }
+
+  Future<void> set(LibrarySort value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('library_sort', value.index);
+    state = value;
+  }
+}
 
 /// Whether collected entries (在看/想看/…) are pinned above the rest. When off,
 /// they sort purely by the chosen order like everything else. Persisted.

@@ -256,48 +256,39 @@ class _CollectionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isCollected = _items.containsKey(current);
-    final selected = isCollected ? {current} : <int>{};
-    return Row(
+    // A Wrap of chips flows onto multiple lines on narrow (phone) screens
+    // instead of cramming five icon+label segments into one row.
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        Expanded(
-          child: SegmentedButton<int>(
-            selected: selected,
-            emptySelectionAllowed: true,
-            onSelectionChanged: (s) {
-              if (s.isNotEmpty) onChanged(s.first);
-            },
-            showSelectedIcon: false,
-            style: ButtonStyle(
-              visualDensity: VisualDensity.compact,
-              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        for (final entry in _items.entries)
+          ChoiceChip(
+            selected: current == entry.key,
+            onSelected: (_) => onChanged(entry.key),
+            showCheckmark: false,
+            avatar: Icon(
+              entry.value.$2,
+              size: 18,
+              color: current == entry.key
+                  ? theme.colorScheme.onSecondaryContainer
+                  : theme.colorScheme.onSurfaceVariant,
             ),
-            segments: [
-              for (final entry in _items.entries)
-                ButtonSegment(
-                  value: entry.key,
-                  label:
-                      Text(entry.value.$1, style: theme.textTheme.labelSmall),
-                  icon: Icon(entry.value.$2, size: 16),
-                ),
-            ],
+            label: Text(entry.value.$1),
+            labelStyle: theme.textTheme.labelMedium,
+            visualDensity: VisualDensity.compact,
           ),
-        ),
         // Only offer "取消收藏" when there's a local mark to clear.
-        if (isCollected) ...[
-          const SizedBox(width: 8),
-          Tooltip(
-            message: '取消收藏（仅本地，Bangumi 网页端不变）',
-            child: OutlinedButton.icon(
-              onPressed: onClear,
-              icon: const Icon(Icons.bookmark_remove_outlined, size: 16),
-              label: Text('取消收藏', style: theme.textTheme.labelSmall),
-              style: OutlinedButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-            ),
+        if (isCollected)
+          ActionChip(
+            avatar: const Icon(Icons.bookmark_remove_outlined, size: 18),
+            label: const Text('取消收藏'),
+            labelStyle: theme.textTheme.labelMedium,
+            onPressed: onClear,
+            tooltip: '取消收藏（仅本地，Bangumi 网页端不变）',
+            visualDensity: VisualDensity.compact,
           ),
-        ],
       ],
     );
   }

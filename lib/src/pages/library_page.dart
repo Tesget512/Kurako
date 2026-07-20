@@ -113,8 +113,8 @@ class LibraryPage extends ConsumerWidget {
         } else if (v == '__pin__') {
           ref.read(pinCollectedProvider.notifier).toggle();
         } else {
-          ref.read(librarySortProvider.notifier).state =
-              LibrarySort.values.firstWhere((e) => e.name == v);
+          ref.read(librarySortProvider.notifier).set(
+              LibrarySort.values.firstWhere((e) => e.name == v));
         }
       },
       itemBuilder: (context) => [
