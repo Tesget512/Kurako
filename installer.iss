@@ -1,15 +1,15 @@
-; Inno Setup script for AnimeBDPlayer (动画仓库)
+; Inno Setup script for KURAKO
 ;
 ; Build the app first:  flutter build windows --release
 ; Then compile this script with Inno Setup 6 (ISCC.exe installer.iss), or open
-; it in the Inno Setup IDE and hit Build. Output: dist/AnimeBDPlayer-Setup.exe
+; it in the Inno Setup IDE and hit Build. Output: dist/KURAKO-Setup.exe
 ;
 ; The app stores its library + settings in Documents\AnimeBDPlayer, NOT in the
 ; install directory — so updating (reinstalling over the top) never touches user
 ; data, and uninstalling leaves the library intact.
 
-#define AppName "动画仓库"
-#define AppNameEn "AnimeBDPlayer"
+#define AppName "KURAKO"
+#define AppNameEn "KURAKO"
 #define AppVersion "1.0.0"
 #define AppPublisher "com.animebd"
 #define AppExeName "anime_bd_player.exe"
@@ -31,8 +31,8 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; Show the Chinese + English name in Add/Remove Programs.
-UninstallDisplayName={#AppName} ({#AppNameEn})
+; Name shown in Add/Remove Programs.
+UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\{#AppExeName}
 
 [Languages]
