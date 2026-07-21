@@ -1,4 +1,7 @@
-use crate::models::{Anime, BangumiSubject, BlacklistEntry, Episode, LibraryFolder, ScanProgress};
+use crate::models::{
+    Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode,
+    LibraryFolder, ScanProgress, SubtitleCandidate,
+};
 use crate::{bangumi, db, scan, smb};
 use crate::frb_generated::StreamSink;
 use flutter_rust_bridge::frb;
@@ -262,6 +265,83 @@ pub fn smb_playable_url(smb_uri: String) -> Result<String, String> {
 /// Release a playback URL when done (frees the proxy token).
 pub fn smb_release(url: String) {
     smb::unregister_playable(&url);
+}
+
+/// External subtitle files next to an SMB video (same dir + same stem prefix),
+/// each pre-registered on the loopback proxy so mpv can load it.
+pub fn smb_list_subtitles(smb_uri: String) -> Result<Vec<SubtitleCandidate>, String> {
+    RT.block_on(async { smb::list_subtitles(&smb_uri).await })
+        .map_err(|e| e.to_string())
+}
+
+/// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
+/// and shows the delta as transfer speed in the playback-info panel.
+pub fn smb_proxy_stats() -> u64 {
+    smb::proxy_bytes_served()
+}
+
+// ---- SMB downloads ----
+
+/// Download an SMB file to `dest_dir`, streaming progress. On success the
+/// download is recorded so playback prefers the local copy from then on.
+pub fn smb_download(
+    sink: StreamSink<DownloadProgress>,
+    smb_uri: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    let local = RT
+        .block_on(async {
+            smb::download(&smb_uri, &dest_dir, |done, total| {
+                let _ = sink.add(DownloadProgress {
+                    bytes_done: done as i64,
+                    bytes_total: total as i64,
+                });
+            })
+            .await
+        })
+        .map_err(|e| e.to_string())?;
+    let size = std::fs::metadata(&local).map(|m| m.len() as i64).unwrap_or(0);
+    db::add_download(&smb_uri, &local, size, now_secs()).map_err(|e| e.to_string())?;
+    Ok(local)
+}
+
+/// Cancel the in-flight download (checked between 1MB chunks).
+pub fn smb_cancel_download() {
+    smb::cancel_download();
+}
+
+pub fn list_downloads() -> Result<Vec<DownloadEntry>, String> {
+    db::list_downloads().map_err(|e| e.to_string())
+}
+
+/// Delete a download: removes the record and the local file.
+pub fn remove_download(id: i64) -> Result<(), String> {
+    let path = db::remove_download(id).map_err(|e| e.to_string())?;
+    if let Some(p) = path {
+        let _ = std::fs::remove_file(p);
+    }
+    Ok(())
+}
+
+/// The local copy of an SMB file if it was downloaded and still exists on disk
+/// (a stale record whose file vanished is cleaned up and returns None).
+pub fn downloaded_local_path(smb_uri: String) -> Result<Option<String>, String> {
+    let path = db::download_local_path(&smb_uri).map_err(|e| e.to_string())?;
+    match path {
+        Some(p) if std::path::Path::new(&p).exists() => Ok(Some(p)),
+        Some(_) => {
+            // File was deleted outside the app — drop the stale record.
+            if let Ok(list) = db::list_downloads() {
+                for d in list {
+                    if d.smb_uri == smb_uri {
+                        let _ = db::remove_download(d.id);
+                    }
+                }
+            }
+            Ok(None)
+        }
+        None => Ok(None),
+    }
 }
 
 // ---- Snapshot sync (multi-device) ----

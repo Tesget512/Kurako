@@ -214,6 +214,57 @@ final touchModePlayerProvider =
   return _BoolPrefNotifier('touch_mode_player', defaultValue: false);
 });
 
+// ---- Decode mode (player hardware/software acceleration) ----
+
+/// Cached at startup so PlayerPage's static _decodeConfig() can read it
+/// without a BuildContext or ProviderRef (VideoControllerConfiguration is
+/// fixed at VideoController construction time).
+String decodeModeStartupValue = 'auto';
+
+/// Decode mode: 'auto' (platform default), 'hw' (force hardware), 'sw' (force
+/// software). Takes effect when next entering the player. Persisted.
+final decodeModeProvider =
+    StateNotifierProvider<_StringPrefNotifier, String>((ref) {
+  return _StringPrefNotifier('decode_mode', defaultValue: 'auto');
+});
+
+/// A string backed by SharedPreferences.
+class _StringPrefNotifier extends StateNotifier<String> {
+  final String key;
+  _StringPrefNotifier(this.key, {required String defaultValue})
+      : super(defaultValue) {
+    _load(defaultValue);
+  }
+  Future<void> _load(String def) async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getString(key) ?? def;
+    if (key == 'decode_mode') decodeModeStartupValue = state;
+  }
+
+  Future<void> set(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, value);
+    state = value;
+    if (key == 'decode_mode') decodeModeStartupValue = value;
+  }
+}
+
+// ---- Download directory (where SMB downloads are saved) ----
+
+/// App data directory path, cached at startup (for the default download dir).
+String appDataDirPath = '';
+
+/// The effective downloads directory: the user-chosen one, or
+/// `<data dir>/downloads` when unset.
+String effectiveDownloadDir(String pref) =>
+    pref.isNotEmpty ? pref : '$appDataDirPath/downloads';
+
+/// Absolute path of the downloads directory. Null = app data dir / downloads.
+final downloadDirProvider =
+    StateNotifierProvider<_StringPrefNotifier, String>((ref) {
+  return _StringPrefNotifier('download_dir', defaultValue: '');
+});
+
 // ---- SMB credentials (persisted; pushed into the Rust smb client) ----
 
 class SmbCredentials {

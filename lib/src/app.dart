@@ -14,13 +14,13 @@ class AnimeBdApp extends ConsumerWidget {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      // FadeForwards (M3 spec) instead of PredictiveBack: predictive-back
-      // transforms the whole live route every frame and janks on heavy pages;
-      // this fade/slide is cheap and still plays nicely with the system back
-      // gesture on Android.
+      // PredictiveBackPageTransitionsBuilder: tracks the Android system back
+      // gesture frame-by-frame, and automatically falls back to FadeForwards
+      // (M3 spec) for non-gesture pops — best of both. The earlier jank came
+      // from the pre-FadeForwards fallback, not the gesture tracking itself.
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
+          TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
         },
       ),
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering

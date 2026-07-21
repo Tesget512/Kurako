@@ -94,6 +94,32 @@ pub struct BlacklistEntry {
     pub created_at: i64,
 }
 
+/// An external subtitle file found next to a video. `uri` is what mpv should
+/// load: a local absolute path (local sources) or a loopback proxy URL (SMB).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubtitleCandidate {
+    pub file_name: String,
+    pub uri: String,
+}
+
+/// Progress event streamed back to Dart during an SMB download.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadProgress {
+    pub bytes_done: i64,
+    pub bytes_total: i64,
+}
+
+/// A completed SMB→local download, tracked so playback can prefer the local
+/// copy and the UI can manage (list/delete) downloads.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadEntry {
+    pub id: i64,
+    pub smb_uri: String,
+    pub local_path: String,
+    pub bytes_total: i64,
+    pub created_at: i64,
+}
+
 /// Progress event streamed back to Dart during a scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgress {

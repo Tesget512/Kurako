@@ -16,7 +16,7 @@ walkdir = "2"
 regex = "1"
 anitomy = { git = "https://github.com/Rapptz/anitomy-rs", branch = "master" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
 futures = "0.3"
 once_cell = "1"
 simplet2s = "0.2"

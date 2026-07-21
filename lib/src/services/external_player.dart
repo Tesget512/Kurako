@@ -3,6 +3,22 @@ import 'dart:io';
 import 'package:android_intent_plus/android_intent.dart';
 import 'package:android_intent_plus/flag.dart';
 
+import '../rust/api.dart' as rust;
+import '../rust/models.dart';
+
+/// The locator to hand an external player for [ep]. SMB files can't be passed
+/// as raw smb:// strings (most players have no credentials for the share) —
+/// use the downloaded local copy when one exists, else register the file on
+/// the loopback proxy and pass its http:// URL. The proxy token is left
+/// registered for the lifetime of the app (we can't know when the external
+/// player finishes); tokens are tiny, so this doesn't accumulate meaningfully.
+Future<String> externalPlayerLocator(Episode ep) async {
+  if (ep.sourceType != 'smb') return ep.filePath;
+  final local = await rust.downloadedLocalPath(smbUri: ep.filePath);
+  if (local != null) return local;
+  return rust.smbPlayableUrl(smbUri: ep.filePath);
+}
+
 /// Launch a video in an external player.
 ///
 /// - Desktop (Windows/macOS/Linux): [locator] is a filesystem path. Uses the

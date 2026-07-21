@@ -9,6 +9,7 @@ import '../services/bangumi_oauth.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
 import 'blacklist_page.dart';
+import 'downloads_page.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -141,6 +142,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               onChanged: (v) =>
                   ref.read(touchModePlayerProvider.notifier).set(v),
             ),
+          _buildDecodeModeRow(context),
           // The player-path field only makes sense on desktop; Android picks the
           // player app via a system intent chooser.
           if (settings.useExternalPlayer && !Platform.isAndroid)
@@ -191,6 +193,85 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const BlacklistPage()),
               );
+            },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('下载管理'),
+            subtitle: const Text('查看并删除已下载到本地的 SMB 视频'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const DownloadsPage()),
+              );
+            },
+          ),
+          _buildDownloadDirRow(context),
+        ],
+      ),
+    );
+  }
+
+  /// Decode mode: auto (platform default) / force hardware / force software.
+  /// Applied when the player is next opened (VideoController config is fixed
+  /// at construction).
+  Widget _buildDecodeModeRow(BuildContext context) {
+    final mode = ref.watch(decodeModeProvider);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('解码方式'),
+          const SizedBox(height: 2),
+          Text(
+            '自动优先硬解，异常花屏/绿屏时可改用软件解码。重新进入播放器后生效',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'auto', label: Text('自动')),
+              ButtonSegment(value: 'hw', label: Text('硬件解码')),
+              ButtonSegment(value: 'sw', label: Text('软件解码')),
+            ],
+            selected: {mode},
+            onSelectionChanged: (s) =>
+                ref.read(decodeModeProvider.notifier).set(s.first),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Where SMB downloads are saved. Empty = app data dir / downloads.
+  Widget _buildDownloadDirRow(BuildContext context) {
+    final dir = ref.watch(downloadDirProvider);
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.folder_outlined),
+      title: const Text('下载保存位置'),
+      subtitle: Text(effectiveDownloadDir(dir)),
+      trailing: Wrap(
+        children: [
+          if (dir.isNotEmpty)
+            IconButton(
+              tooltip: '恢复默认位置',
+              icon: const Icon(Icons.restart_alt),
+              onPressed: () =>
+                  ref.read(downloadDirProvider.notifier).set(''),
+            ),
+          IconButton(
+            tooltip: '选择文件夹',
+            icon: const Icon(Icons.folder_open),
+            onPressed: () async {
+              final picked = await FilePicker.platform.getDirectoryPath();
+              if (picked != null) {
+                ref.read(downloadDirProvider.notifier).set(picked);
+              }
             },
           ),
         ],

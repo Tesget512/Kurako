@@ -56,6 +56,13 @@ pub fn init(db_path: &str) -> Result<()> {
             value      TEXT NOT NULL UNIQUE,
             created_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS downloads (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            smb_uri     TEXT NOT NULL UNIQUE,
+            local_path  TEXT NOT NULL,
+            bytes_total INTEGER NOT NULL DEFAULT 0,
+            created_at  INTEGER NOT NULL
+        );
         "#,
     )?;
     // Migrate databases created before these columns existed; the error on an
@@ -499,5 +506,69 @@ pub fn blacklist_values(kind: &str) -> Result<std::collections::HashSet<String>>
             .query_map(params![kind], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
         Ok(rows)
+    })
+}
+
+// ---- SMB downloads ----
+
+/// Record a completed download (replaces any earlier record for the same URI).
+pub fn add_download(smb_uri: &str, local_path: &str, bytes_total: i64, now: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "INSERT OR REPLACE INTO downloads(smb_uri, local_path, bytes_total, created_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![smb_uri, local_path, bytes_total, now],
+        )?;
+        Ok(())
+    })
+}
+
+pub fn list_downloads() -> Result<Vec<crate::models::DownloadEntry>> {
+    with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, smb_uri, local_path, bytes_total, created_at FROM downloads ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(crate::models::DownloadEntry {
+                    id: r.get(0)?,
+                    smb_uri: r.get(1)?,
+                    local_path: r.get(2)?,
+                    bytes_total: r.get(3)?,
+                    created_at: r.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
+/// Remove a download record, returning its local path so the caller can delete
+/// the file too.
+pub fn remove_download(id: i64) -> Result<Option<String>> {
+    with_conn(|c| {
+        let path: Option<String> = c
+            .query_row(
+                "SELECT local_path FROM downloads WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        c.execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
+        Ok(path)
+    })
+}
+
+/// The local copy of an SMB file, if one was downloaded.
+pub fn download_local_path(smb_uri: &str) -> Result<Option<String>> {
+    with_conn(|c| {
+        let path: Option<String> = c
+            .query_row(
+                "SELECT local_path FROM downloads WHERE smb_uri = ?1",
+                params![smb_uri],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(path)
     })
 }

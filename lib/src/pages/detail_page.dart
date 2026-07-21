@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -105,6 +107,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                 data: (episodes) => _EpisodeList(
                   episodes: episodes,
                   onPlay: (e) => _play(context, ref, e),
+                  onPlayWith: (e, external) =>
+                      _play(context, ref, e, forceExternal: external),
+                  onDownload: (e) => _downloadEpisode(context, e),
                   onBlocked: () {
                     ref.invalidate(episodesProvider(widget.animeId));
                     ref.invalidate(animeDetailProvider(widget.animeId));
@@ -180,15 +185,22 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     }
   }
 
-  Future<void> _play(BuildContext context, WidgetRef ref, Episode ep) async {
+  /// [forceExternal]: null = follow the setting; true/false = user picked a
+  /// player explicitly from the episode context menu.
+  Future<void> _play(BuildContext context, WidgetRef ref, Episode ep,
+      {bool? forceExternal}) async {
     // Ensure persisted settings are loaded before choosing a player — on the
     // first play right after launch the async load may not have finished, which
     // used to fall back to the built-in player on the first tap.
     await ref.read(settingsProvider.notifier).ready;
     final settings = ref.read(settingsProvider);
-    if (settings.useExternalPlayer) {
+    final useExternal = forceExternal ?? settings.useExternalPlayer;
+    if (useExternal) {
       try {
-        await launchExternalPlayer(settings.externalPlayerPath, ep.filePath);
+        // SMB needs a locator the player can actually open (local copy or
+        // loopback proxy URL) — raw smb:// would fail without credentials.
+        final locator = await externalPlayerLocator(ep);
+        await launchExternalPlayer(settings.externalPlayerPath, locator);
       } catch (e) {
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -212,6 +224,17 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       ),
     );
     ref.invalidate(episodesProvider(widget.animeId));
+  }
+
+  /// Download an SMB episode to the configured local folder, with a progress
+  /// dialog (speed + cancel). On success playback prefers the local copy.
+  Future<void> _downloadEpisode(BuildContext context, Episode ep) async {
+    final destDir = effectiveDownloadDir(ref.read(downloadDirProvider));
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _DownloadDialog(episode: ep, destDir: destDir),
+    );
   }
 }
 
@@ -306,11 +329,15 @@ class _CollectionRow extends StatelessWidget {
 class _EpisodeList extends StatelessWidget {
   final List<Episode> episodes;
   final void Function(Episode) onPlay;
+  final void Function(Episode, bool external) onPlayWith;
+  final void Function(Episode) onDownload;
   final VoidCallback onBlocked;
 
   const _EpisodeList({
     required this.episodes,
     required this.onPlay,
+    required this.onPlayWith,
+    required this.onDownload,
     required this.onBlocked,
   });
 
@@ -335,6 +362,8 @@ class _EpisodeList extends StatelessWidget {
     Widget tile(Episode e) => _EpisodeTile(
           episode: e,
           onPlay: () => onPlay(e),
+          onPlayWith: (external) => onPlayWith(e, external),
+          onDownload: () => onDownload(e),
           onBlocked: onBlocked,
         );
 
@@ -386,12 +415,18 @@ class _EpisodeList extends StatelessWidget {
 class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
   final VoidCallback onPlay;
+  /// Play with an explicitly chosen player (true = external).
+  final void Function(bool external) onPlayWith;
+  /// Download this SMB episode to local storage.
+  final VoidCallback onDownload;
   /// Invalidate the parent's episode list after this file is blocked.
   final VoidCallback onBlocked;
 
   const _EpisodeTile({
     required this.episode,
     required this.onPlay,
+    required this.onPlayWith,
+    required this.onDownload,
     required this.onBlocked,
   });
 
@@ -401,32 +436,148 @@ class _EpisodeTile extends ConsumerWidget {
     final resumed = episode.lastPositionMs > 0 && !episode.watched
         ? '（可续播）'
         : '';
-    return ListTile(
-      leading: CircleAvatar(child: Text(episode.episodeNo?.toString() ?? '?')),
-      title: Text(
-        episode.fileName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
+    // Long-press (touch) and right-click (desktop) both open the context menu:
+    // choose a player, download (SMB), or block the file. The gestures live on
+    // a wrapping GestureDetector because ListTile has no onSecondaryTap.
+    return GestureDetector(
+      onSecondaryTapDown: (d) => _showMenu(context, ref, d.globalPosition),
+      child: ListTile(
+        leading:
+            CircleAvatar(child: Text(episode.episodeNo?.toString() ?? '?')),
+        title: Text(
+          episode.fileName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        subtitle: Text(
+          [
+            if (episode.resolution != null) episode.resolution!,
+            if (episode.releaseGroup != null) episode.releaseGroup!,
+            if (resumed.isNotEmpty) resumed,
+          ].join(' · '),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (episode.watched)
+              Icon(Icons.check_circle, color: theme.colorScheme.primary),
+            IconButton(icon: const Icon(Icons.play_arrow), onPressed: onPlay),
+          ],
+        ),
+        onTap: onPlay,
+        onLongPress: () => _showMenuCentered(context, ref),
       ),
-      subtitle: Text(
-        [
-          if (episode.resolution != null) episode.resolution!,
-          if (episode.releaseGroup != null) episode.releaseGroup!,
-          if (resumed.isNotEmpty) resumed,
-        ].join(' · '),
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (episode.watched)
-            Icon(Icons.check_circle, color: theme.colorScheme.primary),
-          IconButton(icon: const Icon(Icons.play_arrow), onPressed: onPlay),
-        ],
-      ),
-      onTap: onPlay,
-      // Long-press (touch) / right-click (desktop): block this video file.
-      onLongPress: () => _block(context, ref),
     );
+  }
+
+  void _showMenuCentered(BuildContext context, WidgetRef ref) {
+    final box = context.findRenderObject() as RenderBox?;
+    final pos = box == null
+        ? Offset.zero
+        : box.localToGlobal(box.size.center(Offset.zero));
+    _showMenu(context, ref, pos);
+  }
+
+  Future<void> _showMenu(
+      BuildContext context, WidgetRef ref, Offset position) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final isSmb = episode.sourceType == 'smb';
+    // Whether a local copy exists decides download vs delete-copy entries.
+    String? localCopy;
+    if (isSmb) {
+      try {
+        localCopy = await rust.downloadedLocalPath(smbUri: episode.filePath);
+      } catch (_) {}
+    }
+    if (!context.mounted) return;
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        position & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        const PopupMenuItem(
+          value: 'internal',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.play_circle_outline),
+            title: Text('用内置播放器播放'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'external',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.open_in_new),
+            title: Text('用外部播放器播放'),
+          ),
+        ),
+        if (isSmb && localCopy == null)
+          const PopupMenuItem(
+            value: 'download',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.download_outlined),
+              title: Text('下载到本地'),
+            ),
+          ),
+        if (isSmb && localCopy != null)
+          const PopupMenuItem(
+            value: 'delete_copy',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.delete_outline),
+              title: Text('删除本地副本'),
+            ),
+          ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          value: 'block',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.block),
+            title: Text('屏蔽该文件'),
+          ),
+        ),
+      ],
+    );
+    if (!context.mounted || action == null) return;
+    switch (action) {
+      case 'internal':
+        onPlayWith(false);
+      case 'external':
+        onPlayWith(true);
+      case 'download':
+        onDownload();
+      case 'delete_copy':
+        await _deleteLocalCopy(context);
+      case 'block':
+        await _block(context, ref);
+    }
+  }
+
+  Future<void> _deleteLocalCopy(BuildContext context) async {
+    try {
+      final list = await rust.listDownloads();
+      for (final d in list) {
+        if (d.smbUri == episode.filePath) {
+          await rust.removeDownload(id: d.id);
+        }
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已删除本地副本，播放将恢复走网络')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('删除失败: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _block(BuildContext context, WidgetRef ref) async {
@@ -438,5 +589,138 @@ class _EpisodeTile extends ConsumerWidget {
       displayName: episode.fileName,
     );
     if (blocked) onBlocked();
+  }
+}
+
+/// Modal download progress: streams DownloadProgress from Rust, shows a
+/// percentage bar + transfer speed, and supports cancelling mid-way.
+class _DownloadDialog extends StatefulWidget {
+  final Episode episode;
+  final String destDir;
+  const _DownloadDialog({required this.episode, required this.destDir});
+
+  @override
+  State<_DownloadDialog> createState() => _DownloadDialogState();
+}
+
+class _DownloadDialogState extends State<_DownloadDialog> {
+  StreamSubscription<DownloadProgress>? _sub;
+  int _done = 0;
+  int _total = 0;
+  // Speed derived from progress deltas sampled once a second.
+  int _lastDone = 0;
+  DateTime _lastSample = DateTime.now();
+  double _speedBps = 0;
+  String? _error;
+  bool _finished = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  void _start() {
+    final stream = rust.smbDownload(
+      smbUri: widget.episode.filePath,
+      destDir: widget.destDir,
+    );
+    _sub = stream.listen(
+      (p) {
+        _done = p.bytesDone.toInt();
+        _total = p.bytesTotal.toInt();
+        final now = DateTime.now();
+        final dt = now.difference(_lastSample).inMilliseconds;
+        if (dt >= 1000) {
+          _speedBps = (_done - _lastDone) * 1000 / dt;
+          _lastDone = _done;
+          _lastSample = now;
+        }
+        if (mounted) setState(() {});
+      },
+      onError: (Object e) {
+        if (mounted) setState(() => _error = '$e');
+      },
+      onDone: () {
+        if (!mounted) return;
+        // The stream closing without error means the Rust call returned Ok.
+        if (_error == null && _total > 0 && _done >= _total) {
+          _finished = true;
+        }
+        setState(() {});
+        if (_finished) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('下载完成，之后播放将优先使用本地副本')),
+          );
+          Navigator.of(context).pop();
+        }
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
+  }
+
+  String _fmtSpeed(double bps) {
+    if (bps >= 1024 * 1024) {
+      return '${(bps / (1024 * 1024)).toStringAsFixed(1)} MB/s';
+    }
+    if (bps >= 1024) return '${(bps / 1024).toStringAsFixed(0)} KB/s';
+    return '${bps.toStringAsFixed(0)} B/s';
+  }
+
+  String _fmtMb(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+  @override
+  Widget build(BuildContext context) {
+    final progress = _total > 0 ? _done / _total : null;
+    return AlertDialog(
+      title: const Text('下载到本地'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            widget.episode.fileName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
+          if (_error != null)
+            Text('下载失败: $_error',
+                style: TextStyle(color: Theme.of(context).colorScheme.error))
+          else ...[
+            LinearProgressIndicator(value: progress),
+            const SizedBox(height: 8),
+            Text(
+              _total > 0
+                  ? '${_fmtMb(_done)} / ${_fmtMb(_total)} · ${_fmtSpeed(_speedBps)}'
+                  : '连接中…',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+      actions: [
+        if (_error != null)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('关闭'),
+          )
+        else
+          TextButton(
+            onPressed: () async {
+              await rust.smbCancelDownload();
+              if (context.mounted) Navigator.of(context).pop();
+            },
+            child: const Text('取消下载'),
+          ),
+      ],
+    );
   }
 }

@@ -144,6 +144,39 @@ Future<String> smbPlayableUrl({required String smbUri}) =>
 Future<void> smbRelease({required String url}) =>
     RustLib.instance.api.crateApiSmbRelease(url: url);
 
+/// External subtitle files next to an SMB video (same dir + same stem prefix),
+/// each pre-registered on the loopback proxy so mpv can load it.
+Future<List<SubtitleCandidate>> smbListSubtitles({required String smbUri}) =>
+    RustLib.instance.api.crateApiSmbListSubtitles(smbUri: smbUri);
+
+/// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
+/// and shows the delta as transfer speed in the playback-info panel.
+Future<BigInt> smbProxyStats() => RustLib.instance.api.crateApiSmbProxyStats();
+
+/// Download an SMB file to `dest_dir`, streaming progress. On success the
+/// download is recorded so playback prefers the local copy from then on.
+Stream<DownloadProgress> smbDownload({
+  required String smbUri,
+  required String destDir,
+}) =>
+    RustLib.instance.api.crateApiSmbDownload(smbUri: smbUri, destDir: destDir);
+
+/// Cancel the in-flight download (checked between 1MB chunks).
+Future<void> smbCancelDownload() =>
+    RustLib.instance.api.crateApiSmbCancelDownload();
+
+Future<List<DownloadEntry>> listDownloads() =>
+    RustLib.instance.api.crateApiListDownloads();
+
+/// Delete a download: removes the record and the local file.
+Future<void> removeDownload({required PlatformInt64 id}) =>
+    RustLib.instance.api.crateApiRemoveDownload(id: id);
+
+/// The local copy of an SMB file if it was downloaded and still exists on disk
+/// (a stale record whose file vanished is cleaned up and returns None).
+Future<String?> downloadedLocalPath({required String smbUri}) =>
+    RustLib.instance.api.crateApiDownloadedLocalPath(smbUri: smbUri);
+
 /// Refresh Bangumi collection status (想看/在看/看过…) for every bound entry.
 /// Uses a single paginated bulk-fetch — safe to call frequently.
 /// Returns the number of entries updated.

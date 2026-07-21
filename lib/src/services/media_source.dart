@@ -28,6 +28,12 @@ abstract class MediaSource {
   /// [releasePlayable] when done.
   Future<PlayableHandle> resolvePlayable(Episode episode);
 
+  /// External subtitle files sitting next to the video (same folder, same
+  /// name stem, subtitle extension). Each candidate's uri is loadable by mpv.
+  /// SAF has no directory access from a file URI, so it returns empty.
+  Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async =>
+      const [];
+
   /// Pick the source appropriate for this episode's stored source_type.
   static MediaSource forEpisode(Episode e) => switch (e.sourceType) {
         'saf' => SafMediaSource(),
@@ -80,6 +86,37 @@ class LocalMediaSource extends MediaSource {
   Future<PlayableHandle> resolvePlayable(Episode episode) async {
     return PlayableHandle('file:///${episode.filePath}');
   }
+
+  @override
+  Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async {
+    return listLocalSubtitles(episode.filePath);
+  }
+}
+
+/// Subtitle files next to a local video: same directory, subtitle extension,
+/// file name starting with the video's stem — catches `video.sc.ass` /
+/// `video.tc.ass` style multi-language pairs. Shared with the SMB source's
+/// downloaded-copy path.
+Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
+  const subExts = {'.ass', '.srt', '.ssa', '.sub', '.vtt'};
+  final file = File(videoPath);
+  final dir = file.parent;
+  if (!await dir.exists()) return const [];
+  final base = file.uri.pathSegments.last;
+  final dot = base.lastIndexOf('.');
+  final stem = dot > 0 ? base.substring(0, dot) : base;
+  final out = <SubtitleCandidate>[];
+  await for (final e in dir.list(followLinks: false)) {
+    if (e is! File) continue;
+    final name = e.uri.pathSegments.last;
+    final extDot = name.lastIndexOf('.');
+    if (extDot < 0) continue;
+    final ext = name.substring(extDot).toLowerCase();
+    if (!subExts.contains(ext) || !name.startsWith(stem)) continue;
+    out.add(SubtitleCandidate(fileName: name, uri: e.path));
+  }
+  out.sort((a, b) => a.fileName.compareTo(b.fileName));
+  return out;
 }
 
 /// Android Storage Access Framework source: pick a directory tree, recursively
@@ -176,9 +213,29 @@ class SmbMediaSource extends MediaSource {
 
   @override
   Future<PlayableHandle> resolvePlayable(Episode episode) async {
-    // Register with the local proxy; libmpv plays the returned http:// URL.
+    // Prefer a downloaded local copy — instant, no network, seekable.
+    final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
+    if (local != null) {
+      return PlayableHandle('file:///$local');
+    }
+    // Otherwise register with the local proxy; libmpv plays the http:// URL.
     final url = await rust.smbPlayableUrl(smbUri: episode.filePath);
     return PlayableHandle(url, smb: true);
+  }
+
+  @override
+  Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async {
+    // If we have a local copy, use the local sidecar subtitles; else ask Rust
+    // to enumerate them over SMB (registered on the proxy for mpv).
+    final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
+    if (local != null) {
+      return listLocalSubtitles(local);
+    }
+    try {
+      return await rust.smbListSubtitles(smbUri: episode.filePath);
+    } catch (_) {
+      return const [];
+    }
   }
 
   /// smb://host:port/share/sub/dir -> "sub/dir" (path within the share).

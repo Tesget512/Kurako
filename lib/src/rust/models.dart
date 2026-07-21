@@ -190,6 +190,62 @@ class BlacklistEntry {
           createdAt == other.createdAt;
 }
 
+/// A completed SMB→local download, tracked so playback can prefer the local
+/// copy and the UI can manage (list/delete) downloads.
+class DownloadEntry {
+  final PlatformInt64 id;
+  final String smbUri;
+  final String localPath;
+  final PlatformInt64 bytesTotal;
+  final PlatformInt64 createdAt;
+
+  const DownloadEntry({
+    required this.id,
+    required this.smbUri,
+    required this.localPath,
+    required this.bytesTotal,
+    required this.createdAt,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      smbUri.hashCode ^
+      localPath.hashCode ^
+      bytesTotal.hashCode ^
+      createdAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DownloadEntry &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          smbUri == other.smbUri &&
+          localPath == other.localPath &&
+          bytesTotal == other.bytesTotal &&
+          createdAt == other.createdAt;
+}
+
+/// Progress event streamed back to Dart during an SMB download.
+class DownloadProgress {
+  final PlatformInt64 bytesDone;
+  final PlatformInt64 bytesTotal;
+
+  const DownloadProgress({required this.bytesDone, required this.bytesTotal});
+
+  @override
+  int get hashCode => bytesDone.hashCode ^ bytesTotal.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DownloadProgress &&
+          runtimeType == other.runtimeType &&
+          bytesDone == other.bytesDone &&
+          bytesTotal == other.bytesTotal;
+}
+
 class Episode {
   final PlatformInt64 id;
   final PlatformInt64 animeId;
@@ -353,4 +409,24 @@ class ScannedFile {
           uri == other.uri &&
           fileName == other.fileName &&
           relativeParent == other.relativeParent;
+}
+
+/// An external subtitle file found next to a video. `uri` is what mpv should
+/// load: a local absolute path (local sources) or a loopback proxy URL (SMB).
+class SubtitleCandidate {
+  final String fileName;
+  final String uri;
+
+  const SubtitleCandidate({required this.fileName, required this.uri});
+
+  @override
+  int get hashCode => fileName.hashCode ^ uri.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SubtitleCandidate &&
+          runtimeType == other.runtimeType &&
+          fileName == other.fileName &&
+          uri == other.uri;
 }

@@ -25,6 +25,7 @@ Future<void> main() async {
   final dir = await _dataDir();
   final dbPath = p.join(dir.path, 'anime_library.db');
   await rust.initDb(dbPath: dbPath);
+  appDataDirPath = dir.path;
 
   // Restore the saved Bangumi token, if any.
   final prefs = await SharedPreferences.getInstance();
@@ -32,6 +33,10 @@ Future<void> main() async {
   if (token != null && token.isNotEmpty) {
     rust.setBangumiToken(token: token);
   }
+
+  // Cache the decode mode so the player can configure its VideoController
+  // synchronously (the configuration is fixed at construction time).
+  decodeModeStartupValue = prefs.getString('decode_mode') ?? 'auto';
 
   // Restore SMB credentials so network-share folders work without re-entering
   // the password (connection is opened lazily per operation).

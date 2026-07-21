@@ -25,6 +25,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   AnyhowException dco_decode_AnyhowException(dynamic raw);
 
   @protected
+  RustStreamSink<DownloadProgress> dco_decode_StreamSink_download_progress_Sse(
+    dynamic raw,
+  );
+
+  @protected
   RustStreamSink<ScanProgress> dco_decode_StreamSink_scan_progress_Sse(
     dynamic raw,
   );
@@ -54,6 +59,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
+  DownloadEntry dco_decode_download_entry(dynamic raw);
+
+  @protected
+  DownloadProgress dco_decode_download_progress(dynamic raw);
+
+  @protected
   Episode dco_decode_episode(dynamic raw);
 
   @protected
@@ -78,6 +89,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<BlacklistEntry> dco_decode_list_blacklist_entry(dynamic raw);
 
   @protected
+  List<DownloadEntry> dco_decode_list_download_entry(dynamic raw);
+
+  @protected
   List<Episode> dco_decode_list_episode(dynamic raw);
 
   @protected
@@ -88,6 +102,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ScannedFile> dco_decode_list_scanned_file(dynamic raw);
+
+  @protected
+  List<SubtitleCandidate> dco_decode_list_subtitle_candidate(dynamic raw);
 
   @protected
   OAuthResult dco_decode_o_auth_result(dynamic raw);
@@ -111,7 +128,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScannedFile dco_decode_scanned_file(dynamic raw);
 
   @protected
+  SubtitleCandidate dco_decode_subtitle_candidate(dynamic raw);
+
+  @protected
   int dco_decode_u_32(dynamic raw);
+
+  @protected
+  BigInt dco_decode_u_64(dynamic raw);
 
   @protected
   int dco_decode_u_8(dynamic raw);
@@ -121,6 +144,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
+
+  @protected
+  RustStreamSink<DownloadProgress> sse_decode_StreamSink_download_progress_Sse(
+    SseDeserializer deserializer,
+  );
 
   @protected
   RustStreamSink<ScanProgress> sse_decode_StreamSink_scan_progress_Sse(
@@ -152,6 +180,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  DownloadEntry sse_decode_download_entry(SseDeserializer deserializer);
+
+  @protected
+  DownloadProgress sse_decode_download_progress(SseDeserializer deserializer);
+
+  @protected
   Episode sse_decode_episode(SseDeserializer deserializer);
 
   @protected
@@ -180,6 +214,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<DownloadEntry> sse_decode_list_download_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<Episode> sse_decode_list_episode(SseDeserializer deserializer);
 
   @protected
@@ -192,6 +231,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ScannedFile> sse_decode_list_scanned_file(SseDeserializer deserializer);
+
+  @protected
+  List<SubtitleCandidate> sse_decode_list_subtitle_candidate(
+    SseDeserializer deserializer,
+  );
 
   @protected
   OAuthResult sse_decode_o_auth_result(SseDeserializer deserializer);
@@ -215,7 +259,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   ScannedFile sse_decode_scanned_file(SseDeserializer deserializer);
 
   @protected
+  SubtitleCandidate sse_decode_subtitle_candidate(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_u_32(SseDeserializer deserializer);
+
+  @protected
+  BigInt sse_decode_u_64(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_8(SseDeserializer deserializer);
@@ -229,6 +279,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_AnyhowException(
     AnyhowException self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_StreamSink_download_progress_Sse(
+    RustStreamSink<DownloadProgress> self,
     SseSerializer serializer,
   );
 
@@ -272,6 +328,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_download_entry(DownloadEntry self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_download_progress(
+    DownloadProgress self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_episode(Episode self, SseSerializer serializer);
 
   @protected
@@ -302,6 +367,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_download_entry(
+    List<DownloadEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_episode(List<Episode> self, SseSerializer serializer);
 
   @protected
@@ -319,6 +390,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_scanned_file(
     List<ScannedFile> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_subtitle_candidate(
+    List<SubtitleCandidate> self,
     SseSerializer serializer,
   );
 
@@ -347,7 +424,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_scanned_file(ScannedFile self, SseSerializer serializer);
 
   @protected
+  void sse_encode_subtitle_candidate(
+    SubtitleCandidate self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_u_64(BigInt self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_8(int self, SseSerializer serializer);
