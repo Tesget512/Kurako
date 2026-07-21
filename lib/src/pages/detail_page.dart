@@ -22,6 +22,22 @@ class DetailPage extends ConsumerStatefulWidget {
 
 class _DetailPageState extends ConsumerState<DetailPage> {
   bool _refreshing = false;
+  final _scrollController = ScrollController();
+  // Whether the header has scrolled far enough to show the toolbar title.
+  bool _collapsed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  void _onScroll() {
+    // Reveal the toolbar title once the hero has largely scrolled away.
+    final collapsed = _scrollController.hasClients &&
+        _scrollController.offset > 160;
+    if (collapsed != _collapsed) setState(() => _collapsed = collapsed);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,62 +61,81 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         error: (e, _) => Center(child: Text('加载失败: $e')),
         data: (anime) {
           if (anime == null) return const Center(child: Text('未找到'));
-          return CustomScrollView(
-            slivers: [
-              _buildAppBar(context, anime),
-              SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Collection selector — only for matched entries.
-                    if (anime.bangumiId != null)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                        child: _CollectionRow(
-                          current: anime.collection,
-                          onChanged: (v) => _setCollection(context, v),
-                          onClear: () => _clearCollection(context),
-                        ),
-                      ),
-                    // Tags + summary.
-                    CoverHeaderBody(anime: anime),
-                    const Divider(height: 16),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                      child: Text('剧集',
-                          style: Theme.of(context).textTheme.titleMedium),
+          return Stack(
+            children: [
+              CustomScrollView(
+                controller: _scrollController,
+                slivers: [
+                  // The hero (blurred backdrop + cover/facts/histogram) is a
+                  // normal self-sizing sliver — nothing is clipped, and the
+                  // histogram gets its real height. topInset leaves room under
+                  // the floating toolbar.
+                  SliverToBoxAdapter(
+                    child: CoverHeaderHero(
+                      anime: anime,
+                      topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
                     ),
-                  ],
-                ),
+                  ),
+                  SliverToBoxAdapter(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (anime.bangumiId != null)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                            child: _CollectionRow(
+                              current: anime.collection,
+                              onChanged: (v) => _setCollection(context, v),
+                              onClear: () => _clearCollection(context),
+                            ),
+                          ),
+                        CoverHeaderBody(anime: anime),
+                        const Divider(height: 16),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                          child: Text('剧集',
+                              style: Theme.of(context).textTheme.titleMedium),
+                        ),
+                      ],
+                    ),
+                  ),
+                  episodesAsync.when(
+                    loading: () => const SliverToBoxAdapter(
+                      child: Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Center(child: CircularProgressIndicator()),
+                      ),
+                    ),
+                    error: (e, _) => SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Text('剧集加载失败: $e'),
+                      ),
+                    ),
+                    data: (episodes) => SliverToBoxAdapter(
+                      child: _EpisodeList(
+                        episodes: episodes,
+                        onPlay: (e) => _play(context, ref, e),
+                        onPlayWith: (e, external) =>
+                            _play(context, ref, e, forceExternal: external),
+                        onDownload: (e) => _downloadEpisode(context, e),
+                        onBlocked: () {
+                          ref.invalidate(episodesProvider(widget.animeId));
+                          ref.invalidate(animeDetailProvider(widget.animeId));
+                        },
+                      ),
+                    ),
+                  ),
+                  const SliverToBoxAdapter(child: SizedBox(height: 96)),
+                ],
               ),
-              episodesAsync.when(
-                loading: () => const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                ),
-                error: (e, _) => SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text('剧集加载失败: $e'),
-                  ),
-                ),
-                data: (episodes) => SliverToBoxAdapter(
-                  child: _EpisodeList(
-                    episodes: episodes,
-                    onPlay: (e) => _play(context, ref, e),
-                    onPlayWith: (e, external) =>
-                        _play(context, ref, e, forceExternal: external),
-                    onDownload: (e) => _downloadEpisode(context, e),
-                    onBlocked: () {
-                      ref.invalidate(episodesProvider(widget.animeId));
-                      ref.invalidate(animeDetailProvider(widget.animeId));
-                    },
-                  ),
-                ),
+              // Floating toolbar over the hero: back + (title on scroll) +
+              // actions + window buttons; the whole strip drags the window.
+              _FloatingToolbar(
+                title: _titleOf(anime),
+                showTitle: _collapsed,
+                actions: _buildActions(context, anime),
               ),
-              const SliverToBoxAdapter(child: SizedBox(height: 96)),
             ],
           );
         },
@@ -108,67 +143,50 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     );
   }
 
-  /// The collapsing app bar whose expanded area shows the blurred-cover backdrop
-  /// and the cover/facts header; collapsed it's a normal toolbar with the title.
-  Widget _buildAppBar(BuildContext context, Anime anime) {
-    // Expanded height scales with viewport width: the header card grows taller
-    // when narrow (facts + histogram stack vertically).
-    final width = MediaQuery.sizeOf(context).width;
-    final expanded = width < 600 ? 420.0 : 340.0;
-    return SliverAppBar(
-      pinned: true,
-      expandedHeight: expanded,
-      title: Text(_titleOf(anime), maxLines: 1, overflow: TextOverflow.ellipsis),
-      actions: [
-        if (anime.bangumiId != null)
-          IconButton(
-            tooltip: '打开 Bangumi 主页',
-            icon: const Icon(Icons.open_in_new),
-            onPressed: () => _openBangumi(anime.bangumiId!.toInt()),
-          ),
-        _DownloadBadge(animeId: widget.animeId),
-        if (_refreshing)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          )
-        else
-          IconButton(
-            tooltip: '刷新 Bangumi 数据',
-            icon: const Icon(Icons.cloud_sync_outlined),
-            onPressed: () => _refreshMetadata(context),
-          ),
+  /// AppBar actions (Bangumi 主页 / 下载 / 刷新 / 重新匹配). Window buttons are
+  /// appended by [_FloatingToolbar] on desktop.
+  List<Widget> _buildActions(BuildContext context, Anime anime) {
+    return [
+      if (anime.bangumiId != null)
         IconButton(
-          tooltip: '重新匹配',
-          icon: const Icon(Icons.edit),
-          onPressed: () async {
-            final changed = await showDialog<bool>(
-              context: context,
-              builder: (_) => MatchCorrectionDialog(
-                animeId: widget.animeId,
-                initialKeyword: anime.titleRaw,
-              ),
-            );
-            if (changed == true) {
-              ref.invalidate(animeDetailProvider(widget.animeId));
-              ref.invalidate(animeListProvider);
-            }
-          },
+          tooltip: '打开 Bangumi 主页',
+          icon: const Icon(Icons.open_in_new),
+          onPressed: () => _openBangumi(anime.bangumiId!.toInt()),
         ),
-        if (useCustomCaption) ...[
-          const SizedBox(width: 4),
-          const WindowButtons(),
-        ],
-      ],
-      flexibleSpace: FlexibleSpaceBar(
-        collapseMode: CollapseMode.pin,
-        background: CoverHeaderHero(anime: anime),
+      _DownloadBadge(animeId: widget.animeId),
+      if (_refreshing)
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        )
+      else
+        IconButton(
+          tooltip: '刷新 Bangumi 数据',
+          icon: const Icon(Icons.cloud_sync_outlined),
+          onPressed: () => _refreshMetadata(context),
+        ),
+      IconButton(
+        tooltip: '重新匹配',
+        icon: const Icon(Icons.edit),
+        onPressed: () async {
+          final changed = await showDialog<bool>(
+            context: context,
+            builder: (_) => MatchCorrectionDialog(
+              animeId: widget.animeId,
+              initialKeyword: anime.titleRaw,
+            ),
+          );
+          if (changed == true) {
+            ref.invalidate(animeDetailProvider(widget.animeId));
+            ref.invalidate(animeListProvider);
+          }
+        },
       ),
-    );
+    ];
   }
 
   String _titleOf(Anime a) {
@@ -179,6 +197,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
     // Once the user leaves the page, drop lingering completed/failed downloads
     // so the badge doesn't persist on the next visit (active ones stay).
     ref.read(downloadManagerProvider.notifier).dismissAnime(widget.animeId);
@@ -317,6 +336,69 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   bool _hasProgress(List<Episode> episodes) =>
       episodes.any((e) => e.watched || e.lastPositionMs.toInt() > 0);
+}
+
+/// Toolbar floating over the detail hero: a top scrim for legibility, a back
+/// button, the title (revealed on scroll), the actions, and — on desktop — a
+/// window-drag region + min/max/close buttons.
+class _FloatingToolbar extends StatelessWidget {
+  final String title;
+  final bool showTitle;
+  final List<Widget> actions;
+
+  const _FloatingToolbar({
+    required this.title,
+    required this.showTitle,
+    required this.actions,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final topPad = MediaQuery.paddingOf(context).top;
+    final bar = SizedBox(
+      height: topPad + kToolbarHeight,
+      child: Container(
+        // Scrim so the icons/title read over any cover.
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Colors.black38, Colors.transparent],
+          ),
+        ),
+        padding: EdgeInsets.only(top: topPad),
+        child: Row(
+          children: [
+            IconButton(
+              tooltip: '返回',
+              icon: const Icon(Icons.arrow_back),
+              onPressed: () => Navigator.of(context).maybePop(),
+            ),
+            Expanded(
+              child: AnimatedOpacity(
+                opacity: showTitle ? 1 : 0,
+                duration: const Duration(milliseconds: 150),
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+            ),
+            ...actions,
+            if (useCustomCaption) ...[
+              const SizedBox(width: 4),
+              const WindowButtons(),
+            ],
+          ],
+        ),
+      ),
+    );
+    if (!useCustomCaption) return bar;
+    // Desktop: dragging the toolbar moves the frameless window.
+    return WindowDragArea(child: bar);
+  }
 }
 
 /// Flatten episodes into the same order the detail list renders: numbered

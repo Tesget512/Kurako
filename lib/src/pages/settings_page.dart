@@ -223,7 +223,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const ListTile(
             contentPadding: EdgeInsets.zero,
             leading: Icon(Icons.info_outline),
-            title: Text('AnimeBDPlayer'),
+            title: Text('KURAKO'),
             subtitle: Text('本地番剧库播放器 · Flutter + Rust'),
           ),
           ListTile(
@@ -234,7 +234,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 '元数据来自 Bangumi 番组计划；镜像由 bangumi-proxy 提供。'),
             onTap: () => showAboutDialog(
               context: context,
-              applicationName: 'AnimeBDPlayer',
+              applicationName: 'KURAKO',
               applicationVersion: '1.0.0',
               children: const [
                 Text('感谢以下开源项目与服务：\n\n'

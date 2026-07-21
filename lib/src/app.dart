@@ -55,7 +55,7 @@ class AnimeBdApp extends ConsumerWidget {
         final dark =
             ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
         return MaterialApp(
-          title: '动画仓库',
+          title: 'KURAKO',
           debugShowCheckedModeBanner: false,
           theme: _theme(light),
           darkTheme: _theme(dark),

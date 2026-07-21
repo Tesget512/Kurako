@@ -47,7 +47,7 @@ class _HomePageState extends State<HomePage> {
       return Scaffold(
         body: Column(
           children: [
-            const WindowCaption(title: 'AnimeBDPlayer'),
+            const WindowCaption(title: 'KURAKO'),
             Expanded(
               child: Row(
                 children: [
@@ -89,7 +89,7 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       body: Column(
         children: [
-          const WindowCaption(title: 'AnimeBDPlayer'),
+          const WindowCaption(title: 'KURAKO'),
           Expanded(child: body),
         ],
       ),

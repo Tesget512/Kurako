@@ -11,33 +11,31 @@ String _titleOf(Anime a) {
   return a.titleRaw;
 }
 
-/// The detail-page hero: a blurred cover backdrop (feathered into the page at
-/// the bottom so it never bleeds over the toolbar or content) with the cover +
-/// facts + rating histogram laid on top. Designed to live inside a
-/// [FlexibleSpaceBar.background]. Inspired by Kazumi (GPL-3.0), reimplemented
-/// independently; see the credits in settings.
+/// The detail-page hero: a blurred cover backdrop with the cover + facts +
+/// rating histogram on top. Self-sizing (height follows its content) so nothing
+/// is ever clipped — meant to be a normal scrolling sliver, with the toolbar
+/// floating over its top [topInset] pixels. Inspired by Kazumi (GPL-3.0),
+/// reimplemented independently; see the credits in settings.
 class CoverHeaderHero extends StatelessWidget {
   final Anime anime;
-  const CoverHeaderHero({super.key, required this.anime});
+  final double topInset;
+  const CoverHeaderHero({super.key, required this.anime, this.topInset = 0});
 
   @override
   Widget build(BuildContext context) {
+    final wide = MediaQuery.sizeOf(context).width >= 600;
     return Stack(
-      fit: StackFit.expand,
       children: [
+        // Backdrop fills whatever height the header content resolves to.
         Positioned.fill(child: _Backdrop(imageUrl: anime.coverUrl)),
-        // Header content sits under the toolbar, so start below it.
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: EdgeInsets.only(
-              top: kToolbarHeight,
-              left: 16,
-              right: 16,
-              bottom: 8,
-            ),
-            child: _HeaderCard(anime: anime),
+        Padding(
+          padding: EdgeInsets.only(
+            top: topInset + 8,
+            left: wide ? 24 : 16,
+            right: wide ? 24 : 16,
+            bottom: 8,
           ),
+          child: _HeaderCard(anime: anime),
         ),
       ],
     );
@@ -45,12 +43,15 @@ class CoverHeaderHero extends StatelessWidget {
 }
 
 /// Blurred, dimmed, downsampled cover filling the header, with a top fade and a
-/// bottom feather that dissolves it into the page background color.
+/// bottom feather that dissolves it into the page background color. Wrapped in a
+/// RepaintBoundary + decoded at low resolution so the predictive-back gesture
+/// (which transforms the whole route every frame) doesn't re-run a full-res
+/// gaussian blur per frame.
 class _Backdrop extends StatelessWidget {
   final String? imageUrl;
   const _Backdrop({required this.imageUrl});
 
-  static const double _blurSigma = 18.0;
+  static const double _blurSigma = 14.0;
   static const double _opacity = 0.35;
   static const double _bottomFeather = 56.0;
 
@@ -61,69 +62,66 @@ class _Backdrop extends StatelessWidget {
     if (url == null || url.isEmpty) {
       return ColoredBox(color: bg);
     }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth;
-        final h = constraints.maxHeight;
-        if (w <= 0 || h <= 0) return ColoredBox(color: bg);
-        return ClipRect(
-          child: Stack(
-            fit: StackFit.expand,
-            children: [
-              ColoredBox(color: bg),
-              // Blurred cover, top-aligned, faded out toward the bottom.
-              ShaderMask(
-                shaderCallback: (bounds) => const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.white, Colors.transparent],
-                  stops: [0.75, 1.0],
-                ).createShader(bounds),
-                blendMode: BlendMode.dstIn,
-                child: ImageFiltered(
-                  imageFilter: ImageFilter.blur(
-                    sigmaX: _blurSigma,
-                    sigmaY: _blurSigma,
-                  ),
-                  child: Opacity(
-                    opacity: _opacity,
-                    child: CoverImage(url: url, fit: BoxFit.cover),
+    return RepaintBoundary(
+      child: ClipRect(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ColoredBox(color: bg),
+            // Blurred cover, top-aligned, faded out toward the bottom.
+            ShaderMask(
+              shaderCallback: (bounds) => const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Colors.white, Colors.transparent],
+                stops: [0.7, 1.0],
+              ).createShader(bounds),
+              blendMode: BlendMode.dstIn,
+              child: ImageFiltered(
+                imageFilter: ImageFilter.blur(
+                  sigmaX: _blurSigma,
+                  sigmaY: _blurSigma,
+                ),
+                child: Opacity(
+                  opacity: _opacity,
+                  // cacheWidth downsamples the decode — the blur hides the loss
+                  // and the per-frame cost drops sharply during transitions.
+                  child: CoverImage(url: url, fit: BoxFit.cover, cacheWidth: 64),
+                ),
+              ),
+            ),
+            // Bottom feather into the page color so the header content and
+            // the list below share a seamless background.
+            Positioned(
+              left: 0,
+              right: 0,
+              bottom: 0,
+              height: _bottomFeather,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      bg.withValues(alpha: 0),
+                      bg.withValues(alpha: 0.6),
+                      bg,
+                    ],
+                    stops: const [0, 0.7, 1],
                   ),
                 ),
               ),
-              // Bottom feather into the page color so the header content and
-              // the list below share a seamless background.
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 0,
-                height: _bottomFeather,
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        bg.withValues(alpha: 0),
-                        bg.withValues(alpha: 0.6),
-                        bg,
-                      ],
-                      stops: const [0, 0.7, 1],
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
 /// Cover + facts (+ rating histogram). Responsive: on wide viewports the
 /// histogram sits to the right of the facts; on narrow ones it drops below the
-/// cover row so the facts column never gets squeezed to a vertical sliver.
+/// cover row (collapsible) so the facts column never gets squeezed.
 class _HeaderCard extends StatelessWidget {
   final Anime anime;
   const _HeaderCard({required this.anime});
@@ -133,8 +131,8 @@ class _HeaderCard extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 560;
-        final coverW = narrow ? 110.0 : 130.0;
-        final coverH = coverW * 185 / 130;
+        final coverW = narrow ? 128.0 : 168.0;
+        final coverH = coverW * 214 / 150;
         final counts = _histogramCounts(anime);
 
         final coverRow = Row(
@@ -148,28 +146,56 @@ class _HeaderCard extends StatelessWidget {
                 child: CoverImage(url: anime.coverUrl),
               ),
             ),
-            const SizedBox(width: 16),
+            SizedBox(width: narrow ? 12 : 16),
             Expanded(child: _Facts(anime: anime)),
             // Histogram beside facts only when there's room.
             if (!narrow && counts != null) ...[
               const SizedBox(width: 16),
-              SizedBox(width: 210, child: RatingHistogram(counts: counts)),
+              SizedBox(
+                width: 260,
+                child: RatingHistogram(counts: counts, height: 88),
+              ),
             ],
           ],
         );
 
+        // Narrow: histogram collapses below the cover row.
         if (narrow && counts != null) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               coverRow,
-              const SizedBox(height: 8),
-              RatingHistogram(counts: counts),
+              const SizedBox(height: 4),
+              _CollapsibleHistogram(counts: counts),
             ],
           );
         }
         return coverRow;
       },
+    );
+  }
+}
+
+/// "评分透视" as a collapsible tile — collapsed by default on phones to save
+/// vertical space.
+class _CollapsibleHistogram extends StatelessWidget {
+  final List<int> counts;
+  const _CollapsibleHistogram({required this.counts});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Theme(
+      // Strip the ExpansionTile dividers so it blends into the header.
+      data: theme.copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        childrenPadding: const EdgeInsets.only(bottom: 8),
+        title: Text('评分透视',
+            style: theme.textTheme.bodyMedium
+                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+        children: [RatingHistogram(counts: counts, height: 72, showLabel: false)],
+      ),
     );
   }
 }
@@ -374,7 +400,14 @@ class _ExpandableSummaryState extends State<_ExpandableSummary> {
 /// The "评分透视" bar chart: 10 bars (score 1→10) scaled to the peak vote count.
 class RatingHistogram extends StatelessWidget {
   final List<int> counts;
-  const RatingHistogram({super.key, required this.counts});
+  final double height;
+  final bool showLabel;
+  const RatingHistogram({
+    super.key,
+    required this.counts,
+    this.height = 64,
+    this.showLabel = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -384,26 +417,29 @@ class RatingHistogram extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('评分透视',
-            style: theme.textTheme.bodySmall
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-        const SizedBox(height: 6),
+        if (showLabel) ...[
+          Text('评分透视',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          const SizedBox(height: 6),
+        ],
         SizedBox(
-          height: 64,
+          height: height,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               for (var i = 0; i < 10; i++)
                 Expanded(
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 1.5),
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
                     child: FractionallySizedBox(
                       heightFactor: counts[i] / peak,
                       child: Container(
                         decoration: BoxDecoration(
                           color:
                               theme.colorScheme.primary.withValues(alpha: 0.55),
-                          borderRadius: BorderRadius.circular(2),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(3)),
                         ),
                       ),
                     ),

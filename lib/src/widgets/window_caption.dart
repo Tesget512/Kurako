@@ -8,6 +8,31 @@ import 'package:window_manager/window_manager.dart';
 bool get useCustomCaption =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
+/// Wrap [child] so dragging it moves the frameless window and double-clicking
+/// toggles maximize (desktop only; a passthrough on mobile). Lets pages make an
+/// arbitrary region (e.g. a floating toolbar) act as the title bar.
+class WindowDragArea extends StatelessWidget {
+  final Widget child;
+  const WindowDragArea({super.key, required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    if (!useCustomCaption) return child;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onPanStart: (_) => windowManager.startDragging(),
+      onDoubleTap: () async {
+        if (await windowManager.isMaximized()) {
+          await windowManager.unmaximize();
+        } else {
+          await windowManager.maximize();
+        }
+      },
+      child: child,
+    );
+  }
+}
+
 /// A draggable strip that moves the frameless window (double-click to maximize),
 /// with the minimize / maximize / close buttons on the right. Meant to sit at
 /// the very top of a page — pass a [title] and optional trailing [actions].

@@ -24,6 +24,10 @@ class _Chapter {
   const _Chapter(this.title, this.timeSec);
 }
 
+/// Which panel the right-side drawer shows. All the player's secondary menus
+/// (previously bottom sheets / a broken popup) share one endDrawer.
+enum _Panel { menu, episodes, tracks, subDelay, info, chapters }
+
 class PlayerPage extends ConsumerStatefulWidget {
   /// The full playlist and the index to start at, so 上/下集 and autoplay work.
   final List<Episode> episodes;
@@ -102,6 +106,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // (especially SMB, which registers a proxy token + opens a stream) don't race
   // two overlapping opens into a deadlock.
   int _openSeq = 0;
+  // Scaffold key so the control bars can open the right-side episode drawer.
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
+  // Which panel the endDrawer currently shows.
+  _Panel _drawerPanel = _Panel.episodes;
 
   // Quick-seek jump (seconds), read from [seekDurationProvider] each build.
   int _seekSec = 10;
@@ -496,8 +504,126 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // a clean remount whenever they change — double-tap durations included.
       child: KeyedSubtree(
         key: ValueKey('player-controls-$_seekSec-$useTouchControls'),
-        child: Scaffold(backgroundColor: Colors.black, body: guarded),
+        child: Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: Colors.black,
+          endDrawer: _buildDrawer(),
+          // Open only via the buttons — an edge-swipe would fight the player's
+          // horizontal seek gesture.
+          endDrawerEnableOpenDragGesture: false,
+          body: guarded,
+        ),
       ),
+    );
+  }
+
+  /// Show [panel] in the right-side drawer. All secondary menus route here so
+  /// they render inside the Scaffold (fixing the popup that didn't work over
+  /// media_kit's control layer).
+  void _openPanel(_Panel panel) {
+    setState(() => _drawerPanel = panel);
+    _scaffoldKey.currentState?.openEndDrawer();
+  }
+
+  /// The right-side drawer, showing whichever panel [_drawerPanel] selects.
+  Widget _buildDrawer() {
+    final cs = _cs;
+    final (IconData icon, String title, Widget body) = switch (_drawerPanel) {
+      _Panel.menu => (Icons.tune, '播放器选项', _menuPanel()),
+      _Panel.episodes => (Icons.playlist_play, '选集', _episodePanel()),
+      _Panel.tracks => (Icons.subtitles, '字幕 / 音轨', _tracksPanel()),
+      _Panel.subDelay => (Icons.more_time, '字幕延迟', _subDelayPanel()),
+      _Panel.info => (Icons.info_outline, '播放信息', _infoPanel()),
+      _Panel.chapters => (Icons.bookmarks, '章节', _chaptersPanel()),
+    };
+    return Drawer(
+      backgroundColor: cs.surface,
+      width: 340,
+      child: SafeArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
+              child: Row(
+                children: [
+                  Icon(icon, color: cs.onSurface),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(title,
+                        style: TextStyle(
+                            color: cs.onSurface,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold)),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.close, color: cs.onSurfaceVariant),
+                    onPressed: () => Navigator.of(context).maybePop(),
+                  ),
+                ],
+              ),
+            ),
+            const Divider(height: 1),
+            Expanded(child: body),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Menu panel: a compact list routing to the other panels — the mobile "更多"
+  /// entry, so the top bar stays uncluttered.
+  Widget _menuPanel() {
+    final cs = _cs;
+    Widget tile(IconData icon, String label, _Panel panel) => ListTile(
+          leading: Icon(icon, color: cs.onSurfaceVariant),
+          title: Text(label, style: TextStyle(color: cs.onSurface)),
+          onTap: () => setState(() => _drawerPanel = panel),
+        );
+    return ListView(
+      children: [
+        tile(Icons.subtitles_outlined, '字幕 / 音轨', _Panel.tracks),
+        tile(Icons.more_time_outlined, '字幕延迟', _Panel.subDelay),
+        tile(Icons.info_outline, '播放信息', _Panel.info),
+        if (_chapters.isNotEmpty)
+          tile(Icons.bookmarks_outlined, '章节', _Panel.chapters),
+      ],
+    );
+  }
+
+  /// Episode picker panel: jump to any episode (save + reopen).
+  Widget _episodePanel() {
+    final cs = _cs;
+    return ListView.builder(
+      itemCount: widget.episodes.length,
+      itemBuilder: (context, i) {
+        final ep = widget.episodes[i];
+        final selected = i == _index;
+        return ListTile(
+          dense: true,
+          leading: selected
+              ? Icon(Icons.play_arrow, color: cs.primary)
+              : CircleAvatar(
+                  radius: 12,
+                  backgroundColor: cs.surfaceContainerHighest,
+                  child: Text('${ep.episodeNo?.toInt() ?? i + 1}',
+                      style: TextStyle(fontSize: 11, color: cs.onSurface)),
+                ),
+          title: Text(ep.fileName,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: cs.onSurface)),
+          selected: selected,
+          selectedTileColor: cs.secondaryContainer,
+          onTap: () async {
+            Navigator.of(context).pop();
+            if (i == _index) return;
+            await _save();
+            setState(() => _index = i);
+            await _openCurrent();
+          },
+        );
+      },
     );
   }
 
@@ -516,7 +642,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   MaterialDesktopVideoControlsThemeData _desktopTheme() {
     return MaterialDesktopVideoControlsThemeData(
-      // Top bar: back + title + rate + tracks + subtitle-delay.
+      // Top bar: back + title + secondary-menu buttons (each opens the right
+      // drawer) + window buttons. Playback controls live below the seek bar.
       topButtonBar: [
         MaterialDesktopCustomButton(
           icon: const Icon(Icons.arrow_back),
@@ -531,9 +658,46 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             style: const TextStyle(color: Colors.white, fontSize: 14),
           ),
         ),
+        MaterialDesktopCustomButton(
+          icon: const Icon(Icons.subtitles_outlined),
+          onPressed: () => _openPanel(_Panel.tracks),
+        ),
+        MaterialDesktopCustomButton(
+          icon: const Icon(Icons.more_time_outlined),
+          onPressed: () => _openPanel(_Panel.subDelay),
+        ),
+        if (_chapters.isNotEmpty)
+          MaterialDesktopCustomButton(
+            icon: const Icon(Icons.bookmarks_outlined),
+            onPressed: () => _openPanel(_Panel.chapters),
+          ),
+        MaterialDesktopCustomButton(
+          icon: const Icon(Icons.info_outline),
+          onPressed: () => _openPanel(_Panel.info),
+        ),
+        if (widget.episodes.length > 1)
+          MaterialDesktopCustomButton(
+            icon: const Icon(Icons.playlist_play),
+            onPressed: () => _openPanel(_Panel.episodes),
+          ),
+        if (!_isMobile) const WindowButtons(light: true),
+      ],
+      // Under the seek bar: pure playback controls — prev/play/next, rate,
+      // quick-seek, volume, position, fullscreen.
+      bottomButtonBar: [
+        MaterialDesktopCustomButton(
+          icon: Icon(Icons.skip_previous,
+              color: _hasPrev ? Colors.white : Colors.white30),
+          onPressed: _hasPrev ? _playPrev : () {},
+        ),
+        const MaterialDesktopPlayOrPauseButton(),
+        MaterialDesktopCustomButton(
+          icon: Icon(Icons.skip_next,
+              color: _hasNext ? Colors.white : Colors.white30),
+          onPressed: _hasNext ? () => _playNext() : () {},
+        ),
         _desktopRateButton(),
-        // Quick-seek: click jumps forward; right-click or long-press opens the
-        // duration setting (desktop has no double-tap-hold convention).
+        // Quick-seek: click jumps; right-click / long-press sets the duration.
         Tooltip(
           message: '快进 ${_seekSec}s（右键调节时长）',
           child: GestureDetector(
@@ -546,8 +710,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Icon(Icons.fast_forward,
-                      color: Colors.white, size: 20),
+                  const Icon(Icons.fast_forward, color: Colors.white, size: 20),
                   const SizedBox(width: 2),
                   Consumer(
                     builder: (context, ref, _) {
@@ -561,44 +724,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               ),
             ),
           ),
-        ),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.subtitles_outlined),
-          onPressed: _showTrackSheet,
-        ),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.more_time_outlined),
-          onPressed: _showSubDelaySheet,
-        ),
-        if (_chapters.isNotEmpty)
-          MaterialDesktopCustomButton(
-            icon: const Icon(Icons.bookmarks_outlined),
-            onPressed: _showChapterSheet,
-          ),
-        if (widget.episodes.length > 1)
-          MaterialDesktopCustomButton(
-            icon: const Icon(Icons.playlist_play),
-            onPressed: _showEpisodeSheet,
-          ),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.info_outline),
-          onPressed: _showInfoSheet,
-        ),
-        // Window min/max/close (Windows/macOS/Linux frameless window).
-        if (!_isMobile) const WindowButtons(light: true),
-      ],
-      // Bottom bar mirrors the media_kit default, plus our prev/next hooks.
-      bottomButtonBar: [
-        MaterialDesktopCustomButton(
-          icon: Icon(Icons.skip_previous,
-              color: _hasPrev ? Colors.white : Colors.white30),
-          onPressed: _hasPrev ? _playPrev : () {},
-        ),
-        const MaterialDesktopPlayOrPauseButton(),
-        MaterialDesktopCustomButton(
-          icon: Icon(Icons.skip_next,
-              color: _hasNext ? Colors.white : Colors.white30),
-          onPressed: _hasNext ? () => _playNext() : () {},
         ),
         const MaterialDesktopVolumeButton(),
         const MaterialDesktopPositionIndicator(),
@@ -647,7 +772,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       seekBarMargin: const EdgeInsets.only(left: 16, right: 16, bottom: 56),
       bottomButtonBarMargin:
           const EdgeInsets.only(left: 16, right: 16, bottom: 8),
-      // Top bar: back + title + quick-seek + rate + tracks + subtitle-delay.
+      // Top bar: back + title + quick-seek + rate + episode drawer + overflow.
       topButtonBar: [
         MaterialCustomButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
@@ -668,27 +793,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             onPressed: _enterPip,
           ),
         _rateButton(),
-        MaterialCustomButton(
-          icon: const Icon(Icons.subtitles_outlined, color: Colors.white),
-          onPressed: _showTrackSheet,
-        ),
-        MaterialCustomButton(
-          icon: const Icon(Icons.more_time_outlined, color: Colors.white),
-          onPressed: _showSubDelaySheet,
-        ),
-        if (_chapters.isNotEmpty)
-          MaterialCustomButton(
-            icon: const Icon(Icons.bookmarks_outlined, color: Colors.white),
-            onPressed: _showChapterSheet,
-          ),
         if (widget.episodes.length > 1)
           MaterialCustomButton(
             icon: const Icon(Icons.playlist_play, color: Colors.white),
-            onPressed: _showEpisodeSheet,
+            onPressed: () => _openPanel(_Panel.episodes),
           ),
         MaterialCustomButton(
-          icon: const Icon(Icons.info_outline, color: Colors.white),
-          onPressed: _showInfoSheet,
+          icon: const Icon(Icons.tune, color: Colors.white),
+          onPressed: () => _openPanel(_Panel.menu),
         ),
       ],
       // Bottom primary bar: prev / play-pause / next around the seek bar.
@@ -840,53 +952,50 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
-  void _showSubDelaySheet() {
-    final cs = Theme.of(context).colorScheme;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheet) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+  /// Subtitle-delay panel (drawer). Uses a StatefulBuilder for the local live
+  /// value; writes go straight to mpv.
+  Widget _subDelayPanel() {
+    final cs = _cs;
+    return StatefulBuilder(
+      builder: (context, setPanel) => SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('字幕延迟：${_subDelay.toStringAsFixed(1)} 秒',
+                style: TextStyle(color: cs.onSurface, fontSize: 16)),
+            const SizedBox(height: 4),
+            Text('正值让字幕更晚出现，负值更早',
+                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+            const SizedBox(height: 12),
+            Wrap(
+              alignment: WrapAlignment.spaceEvenly,
+              spacing: 8,
+              runSpacing: 8,
               children: [
-                Text('字幕延迟：${_subDelay.toStringAsFixed(1)} 秒',
-                    style: TextStyle(color: cs.onSurface, fontSize: 16)),
-                const SizedBox(height: 4),
-                Text('正值让字幕更晚出现，负值更早',
-                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _delayBtn('-1s', () async {
-                      await _setSubDelay(_subDelay - 1);
-                      setSheet(() {});
-                    }),
-                    _delayBtn('-0.5s', () async {
-                      await _setSubDelay(_subDelay - 0.5);
-                      setSheet(() {});
-                    }),
-                    _delayBtn('归零', () async {
-                      await _setSubDelay(0);
-                      setSheet(() {});
-                    }),
-                    _delayBtn('+0.5s', () async {
-                      await _setSubDelay(_subDelay + 0.5);
-                      setSheet(() {});
-                    }),
-                    _delayBtn('+1s', () async {
-                      await _setSubDelay(_subDelay + 1);
-                      setSheet(() {});
-                    }),
-                  ],
-                ),
+                _delayBtn('-1s', () async {
+                  await _setSubDelay(_subDelay - 1);
+                  setPanel(() {});
+                }),
+                _delayBtn('-0.5s', () async {
+                  await _setSubDelay(_subDelay - 0.5);
+                  setPanel(() {});
+                }),
+                _delayBtn('归零', () async {
+                  await _setSubDelay(0);
+                  setPanel(() {});
+                }),
+                _delayBtn('+0.5s', () async {
+                  await _setSubDelay(_subDelay + 0.5);
+                  setPanel(() {});
+                }),
+                _delayBtn('+1s', () async {
+                  await _setSubDelay(_subDelay + 1);
+                  setPanel(() {});
+                }),
               ],
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -895,74 +1004,63 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Widget _delayBtn(String label, VoidCallback onTap) =>
       OutlinedButton(onPressed: onTap, child: Text(label));
 
-  void _showTrackSheet() {
-    final cs = Theme.of(context).colorScheme;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) {
-        final tracks = _player.state.tracks;
-        final current = _player.state.track;
-        return SafeArea(
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _trackHeader(Icons.subtitles, '字幕'),
-                _trackTile('关闭字幕', current.subtitle == SubtitleTrack.no(), () {
+  Widget _tracksPanel() {
+    final cs = _cs;
+    final tracks = _player.state.tracks;
+    final current = _player.state.track;
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _trackHeader(Icons.subtitles, '字幕'),
+          _trackTile('关闭字幕', current.subtitle == SubtitleTrack.no(), () {
+            _activeExtSub = null;
+            _player.setSubtitleTrack(SubtitleTrack.no());
+          }),
+          for (final t in tracks.subtitle)
+            if (t.id != 'auto' && t.id != 'no')
+              _trackTile(
+                _trackLabel(t.title, t.language, t.id),
+                _activeExtSub == null && current.subtitle.id == t.id,
+                () {
                   _activeExtSub = null;
-                  _player.setSubtitleTrack(SubtitleTrack.no());
-                }),
-                for (final t in tracks.subtitle)
-                  if (t.id != 'auto' && t.id != 'no')
-                    _trackTile(
-                      _trackLabel(t.title, t.language, t.id),
-                      _activeExtSub == null && current.subtitle.id == t.id,
-                      () {
-                        _activeExtSub = null;
-                        _player.setSubtitleTrack(t);
-                        _rememberSub(t);
-                      },
-                    ),
-                if (_extSubs.isNotEmpty) ...[
-                  _trackHeader(Icons.folder_open, '外部字幕'),
-                  for (final s in _extSubs)
-                    _trackTile(
-                      s.fileName,
-                      _activeExtSub == s.uri,
-                      () => _loadExtSub(s),
-                    ),
-                ],
-                ListTile(
-                  dense: true,
-                  leading: Icon(Icons.file_open_outlined,
-                      color: cs.onSurfaceVariant),
-                  title: Text('浏览字幕文件…',
-                      style: TextStyle(color: cs.onSurface)),
-                  onTap: () async {
-                    Navigator.pop(context);
-                    await _pickSubtitleFile();
-                  },
-                ),
-                Divider(color: cs.outlineVariant, height: 1),
-                _trackHeader(Icons.audiotrack, '音轨'),
-                for (final t in tracks.audio)
-                  if (t.id != 'auto' && t.id != 'no')
-                    _trackTile(
-                      _trackLabel(t.title, t.language, t.id),
-                      current.audio.id == t.id,
-                      () {
-                        _player.setAudioTrack(t);
-                        _rememberAudio(t);
-                      },
-                    ),
-                const SizedBox(height: 8),
-              ],
-            ),
+                  _player.setSubtitleTrack(t);
+                  _rememberSub(t);
+                },
+              ),
+          if (_extSubs.isNotEmpty) ...[
+            _trackHeader(Icons.folder_open, '外部字幕'),
+            for (final s in _extSubs)
+              _trackTile(
+                s.fileName,
+                _activeExtSub == s.uri,
+                () => _loadExtSub(s),
+              ),
+          ],
+          ListTile(
+            dense: true,
+            leading: Icon(Icons.file_open_outlined, color: cs.onSurfaceVariant),
+            title: Text('浏览字幕文件…', style: TextStyle(color: cs.onSurface)),
+            onTap: () async {
+              Navigator.pop(context);
+              await _pickSubtitleFile();
+            },
           ),
-        );
-      },
+          Divider(color: cs.outlineVariant, height: 1),
+          _trackHeader(Icons.audiotrack, '音轨'),
+          for (final t in tracks.audio)
+            if (t.id != 'auto' && t.id != 'no')
+              _trackTile(
+                _trackLabel(t.title, t.language, t.id),
+                current.audio.id == t.id,
+                () {
+                  _player.setAudioTrack(t);
+                  _rememberAudio(t);
+                },
+              ),
+          const SizedBox(height: 8),
+        ],
+      ),
     );
   }
 
@@ -995,117 +1093,48 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
   }
 
-  void _showChapterSheet() {
-    final cs = Theme.of(context).colorScheme;
+  Widget _chaptersPanel() {
+    final cs = _cs;
     final posSec = _positionMs / 1000.0;
-    // The chapter currently playing: last one whose start <= position.
     var currentIdx = -1;
     for (var i = 0; i < _chapters.length; i++) {
       if (_chapters[i].timeSec <= posSec + 0.5) currentIdx = i;
     }
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _trackHeader(Icons.bookmarks, '章节 / 书签'),
-              for (var i = 0; i < _chapters.length; i++)
-                ListTile(
-                  dense: true,
-                  leading: i == currentIdx
-                      ? Icon(Icons.play_arrow, color: cs.primary)
-                      : const SizedBox(width: 24),
-                  title: Text(_chapters[i].title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: cs.onSurface)),
-                  trailing: Text(_fmtTime(_chapters[i].timeSec),
-                      style: TextStyle(
-                          color: cs.onSurfaceVariant, fontSize: 12)),
-                  selected: i == currentIdx,
-                  selectedTileColor: cs.secondaryContainer,
-                  onTap: () {
-                    _player.seek(Duration(
-                        milliseconds:
-                            (_chapters[i].timeSec * 1000).round()));
-                    Navigator.pop(context);
-                  },
-                ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
+    return ListView.builder(
+      itemCount: _chapters.length,
+      itemBuilder: (context, i) => ListTile(
+        dense: true,
+        leading: i == currentIdx
+            ? Icon(Icons.play_arrow, color: cs.primary)
+            : const SizedBox(width: 24),
+        title: Text(_chapters[i].title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: cs.onSurface)),
+        trailing: Text(_fmtTime(_chapters[i].timeSec),
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+        selected: i == currentIdx,
+        selectedTileColor: cs.secondaryContainer,
+        onTap: () {
+          _player.seek(
+              Duration(milliseconds: (_chapters[i].timeSec * 1000).round()));
+          Navigator.pop(context);
+        },
       ),
     );
   }
 
-  // Episode picker: jump to any episode in the playlist without leaving the
-  // player. Saves current progress, then reuses the playlist-navigation path.
-  void _showEpisodeSheet() {
-    final cs = Theme.of(context).colorScheme;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _trackHeader(Icons.playlist_play, '选集'),
-              for (var i = 0; i < widget.episodes.length; i++)
-                ListTile(
-                  dense: true,
-                  leading: i == _index
-                      ? Icon(Icons.play_arrow, color: cs.primary)
-                      : CircleAvatar(
-                          radius: 12,
-                          backgroundColor: cs.surfaceContainerHighest,
-                          child: Text(
-                            '${widget.episodes[i].episodeNo?.toInt() ?? i + 1}',
-                            style: TextStyle(fontSize: 11, color: cs.onSurface),
-                          ),
-                        ),
-                  title: Text(widget.episodes[i].fileName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: cs.onSurface)),
-                  selected: i == _index,
-                  selectedTileColor: cs.secondaryContainer,
-                  onTap: () async {
-                    Navigator.pop(context);
-                    if (i == _index) return;
-                    await _save();
-                    setState(() => _index = i);
-                    await _openCurrent();
-                  },
-                ),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  // Episode picker moved to the right-side endDrawer (_episodeDrawer); opened
+  // via the playlist button / overflow menu.
 
   // ---- Playback info (video params / decoder / SMB transfer) ----
 
-  void _showInfoSheet() {
-    final cs = Theme.of(context).colorScheme;
+  Widget _infoPanel() {
     final isSmb = _handle != null && _ep.sourceType == 'smb';
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) => _PlaybackInfoSheet(
-        player: _player,
-        episode: _ep,
-        smbActive: isSmb && _handle!.uri.startsWith('http://127.0.0.1'),
-      ),
+    return _PlaybackInfoSheet(
+      player: _player,
+      episode: _ep,
+      smbActive: isSmb && _handle!.uri.startsWith('http://127.0.0.1'),
     );
   }
 

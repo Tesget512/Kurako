@@ -32,7 +32,7 @@ Future<void> main() async {
       minimumSize: Size(800, 600),
       center: true,
       titleBarStyle: TitleBarStyle.hidden,
-      title: 'AnimeBDPlayer',
+      title: 'KURAKO',
     );
     // Show only once ready to avoid a flash of the un-styled native frame.
     windowManager.waitUntilReadyToShow(options, () async {

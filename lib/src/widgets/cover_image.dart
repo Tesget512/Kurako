@@ -15,7 +15,17 @@ import '../state/providers.dart';
 class CoverImage extends ConsumerWidget {
   final String? url;
   final BoxFit fit;
-  const CoverImage({super.key, required this.url, this.fit = BoxFit.cover});
+
+  /// Downsample the decoded image to this pixel width (memory + per-frame cost).
+  /// Used by the blurred backdrop where full resolution is wasted anyway.
+  final int? cacheWidth;
+
+  const CoverImage({
+    super.key,
+    required this.url,
+    this.fit = BoxFit.cover,
+    this.cacheWidth,
+  });
 
   static const _headers = {
     'User-Agent': 'animebdplayer/1.0 (https://github.com/animebd/anime-bd-player)',
@@ -39,6 +49,7 @@ class CoverImage extends ConsumerWidget {
       return Image.file(
         file,
         fit: fit,
+        cacheWidth: cacheWidth,
         errorBuilder: (_, e, s) =>
             _fallback(theme, Icons.broken_image_outlined),
       );
@@ -57,6 +68,7 @@ class CoverImage extends ConsumerWidget {
       imageUrl: fixed,
       httpHeaders: _headers,
       fit: fit,
+      memCacheWidth: cacheWidth,
       placeholder: (_, _) =>
           Container(color: theme.colorScheme.surfaceContainerHighest),
       errorWidget: (_, _, _) =>

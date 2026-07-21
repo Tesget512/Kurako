@@ -5,18 +5,43 @@ import 'package:android_intent_plus/flag.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../state/providers.dart';
 
-/// The locator to hand an external player for [ep]. SMB files can't be passed
-/// as raw smb:// strings (most players have no credentials for the share) —
-/// use the downloaded local copy when one exists, else register the file on
-/// the loopback proxy and pass its http:// URL. The proxy token is left
-/// registered for the lifetime of the app (we can't know when the external
-/// player finishes); tokens are tiny, so this doesn't accumulate meaningfully.
+/// The locator to hand an external player for [ep].
+///
+/// - A downloaded local copy is always preferred (instant, seekable).
+/// - **Android SMB (not downloaded):** the loopback proxy is unreachable from
+///   another app's sandbox (each app has its own 127.0.0.1), so we hand the
+///   player a real `smb://user:pass@host/share/path` URL, which VLC / MX Player
+///   open natively.
+/// - **Desktop SMB (not downloaded):** the loopback proxy works same-machine, so
+///   use its http:// URL.
 Future<String> externalPlayerLocator(Episode ep) async {
   if (ep.sourceType != 'smb') return ep.filePath;
   final local = await rust.downloadedLocalPath(smbUri: ep.filePath);
   if (local != null) return local;
+  if (Platform.isAndroid) {
+    return _smbUrlWithCreds(ep.filePath);
+  }
   return rust.smbPlayableUrl(smbUri: ep.filePath);
+}
+
+/// Inject the stored SMB credentials into an `smb://host:port/share/path` URI →
+/// `smb://user:pass@host/share/path` (URL-encoded user/pass). Drops the :445
+/// port most players don't expect. Falls back to the bare URI if unconfigured.
+Future<String> _smbUrlWithCreds(String smbUri) async {
+  final creds = await SmbCredentials.load();
+  final rest = smbUri.replaceFirst('smb://', '');
+  // rest = host[:port]/share/path...
+  final slash = rest.indexOf('/');
+  if (slash < 0) return smbUri;
+  var host = rest.substring(0, slash);
+  final pathPart = rest.substring(slash); // leading '/'
+  if (host.contains(':445')) host = host.replaceFirst(':445', '');
+  if (creds.user.isEmpty) return 'smb://$host$pathPart';
+  final u = Uri.encodeComponent(creds.user);
+  final p = Uri.encodeComponent(creds.password);
+  return 'smb://$u:$p@$host$pathPart';
 }
 
 /// Launch a video in an external player.
@@ -85,13 +110,15 @@ Future<void> openWindowsProgramChooser() async {
   await _openWithChooser();
 }
 
-/// Hand a content:// (or file) URI to an external player via ACTION_VIEW. The
-/// grant flag lets the receiving app read the SAF document.
+/// Hand a content:// / smb:// / file URI to an external player via ACTION_VIEW.
+/// The grant flag lets the receiving app read a SAF document; for smb:// we omit
+/// the video/* MIME so an SMB-capable player (VLC/MX) claims the scheme itself.
 Future<void> _launchAndroidIntent(String uri) async {
+  final isSmb = uri.startsWith('smb://');
   final intent = AndroidIntent(
     action: 'action_view',
     data: uri,
-    type: 'video/*',
+    type: isSmb ? null : 'video/*',
     flags: <int>[
       Flag.FLAG_ACTIVITY_NEW_TASK,
       Flag.FLAG_GRANT_READ_URI_PERMISSION,
