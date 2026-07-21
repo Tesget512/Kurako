@@ -265,6 +265,162 @@ final downloadDirProvider =
   return _StringPrefNotifier('download_dir', defaultValue: '');
 });
 
+// ---- Background download manager (silent SMB downloads) ----
+
+/// One tracked download. Lives from the moment it starts until the user
+/// dismisses it after completion. `bytesTotal == 0` means "still connecting".
+class DownloadTask {
+  final String smbUri;
+  final String fileName;
+  final int? animeId;
+  final int bytesDone;
+  final int bytesTotal;
+  final String? error;
+  final bool done;
+
+  const DownloadTask({
+    required this.smbUri,
+    required this.fileName,
+    this.animeId,
+    this.bytesDone = 0,
+    this.bytesTotal = 0,
+    this.error,
+    this.done = false,
+  });
+
+  double? get progress => bytesTotal > 0 ? bytesDone / bytesTotal : null;
+  bool get active => !done && error == null;
+
+  DownloadTask copyWith({
+    int? bytesDone,
+    int? bytesTotal,
+    String? error,
+    bool? done,
+  }) =>
+      DownloadTask(
+        smbUri: smbUri,
+        fileName: fileName,
+        animeId: animeId,
+        bytesDone: bytesDone ?? this.bytesDone,
+        bytesTotal: bytesTotal ?? this.bytesTotal,
+        error: error ?? this.error,
+        done: done ?? this.done,
+      );
+}
+
+/// Runs SMB downloads in the background and exposes their live progress, so the
+/// detail page can show a progress icon without a modal dialog blocking play.
+/// Completed tasks linger (so the badge stays) until [dismissAnime] clears them.
+class DownloadManager extends StateNotifier<List<DownloadTask>> {
+  DownloadManager(this._ref) : super(const []);
+
+  final Ref _ref;
+  final _subs = <String, dynamic>{};
+
+  bool isDownloading(String smbUri) =>
+      state.any((t) => t.smbUri == smbUri && t.active);
+
+  /// Whether an anime has any active or freshly-completed download to surface.
+  bool hasFor(int animeId) => state.any((t) => t.animeId == animeId);
+
+  bool hasActiveFor(int animeId) =>
+      state.any((t) => t.animeId == animeId && t.active);
+
+  void start(Episode ep, {int? animeId}) {
+    if (isDownloading(ep.filePath)) return;
+    final destDir = effectiveDownloadDir(_ref.read(downloadDirProvider));
+    state = [
+      ...state,
+      DownloadTask(
+        smbUri: ep.filePath,
+        fileName: ep.fileName,
+        animeId: animeId,
+      ),
+    ];
+    final stream =
+        rust.smbDownload(smbUri: ep.filePath, destDir: destDir);
+    _subs[ep.filePath] = stream.listen(
+      (p) => _update(
+        ep.filePath,
+        (t) => t.copyWith(
+          bytesDone: p.bytesDone.toInt(),
+          bytesTotal: p.bytesTotal.toInt(),
+        ),
+      ),
+      onError: (Object e) =>
+          _update(ep.filePath, (t) => t.copyWith(error: '$e')),
+      onDone: () {
+        _subs.remove(ep.filePath);
+        _update(ep.filePath, (t) {
+          final ok = t.error == null && t.bytesTotal > 0;
+          return t.copyWith(done: true, bytesDone: ok ? t.bytesTotal : null);
+        });
+      },
+    );
+  }
+
+  Future<void> cancel(String smbUri) async {
+    await rust.smbCancelDownload(smbUri: smbUri);
+    _subs.remove(smbUri);
+    state = state.where((t) => t.smbUri != smbUri).toList();
+  }
+
+  /// Clear lingering completed/failed tasks for an anime once the user has seen
+  /// them. Active downloads are kept.
+  void dismissAnime(int animeId) {
+    state = state
+        .where((t) => !(t.animeId == animeId && !t.active))
+        .toList();
+  }
+
+  void _update(String smbUri, DownloadTask Function(DownloadTask) f) {
+    state = [
+      for (final t in state)
+        if (t.smbUri == smbUri) f(t) else t,
+    ];
+  }
+}
+
+final downloadManagerProvider =
+    StateNotifierProvider<DownloadManager, List<DownloadTask>>((ref) {
+  return DownloadManager(ref);
+});
+
+/// Whether an SMB source is configured — gates the detail-page download UI.
+final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
+  final creds = await SmbCredentials.load();
+  return creds.isConfigured;
+});
+
+// ---- Bangumi API mirror (default on; routes API through the China mirror) ----
+
+/// When on, Bangumi API calls go through the mainland-China mirror
+/// (bgmapi.anibt.net) and cover images through bgmimg.anibt.net. Persisted;
+/// pushed into the Rust core on change. Thanks to Soyorin (github.com/
+/// Yuri-NagaSaki/bangumi-proxy) for the public proxy.
+final bangumiMirrorProvider =
+    StateNotifierProvider<_MirrorNotifier, bool>((ref) {
+  return _MirrorNotifier();
+});
+
+class _MirrorNotifier extends StateNotifier<bool> {
+  _MirrorNotifier() : super(true) {
+    _load();
+  }
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool('bangumi_mirror') ?? true;
+    rust.setBangumiMirror(enabled: state);
+  }
+
+  Future<void> set(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('bangumi_mirror', value);
+    rust.setBangumiMirror(enabled: value);
+    state = value;
+  }
+}
+
 // ---- SMB credentials (persisted; pushed into the Rust smb client) ----
 
 class SmbCredentials {

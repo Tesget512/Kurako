@@ -15,6 +15,7 @@ import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
+import '../widgets/window_caption.dart';
 
 /// A video chapter marker parsed from mpv's `chapter-list`.
 class _Chapter {
@@ -96,6 +97,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // Open SAF file descriptor for the current episode (Android); released when
   // switching episodes or closing so the fd doesn't leak.
   PlayableHandle? _handle;
+  // Monotonic open counter. Each _openCurrent() call takes the next value;
+  // after an await it checks it's still the newest, so rapid episode switches
+  // (especially SMB, which registers a proxy token + opens a stream) don't race
+  // two overlapping opens into a deadlock.
+  int _openSeq = 0;
 
   // Quick-seek jump (seconds), read from [seekDurationProvider] each build.
   int _seekSec = 10;
@@ -142,40 +148,54 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   Future<void> _openCurrent() async {
+    final seq = ++_openSeq;
     _resumed = false;
     _tracksHandled = false;
     _subDelay = 0;
     _extSubs = const [];
     _activeExtSub = null;
     _chapters = const [];
-    // Release the previous episode's SAF fd (if any) before opening the next.
-    await _handle?.release();
+    // Release the previous episode's handle (SAF fd / SMB proxy token) BEFORE
+    // resolving the next, so a rapid switch doesn't leave two SMB streams (and
+    // proxy connections) contending on the small Rust runtime.
+    final old = _handle;
+    _handle = null;
+    await old?.release();
+    // A newer open superseded us while releasing — abandon this one.
+    if (seq != _openSeq) return;
     try {
-      _handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
-      await _player.open(Media(_handle!.uri));
-      _loadExternalSubtitles();
-      _loadChapters();
+      final handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
+      if (seq != _openSeq) {
+        // Superseded during resolve — release what we just acquired and bail.
+        await handle.release();
+        return;
+      }
+      _handle = handle;
+      await _player.open(Media(handle.uri));
+      if (seq != _openSeq) return;
+      _loadExternalSubtitles(seq);
+      _loadChapters(seq);
     } catch (e) {
-      if (mounted) {
+      if (mounted && seq == _openSeq) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('无法打开视频: $e')),
         );
       }
     }
-    if (mounted) setState(() {});
+    if (mounted && seq == _openSeq) setState(() {});
   }
 
   /// Find sidecar subtitle files (video.sc.ass etc.) and auto-load the best
   /// one. mpv can't discover them itself for SMB (http proxy URL) or SAF
   /// (fd://) sources, and even locally auto-load needs matching filenames only.
-  Future<void> _loadExternalSubtitles() async {
+  Future<void> _loadExternalSubtitles(int seq) async {
     List<SubtitleCandidate> subs;
     try {
       subs = await MediaSource.forEpisode(_ep).listSubtitles(_ep);
     } catch (_) {
       return;
     }
-    if (!mounted || subs.isEmpty) return;
+    if (!mounted || subs.isEmpty || seq != _openSeq) return;
     setState(() => _extSubs = subs);
     // Prefer simplified Chinese variants (sc/chs/simplified), then any.
     SubtitleCandidate best = subs.first;
@@ -203,7 +223,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   /// Read embedded chapter markers via mpv (media_kit has no chapters state).
-  Future<void> _loadChapters() async {
+  Future<void> _loadChapters(int seq) async {
     // chapter-list only fills once the file is loaded; wait for a duration.
     try {
       await _player.stream.duration
@@ -212,10 +232,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     } catch (_) {
       return;
     }
+    if (seq != _openSeq) return;
     try {
       final raw = await (_player.platform as dynamic)
           ?.getProperty('chapter-list') as String?;
-      if (raw == null || raw.isEmpty || !mounted) return;
+      if (raw == null || raw.isEmpty || !mounted || seq != _openSeq) return;
       final list = jsonDecode(raw) as List<dynamic>;
       final chapters = <_Chapter>[];
       for (var i = 0; i < list.length; i++) {
@@ -224,7 +245,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         final title = (m['title'] as String?)?.trim() ?? '';
         chapters.add(_Chapter(title.isEmpty ? '章节 ${i + 1}' : title, t));
       }
-      if (mounted && chapters.isNotEmpty) {
+      if (mounted && chapters.isNotEmpty && seq == _openSeq) {
         setState(() => _chapters = chapters);
       }
     } catch (_) {
@@ -554,10 +575,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             icon: const Icon(Icons.bookmarks_outlined),
             onPressed: _showChapterSheet,
           ),
+        if (widget.episodes.length > 1)
+          MaterialDesktopCustomButton(
+            icon: const Icon(Icons.playlist_play),
+            onPressed: _showEpisodeSheet,
+          ),
         MaterialDesktopCustomButton(
           icon: const Icon(Icons.info_outline),
           onPressed: _showInfoSheet,
         ),
+        // Window min/max/close (Windows/macOS/Linux frameless window).
+        if (!_isMobile) const WindowButtons(light: true),
       ],
       // Bottom bar mirrors the media_kit default, plus our prev/next hooks.
       bottomButtonBar: [
@@ -602,8 +630,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       seekGesture: true,
       speedUpOnLongPress: true,
       speedUpFactor: 2.0,
-      seekOnDoubleTapBackwardDuration: Duration(seconds: _seekSec),
-      seekOnDoubleTapForwardDuration: Duration(seconds: _seekSec),
+      // Double-tap seek stays at the fixed 10s convention; the customizable
+      // duration ([seekDurationProvider]) drives only the top-bar quick-seek
+      // button so the two gestures are independent.
+      seekOnDoubleTapBackwardDuration: const Duration(seconds: 10),
+      seekOnDoubleTapForwardDuration: const Duration(seconds: 10),
       // MD3 seek bar: theme-colored, thicker, bigger thumb. Lifted fully above
       // the bottom button row (bottom:56 > buttonBarHeight) — same layout as
       // the desktop controls — so it can't be mis-tapped at the screen edge.
@@ -649,6 +680,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           MaterialCustomButton(
             icon: const Icon(Icons.bookmarks_outlined, color: Colors.white),
             onPressed: _showChapterSheet,
+          ),
+        if (widget.episodes.length > 1)
+          MaterialCustomButton(
+            icon: const Icon(Icons.playlist_play, color: Colors.white),
+            onPressed: _showEpisodeSheet,
           ),
         MaterialCustomButton(
           icon: const Icon(Icons.info_outline, color: Colors.white),
@@ -747,7 +783,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 Text('快进 / 快退时长：$local 秒',
                     style: TextStyle(color: cs.onSurface, fontSize: 16)),
                 const SizedBox(height: 4),
-                Text('双击画面或点击顶部按钮时跳转的时长',
+                Text('点击顶部快进按钮时跳转的时长（双击画面固定 10 秒）',
                     style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
                 Slider(
                   value: local.toDouble(),
@@ -1007,6 +1043,55 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
+  // Episode picker: jump to any episode in the playlist without leaving the
+  // player. Saves current progress, then reuses the playlist-navigation path.
+  void _showEpisodeSheet() {
+    final cs = Theme.of(context).colorScheme;
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: cs.surfaceContainerHigh,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _trackHeader(Icons.playlist_play, '选集'),
+              for (var i = 0; i < widget.episodes.length; i++)
+                ListTile(
+                  dense: true,
+                  leading: i == _index
+                      ? Icon(Icons.play_arrow, color: cs.primary)
+                      : CircleAvatar(
+                          radius: 12,
+                          backgroundColor: cs.surfaceContainerHighest,
+                          child: Text(
+                            '${widget.episodes[i].episodeNo?.toInt() ?? i + 1}',
+                            style: TextStyle(fontSize: 11, color: cs.onSurface),
+                          ),
+                        ),
+                  title: Text(widget.episodes[i].fileName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: cs.onSurface)),
+                  selected: i == _index,
+                  selectedTileColor: cs.secondaryContainer,
+                  onTap: () async {
+                    Navigator.pop(context);
+                    if (i == _index) return;
+                    await _save();
+                    setState(() => _index = i);
+                    await _openCurrent();
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ---- Playback info (video params / decoder / SMB transfer) ----
 
   void _showInfoSheet() {
@@ -1085,6 +1170,9 @@ class _PlaybackInfoSheet extends StatefulWidget {
 class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
   Timer? _timer;
   String _hwdec = '…';
+  // Audio bitrate fallback: state.audioBitrate is null for some containers
+  // (e.g. FLAC/lossless in MKV); query mpv's audio-bitrate property instead.
+  double? _audioBitrateProp;
   // SMB proxy counters: previous sample and derived speed.
   BigInt? _lastBytes;
   double _speedBps = 0;
@@ -1102,6 +1190,13 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
       final hw = await (widget.player.platform as dynamic)
           ?.getProperty('hwdec-current') as String?;
       if (hw != null && hw.isNotEmpty) _hwdec = hw;
+    } catch (_) {}
+    // Fallback bitrate when state.audioBitrate is unset for the container.
+    try {
+      final raw = await (widget.player.platform as dynamic)
+          ?.getProperty('audio-bitrate') as String?;
+      final v = raw == null ? null : double.tryParse(raw);
+      if (v != null && v > 0) _audioBitrateProp = v;
     } catch (_) {}
     if (widget.smbActive) {
       try {
@@ -1146,7 +1241,7 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
         .where((t) => t.id == tracks.video.id)
         .map((t) => t.codec)
         .firstOrNull;
-    final audioBitrate = widget.player.state.audioBitrate;
+    final audioBitrate = widget.player.state.audioBitrate ?? _audioBitrateProp;
 
     final hwActive = vp.hwPixelformat != null && vp.hwPixelformat!.isNotEmpty;
     final rows = <(String, String)>[

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/providers.dart';
+import '../widgets/window_caption.dart';
 
 /// Settings sub-page listing blocked anime/files, with unblock actions.
 class BlacklistPage extends ConsumerStatefulWidget {
@@ -32,7 +33,7 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('屏蔽管理')),
+      appBar: const SysAppBar(title: Text('屏蔽管理')),
       body: FutureBuilder<List<BlacklistEntry>>(
         future: _future,
         builder: (context, snap) {

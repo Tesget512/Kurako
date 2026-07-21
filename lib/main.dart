@@ -6,6 +6,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'src/rust/frb_generated.dart';
 import 'src/rust/api.dart' as rust;
@@ -18,6 +19,27 @@ Future<void> main() async {
   MediaKit.ensureInitialized();
 
   await RustLib.init();
+
+  // Desktop: drop the native OS title bar and manage the window ourselves
+  // (custom drag region + window buttons drawn in-app). See widgets/
+  // window_caption.dart. Android/iOS skip this entirely.
+  final isDesktop =
+      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  if (isDesktop) {
+    await windowManager.ensureInitialized();
+    const options = WindowOptions(
+      size: Size(1280, 800),
+      minimumSize: Size(800, 600),
+      center: true,
+      titleBarStyle: TitleBarStyle.hidden,
+      title: 'AnimeBDPlayer',
+    );
+    // Show only once ready to avoid a flash of the un-styled native frame.
+    windowManager.waitUntilReadyToShow(options, () async {
+      await windowManager.show();
+      await windowManager.focus();
+    });
+  }
 
   // Open the SQLite database in the app data directory. On Windows this lives
   // under Documents/AnimeBDPlayer so it survives installer updates and portable
@@ -37,6 +59,10 @@ Future<void> main() async {
   // Cache the decode mode so the player can configure its VideoController
   // synchronously (the configuration is fixed at construction time).
   decodeModeStartupValue = prefs.getString('decode_mode') ?? 'auto';
+
+  // Route Bangumi API through the China mirror by default (the official domain
+  // is frequently blocked in mainland China). Pushed before any request runs.
+  rust.setBangumiMirror(enabled: prefs.getBool('bangumi_mirror') ?? true);
 
   // Restore SMB credentials so network-share folders work without re-entering
   // the password (connection is opened lazily per operation).

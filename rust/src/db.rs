@@ -29,6 +29,9 @@ pub fn init(db_path: &str) -> Result<()> {
             air_date         TEXT,
             total_eps        INTEGER,
             rating           REAL,
+            rating_total     INTEGER,
+            rating_rank      INTEGER,
+            rating_counts    TEXT,
             air_weekday      INTEGER,
             tags             TEXT,
             collection       INTEGER NOT NULL DEFAULT 0,
@@ -69,6 +72,9 @@ pub fn init(db_path: &str) -> Result<()> {
     // already-present column is expected and ignored.
     for ddl in [
         "ALTER TABLE anime ADD COLUMN rating REAL",
+        "ALTER TABLE anime ADD COLUMN rating_total INTEGER",
+        "ALTER TABLE anime ADD COLUMN rating_rank INTEGER",
+        "ALTER TABLE anime ADD COLUMN rating_counts TEXT",
         "ALTER TABLE anime ADD COLUMN air_weekday INTEGER",
         "ALTER TABLE anime ADD COLUMN tags TEXT",
         "ALTER TABLE anime ADD COLUMN collection INTEGER NOT NULL DEFAULT 0",
@@ -198,6 +204,9 @@ fn map_anime(r: &rusqlite::Row) -> rusqlite::Result<Anime> {
         air_date: r.get("air_date")?,
         total_eps: r.get("total_eps")?,
         rating: r.get("rating")?,
+        rating_total: r.get("rating_total")?,
+        rating_rank: r.get("rating_rank")?,
+        rating_counts: r.get("rating_counts")?,
         air_weekday: r.get("air_weekday")?,
         tags: r.get("tags")?,
         collection: r.get::<_, Option<i64>>("collection")?.unwrap_or(0),
@@ -289,6 +298,9 @@ pub fn bind_bangumi(
     air_date: Option<&str>,
     total_eps: Option<i64>,
     rating: Option<f64>,
+    rating_total: Option<i64>,
+    rating_rank: Option<i64>,
+    rating_counts: Option<&str>,
     air_weekday: Option<i64>,
     tags: Option<&str>,
     confidence: &str,
@@ -297,8 +309,9 @@ pub fn bind_bangumi(
     with_conn(|c| {
         c.execute(
             "UPDATE anime SET bangumi_id=?2, name=?3, name_cn=?4, summary=?5, cover_url=?6,
-                air_date=?7, total_eps=?8, rating=?9, air_weekday=?10, tags=?11,
-                match_confidence=?12, corrected=?13
+                air_date=?7, total_eps=?8, rating=?9, rating_total=?10, rating_rank=?11,
+                rating_counts=?12, air_weekday=?13, tags=?14,
+                match_confidence=?15, corrected=?16
              WHERE id=?1",
             params![
                 anime_id,
@@ -310,6 +323,9 @@ pub fn bind_bangumi(
                 air_date,
                 total_eps,
                 rating,
+                rating_total,
+                rating_rank,
+                rating_counts,
                 air_weekday,
                 tags,
                 confidence,
@@ -556,6 +572,53 @@ pub fn remove_download(id: i64) -> Result<Option<String>> {
             .optional()?;
         c.execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
         Ok(path)
+    })
+}
+
+/// Downloads joined with their library episode + anime for the management UI.
+/// LEFT JOINs: a download whose episode was removed from the library still
+/// shows up with just its raw file info.
+pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>> {
+    with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT d.id, d.smb_uri, d.local_path, d.bytes_total, d.created_at,
+                    e.anime_id, e.episode_no, e.file_name,
+                    a.name_cn, a.name, a.title_raw, a.cover_url
+             FROM downloads d
+             LEFT JOIN episodes e ON e.file_path = d.smb_uri
+             LEFT JOIN anime a ON a.id = e.anime_id
+             ORDER BY COALESCE(a.name_cn, a.name, a.title_raw), e.episode_no, d.created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let smb_uri: String = r.get(1)?;
+                let name_cn: Option<String> = r.get(8)?;
+                let name: Option<String> = r.get(9)?;
+                let title_raw: Option<String> = r.get(10)?;
+                let title = name_cn
+                    .filter(|s| !s.is_empty())
+                    .or(name.filter(|s| !s.is_empty()))
+                    .or(title_raw);
+                // Fall back to the URI's last segment when the episode is gone.
+                let file_name: Option<String> = r.get(7)?;
+                let file_name = file_name.unwrap_or_else(|| {
+                    smb_uri.rsplit('/').next().unwrap_or(&smb_uri).to_string()
+                });
+                Ok(crate::models::DownloadDetail {
+                    id: r.get(0)?,
+                    smb_uri,
+                    local_path: r.get(2)?,
+                    bytes_total: r.get(3)?,
+                    created_at: r.get(4)?,
+                    anime_id: r.get(5)?,
+                    anime_title: title,
+                    cover_url: r.get(11)?,
+                    episode_no: r.get(6)?,
+                    file_name,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     })
 }
 

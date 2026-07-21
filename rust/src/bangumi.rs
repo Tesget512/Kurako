@@ -4,8 +4,30 @@ use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::sync::Mutex;
 
-const BASE: &str = "https://api.bgm.tv";
+const BASE_OFFICIAL: &str = "https://api.bgm.tv";
+/// Soyorin's public bangumi-proxy instance (github.com/Yuri-NagaSaki/bangumi-proxy):
+/// a transparent host-swap reverse proxy reachable from mainland China. Paths
+/// and the Authorization header pass through unchanged; JSON image URLs are
+/// rewritten by the proxy to its image host.
+const BASE_MIRROR: &str = "https://bgmapi.anibt.net";
+/// OAuth stays on the official domain: the login flow needs the real site's
+/// cookies and the token endpoint validates the registered redirect URI.
 const OAUTH_BASE: &str = "https://bgm.tv/oauth";
+
+/// Whether API calls go through the mirror (default on; toggled from settings).
+static MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_mirror(enabled: bool) {
+    MIRROR.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn api_base() -> &'static str {
+    if MIRROR.load(std::sync::atomic::Ordering::Relaxed) {
+        BASE_MIRROR
+    } else {
+        BASE_OFFICIAL
+    }
+}
 const USER_AGENT: &str = "animebdplayer/1.0 (https://github.com/animebd/anime-bd-player)";
 
 // Bangumi OAuth application credentials. The real values live in the
@@ -40,7 +62,7 @@ async fn current_username() -> Result<String> {
     }
     let client = client()?;
     let resp = send_with_backoff(
-        || auth(client.get(format!("{BASE}/v0/me"))),
+        || auth(client.get(format!("{}/v0/me", api_base()))),
         "bangumi me",
     )
     .await?;
@@ -185,6 +207,28 @@ struct RawSubject {
 struct RawRating {
     #[serde(default)]
     score: Option<f64>,
+    #[serde(default)]
+    total: Option<i64>,
+    #[serde(default)]
+    rank: Option<i64>,
+    /// Vote histogram keyed "1".."10".
+    #[serde(default)]
+    count: Option<std::collections::HashMap<String, i64>>,
+}
+
+impl RawRating {
+    /// Histogram as a fixed "n1,n2,...,n10" string (score 1 → 10), or None if
+    /// the API sent no votes.
+    fn counts_csv(&self) -> Option<String> {
+        let map = self.count.as_ref()?;
+        let counts: Vec<i64> = (1..=10)
+            .map(|i| *map.get(&i.to_string()).unwrap_or(&0))
+            .collect();
+        if counts.iter().all(|c| *c == 0) {
+            return None;
+        }
+        Some(counts.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","))
+    }
 }
 
 #[derive(Deserialize)]
@@ -222,7 +266,10 @@ impl From<RawSubject> for BangumiSubject {
             cover_url: r.images.and_then(|i| i.best()),
             air_date: r.date,
             eps: r.eps,
-            rating: r.rating.and_then(|x| x.score).filter(|s| *s > 0.0),
+            rating: r.rating.as_ref().and_then(|x| x.score).filter(|s| *s > 0.0),
+            rating_total: r.rating.as_ref().and_then(|x| x.total).filter(|t| *t > 0),
+            rating_rank: r.rating.as_ref().and_then(|x| x.rank).filter(|k| *k > 0),
+            rating_counts: r.rating.as_ref().and_then(|x| x.counts_csv()),
             tags: r
                 .tags
                 .unwrap_or_default()
@@ -270,7 +317,7 @@ async fn send_with_backoff(
 
 /// Search anime subjects (type=2) by keyword, sorted by relevance.
 pub async fn search(keyword: &str, limit: u32) -> Result<Vec<BangumiSubject>> {
-    let url = format!("{BASE}/v0/search/subjects?limit={limit}");
+    let url = format!("{}/v0/search/subjects?limit={limit}", api_base());
     let body = serde_json::json!({
         "keyword": keyword,
         "sort": "match",
@@ -309,7 +356,7 @@ struct LegacySubject {
 
 pub async fn search_legacy(keyword: &str, limit: u32) -> Result<Vec<BangumiSubject>> {
     let encoded = urlencode(keyword);
-    let url = format!("{BASE}/search/subject/{encoded}?type=2&max_results={limit}&responseGroup=small");
+    let url = format!("{}/search/subject/{encoded}?type=2&max_results={limit}&responseGroup=small", api_base());
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi legacy search").await?;
     if !resp.status().is_success() {
@@ -333,6 +380,9 @@ pub async fn search_legacy(keyword: &str, limit: u32) -> Result<Vec<BangumiSubje
             air_date: None,
             eps: None,
             rating: None,
+            rating_total: None,
+            rating_rank: None,
+            rating_counts: None,
             tags: Vec::new(),
         })
         .collect())
@@ -798,7 +848,7 @@ fn bigrams(s: &str) -> Vec<String> {
 
 /// Fetch full subject detail by id.
 pub async fn subject(id: i64) -> Result<BangumiSubject> {
-    let url = format!("{BASE}/v0/subjects/{id}");
+    let url = format!("{}/v0/subjects/{id}", api_base());
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi subject").await?;
     if !resp.status().is_success() {
@@ -963,7 +1013,8 @@ pub async fn all_collections() -> Result<Vec<(i64, i64)>> {
     let client = client()?;
     loop {
         let url = format!(
-            "{BASE}/v0/users/{username}/collections?subject_type=2&limit={limit}&offset={offset}"
+            "{}/v0/users/{username}/collections?subject_type=2&limit={limit}&offset={offset}",
+            api_base()
         );
         let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi all_collections").await?;
         if !resp.status().is_success() {
@@ -995,7 +1046,7 @@ pub async fn collection_status(subject_id: i64) -> Result<Option<i64>> {
     }
     // Read endpoint needs the real username; `-` only works for writes.
     let username = current_username().await?;
-    let url = format!("{BASE}/v0/users/{username}/collections/{subject_id}");
+    let url = format!("{}/v0/users/{username}/collections/{subject_id}", api_base());
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi collection").await?;
     match resp.status().as_u16() {
@@ -1018,7 +1069,7 @@ pub async fn update_collection(subject_id: i64, collection_type: i64) -> Result<
     if !has_token() {
         anyhow::bail!("no token set");
     }
-    let url = format!("{BASE}/v0/users/-/collections/{subject_id}");
+    let url = format!("{}/v0/users/-/collections/{subject_id}", api_base());
     let body = serde_json::json!({ "type": collection_type });
     let client = client()?;
     let resp = send_with_backoff(
@@ -1063,7 +1114,7 @@ pub struct EpisodeTitle {
 
 /// Fetch episode titles for a subject's main episodes (type=0).
 pub async fn subject_episode_titles(subject_id: i64, limit: u32) -> Result<Vec<EpisodeTitle>> {
-    let url = format!("{BASE}/v0/subjects/{subject_id}/episodes?type=0&limit={limit}");
+    let url = format!("{}/v0/subjects/{subject_id}/episodes?type=0&limit={limit}", api_base());
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi episode titles").await?;
     if !resp.status().is_success() {
@@ -1093,7 +1144,7 @@ mod match_tests {
     use super::*;
 
     fn subj(id: i64, name: &str, cn: &str) -> BangumiSubject {
-        BangumiSubject { id, name: name.into(), name_cn: cn.into(), summary: String::new(), cover_url: None, air_date: None, eps: None, rating: None, tags: Vec::new() }
+        BangumiSubject { id, name: name.into(), name_cn: cn.into(), summary: String::new(), cover_url: None, air_date: None, eps: None, rating: None, rating_total: None, rating_rank: None, rating_counts: None, tags: Vec::new() }
     }
 
     #[test]

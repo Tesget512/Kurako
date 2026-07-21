@@ -39,6 +39,13 @@ pub fn set_bangumi_token(token: Option<String>) {
     bangumi::set_token(token);
 }
 
+/// Route Bangumi API calls through the mainland-reachable mirror
+/// (bgmapi.anibt.net, Soyorin's bangumi-proxy instance) instead of api.bgm.tv.
+/// OAuth always stays on the official domain.
+pub fn set_bangumi_mirror(enabled: bool) {
+    bangumi::set_mirror(enabled);
+}
+
 // ---- Bangumi OAuth 2.0 ----
 
 /// Result of an OAuth token exchange/refresh, surfaced to Dart for persistence.
@@ -305,13 +312,19 @@ pub fn smb_download(
     Ok(local)
 }
 
-/// Cancel the in-flight download (checked between 1MB chunks).
-pub fn smb_cancel_download() {
-    smb::cancel_download();
+/// Cancel one in-flight download by its SMB URI (checked between 1MB chunks;
+/// other concurrent downloads are unaffected).
+pub fn smb_cancel_download(smb_uri: String) {
+    smb::cancel_download(&smb_uri);
 }
 
 pub fn list_downloads() -> Result<Vec<DownloadEntry>, String> {
     db::list_downloads().map_err(|e| e.to_string())
+}
+
+/// Downloads joined with episode/anime info for the management page.
+pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>, String> {
+    db::list_downloads_detailed().map_err(|e| e.to_string())
 }
 
 /// Delete a download: removes the record and the local file.
@@ -426,6 +439,18 @@ fn finish_scan(
                             .filter(|s| !s.is_empty())
                             .unwrap_or(best.summary.clone());
                         let rating = detail.as_ref().and_then(|d| d.rating).or(best.rating);
+                        let rating_total = detail
+                            .as_ref()
+                            .and_then(|d| d.rating_total)
+                            .or(best.rating_total);
+                        let rating_rank = detail
+                            .as_ref()
+                            .and_then(|d| d.rating_rank)
+                            .or(best.rating_rank);
+                        let rating_counts = detail
+                            .as_ref()
+                            .and_then(|d| d.rating_counts.clone())
+                            .or(best.rating_counts.clone());
                         let air_date = detail
                             .as_ref()
                             .and_then(|d| d.air_date.clone())
@@ -451,6 +476,9 @@ fn finish_scan(
                             air_date.as_deref(),
                             eps,
                             rating,
+                            rating_total,
+                            rating_rank,
+                            rating_counts.as_deref(),
                             weekday,
                             tags.as_deref(),
                             "high",
@@ -574,6 +602,9 @@ pub fn refresh_metadata(anime_id: i64) -> Result<(), String> {
             s.air_date.as_deref(),
             s.eps,
             s.rating,
+            s.rating_total,
+            s.rating_rank,
+            s.rating_counts.as_deref(),
             weekday,
             tags.as_deref(),
             "high",
@@ -654,6 +685,9 @@ pub fn bind_anime(anime_id: i64, bangumi_id: i64) -> Result<(), String> {
         subject.air_date.as_deref(),
         subject.eps,
         subject.rating,
+        subject.rating_total,
+        subject.rating_rank,
+        subject.rating_counts.as_deref(),
         weekday,
         tags.as_deref(),
         "high",

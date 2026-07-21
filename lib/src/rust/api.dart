@@ -18,6 +18,12 @@ Future<void> initDb({required String dbPath}) =>
 Future<void> setBangumiToken({String? token}) =>
     RustLib.instance.api.crateApiSetBangumiToken(token: token);
 
+/// Route Bangumi API calls through the mainland-reachable mirror
+/// (bgmapi.anibt.net, Soyorin's bangumi-proxy instance) instead of api.bgm.tv.
+/// OAuth always stays on the official domain.
+Future<void> setBangumiMirror({required bool enabled}) =>
+    RustLib.instance.api.crateApiSetBangumiMirror(enabled: enabled);
+
 /// Build the browser authorization URL for the login flow. Uses the app's
 /// baked-in client id and registered callback.
 Future<String> oauthAuthorizeUrl() =>
@@ -161,12 +167,17 @@ Stream<DownloadProgress> smbDownload({
 }) =>
     RustLib.instance.api.crateApiSmbDownload(smbUri: smbUri, destDir: destDir);
 
-/// Cancel the in-flight download (checked between 1MB chunks).
-Future<void> smbCancelDownload() =>
-    RustLib.instance.api.crateApiSmbCancelDownload();
+/// Cancel one in-flight download by its SMB URI (checked between 1MB chunks;
+/// other concurrent downloads are unaffected).
+Future<void> smbCancelDownload({required String smbUri}) =>
+    RustLib.instance.api.crateApiSmbCancelDownload(smbUri: smbUri);
 
 Future<List<DownloadEntry>> listDownloads() =>
     RustLib.instance.api.crateApiListDownloads();
+
+/// Downloads joined with episode/anime info for the management page.
+Future<List<DownloadDetail>> listDownloadsDetailed() =>
+    RustLib.instance.api.crateApiListDownloadsDetailed();
 
 /// Delete a download: removes the record and the local file.
 Future<void> removeDownload({required PlatformInt64 id}) =>

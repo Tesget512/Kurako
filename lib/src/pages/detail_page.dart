@@ -1,7 +1,6 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
@@ -9,6 +8,7 @@ import '../state/providers.dart';
 import '../services/external_player.dart';
 import '../widgets/cover_header.dart';
 import '../widgets/match_correction_dialog.dart';
+import '../widgets/window_caption.dart';
 import 'blacklist_page.dart';
 import 'player_page.dart';
 
@@ -29,99 +29,166 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     final episodesAsync = ref.watch(episodesProvider(widget.animeId));
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('详情'),
-        actions: [
-          // Refresh Bangumi metadata + episode titles + collection status
-          if (_refreshing)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+      floatingActionButton: episodesAsync.maybeWhen(
+        data: (episodes) => episodes.isEmpty
+            ? null
+            : FloatingActionButton.extended(
+                onPressed: () =>
+                    _play(context, ref, _resumeEpisode(episodes)),
+                icon: const Icon(Icons.play_arrow),
+                label: Text(_hasProgress(episodes) ? '继续观看' : '开始观看'),
               ),
-            )
-          else
-            IconButton(
-              tooltip: '刷新 Bangumi 数据',
-              icon: const Icon(Icons.cloud_sync_outlined),
-              onPressed: () => _refreshMetadata(context),
-            ),
-          TextButton.icon(
-            icon: const Icon(Icons.edit),
-            label: const Text('重新匹配'),
-            onPressed: () async {
-              final anime = animeAsync.value;
-              if (anime == null) return;
-              final changed = await showDialog<bool>(
-                context: context,
-                builder: (_) => MatchCorrectionDialog(
-                  animeId: widget.animeId,
-                  initialKeyword: anime.titleRaw,
-                ),
-              );
-              if (changed == true) {
-                ref.invalidate(animeDetailProvider(widget.animeId));
-                ref.invalidate(animeListProvider);
-              }
-            },
-          ),
-        ],
+        orElse: () => null,
       ),
       body: animeAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('加载失败: $e')),
         data: (anime) {
           if (anime == null) return const Center(child: Text('未找到'));
-          return ListView(
-            children: [
-              CoverHeader(anime: anime),
-              // Collection status selector — only shown for matched entries.
-              if (anime.bangumiId != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                  child: _CollectionRow(
-                    current: anime.collection,
-                    onChanged: (v) => _setCollection(context, v),
-                    onClear: () => _clearCollection(context),
-                  ),
-                ),
-              const Divider(height: 16),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                child: Text(
-                  '剧集',
-                  style: Theme.of(context).textTheme.titleMedium,
+          return CustomScrollView(
+            slivers: [
+              _buildAppBar(context, anime),
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Collection selector — only for matched entries.
+                    if (anime.bangumiId != null)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                        child: _CollectionRow(
+                          current: anime.collection,
+                          onChanged: (v) => _setCollection(context, v),
+                          onClear: () => _clearCollection(context),
+                        ),
+                      ),
+                    // Tags + summary.
+                    CoverHeaderBody(anime: anime),
+                    const Divider(height: 16),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text('剧集',
+                          style: Theme.of(context).textTheme.titleMedium),
+                    ),
+                  ],
                 ),
               ),
               episodesAsync.when(
-                loading: () => const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: CircularProgressIndicator()),
+                loading: () => const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
                 ),
-                error: (e, _) => Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Text('剧集加载失败: $e'),
+                error: (e, _) => SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text('剧集加载失败: $e'),
+                  ),
                 ),
-                data: (episodes) => _EpisodeList(
-                  episodes: episodes,
-                  onPlay: (e) => _play(context, ref, e),
-                  onPlayWith: (e, external) =>
-                      _play(context, ref, e, forceExternal: external),
-                  onDownload: (e) => _downloadEpisode(context, e),
-                  onBlocked: () {
-                    ref.invalidate(episodesProvider(widget.animeId));
-                    ref.invalidate(animeDetailProvider(widget.animeId));
-                  },
+                data: (episodes) => SliverToBoxAdapter(
+                  child: _EpisodeList(
+                    episodes: episodes,
+                    onPlay: (e) => _play(context, ref, e),
+                    onPlayWith: (e, external) =>
+                        _play(context, ref, e, forceExternal: external),
+                    onDownload: (e) => _downloadEpisode(context, e),
+                    onBlocked: () {
+                      ref.invalidate(episodesProvider(widget.animeId));
+                      ref.invalidate(animeDetailProvider(widget.animeId));
+                    },
+                  ),
                 ),
               ),
-              const SizedBox(height: 24),
+              const SliverToBoxAdapter(child: SizedBox(height: 96)),
             ],
           );
         },
       ),
     );
+  }
+
+  /// The collapsing app bar whose expanded area shows the blurred-cover backdrop
+  /// and the cover/facts header; collapsed it's a normal toolbar with the title.
+  Widget _buildAppBar(BuildContext context, Anime anime) {
+    // Expanded height scales with viewport width: the header card grows taller
+    // when narrow (facts + histogram stack vertically).
+    final width = MediaQuery.sizeOf(context).width;
+    final expanded = width < 600 ? 420.0 : 340.0;
+    return SliverAppBar(
+      pinned: true,
+      expandedHeight: expanded,
+      title: Text(_titleOf(anime), maxLines: 1, overflow: TextOverflow.ellipsis),
+      actions: [
+        if (anime.bangumiId != null)
+          IconButton(
+            tooltip: '打开 Bangumi 主页',
+            icon: const Icon(Icons.open_in_new),
+            onPressed: () => _openBangumi(anime.bangumiId!.toInt()),
+          ),
+        _DownloadBadge(animeId: widget.animeId),
+        if (_refreshing)
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          )
+        else
+          IconButton(
+            tooltip: '刷新 Bangumi 数据',
+            icon: const Icon(Icons.cloud_sync_outlined),
+            onPressed: () => _refreshMetadata(context),
+          ),
+        IconButton(
+          tooltip: '重新匹配',
+          icon: const Icon(Icons.edit),
+          onPressed: () async {
+            final changed = await showDialog<bool>(
+              context: context,
+              builder: (_) => MatchCorrectionDialog(
+                animeId: widget.animeId,
+                initialKeyword: anime.titleRaw,
+              ),
+            );
+            if (changed == true) {
+              ref.invalidate(animeDetailProvider(widget.animeId));
+              ref.invalidate(animeListProvider);
+            }
+          },
+        ),
+        if (useCustomCaption) ...[
+          const SizedBox(width: 4),
+          const WindowButtons(),
+        ],
+      ],
+      flexibleSpace: FlexibleSpaceBar(
+        collapseMode: CollapseMode.pin,
+        background: CoverHeaderHero(anime: anime),
+      ),
+    );
+  }
+
+  String _titleOf(Anime a) {
+    if (a.nameCn != null && a.nameCn!.isNotEmpty) return a.nameCn!;
+    if (a.name != null && a.name!.isNotEmpty) return a.name!;
+    return a.titleRaw;
+  }
+
+  @override
+  void dispose() {
+    // Once the user leaves the page, drop lingering completed/failed downloads
+    // so the badge doesn't persist on the next visit (active ones stay).
+    ref.read(downloadManagerProvider.notifier).dismissAnime(widget.animeId);
+    super.dispose();
+  }
+
+  /// Open this subject's Bangumi page in the system browser.
+  Future<void> _openBangumi(int subjectId) async {
+    final uri = Uri.parse('https://bgm.tv/subject/$subjectId');
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<void> _refreshMetadata(BuildContext context) async {
@@ -226,16 +293,30 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     ref.invalidate(episodesProvider(widget.animeId));
   }
 
-  /// Download an SMB episode to the configured local folder, with a progress
-  /// dialog (speed + cancel). On success playback prefers the local copy.
-  Future<void> _downloadEpisode(BuildContext context, Episode ep) async {
-    final destDir = effectiveDownloadDir(ref.read(downloadDirProvider));
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _DownloadDialog(episode: ep, destDir: destDir),
+  /// Start a silent background download; progress shows in the AppBar icon and
+  /// the download manager. On success playback prefers the local copy.
+  void _downloadEpisode(BuildContext context, Episode ep) {
+    ref
+        .read(downloadManagerProvider.notifier)
+        .start(ep, animeId: widget.animeId);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已开始后台下载，可在右上角图标查看进度')),
     );
   }
+
+  /// The episode the play button should resume: an in-progress one if any,
+  /// otherwise the first unwatched, otherwise the first in playlist order.
+  Episode _resumeEpisode(List<Episode> episodes) {
+    final ordered = orderedPlaylist(episodes);
+    final inProgress = ordered
+        .where((e) => !e.watched && e.lastPositionMs.toInt() > 0)
+        .firstOrNull;
+    if (inProgress != null) return inProgress;
+    return ordered.where((e) => !e.watched).firstOrNull ?? ordered.first;
+  }
+
+  bool _hasProgress(List<Episode> episodes) =>
+      episodes.any((e) => e.watched || e.lastPositionMs.toInt() > 0);
 }
 
 /// Flatten episodes into the same order the detail list renders: numbered
@@ -592,135 +673,121 @@ class _EpisodeTile extends ConsumerWidget {
   }
 }
 
-/// Modal download progress: streams DownloadProgress from Rust, shows a
-/// percentage bar + transfer speed, and supports cancelling mid-way.
-class _DownloadDialog extends StatefulWidget {
-  final Episode episode;
-  final String destDir;
-  const _DownloadDialog({required this.episode, required this.destDir});
+/// AppBar badge showing this anime's download activity: a spinning ring with a
+/// count while downloading, a check when finished. Only rendered when an SMB
+/// source is configured and there's at least one tracked task. Tapping opens a
+/// sheet listing the anime's downloads with live progress + cancel.
+class _DownloadBadge extends ConsumerWidget {
+  final int animeId;
+  const _DownloadBadge({required this.animeId});
 
   @override
-  State<_DownloadDialog> createState() => _DownloadDialogState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    final smbOk = ref.watch(smbConfiguredProvider).value ?? false;
+    if (!smbOk) return const SizedBox.shrink();
+    final tasks = ref
+        .watch(downloadManagerProvider)
+        .where((t) => t.animeId == animeId)
+        .toList();
+    if (tasks.isEmpty) return const SizedBox.shrink();
+
+    final active = tasks.where((t) => t.active).toList();
+    final allDone = active.isEmpty;
+    final cs = Theme.of(context).colorScheme;
+
+    return IconButton(
+      tooltip: allDone ? '下载完成' : '下载中 (${active.length})',
+      onPressed: () => _showSheet(context, ref),
+      icon: SizedBox(
+        width: 24,
+        height: 24,
+        child: allDone
+            ? Icon(Icons.download_done, color: cs.primary)
+            : Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Determinate when a single download reports its size, else spin.
+                  CircularProgressIndicator(
+                    strokeWidth: 2.4,
+                    value: active.length == 1 ? active.first.progress : null,
+                  ),
+                  if (active.length > 1)
+                    Text('${active.length}',
+                        style: Theme.of(context).textTheme.labelSmall),
+                ],
+              ),
+      ),
+    );
+  }
+
+  void _showSheet(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => Consumer(
+        builder: (context, ref, _) {
+          final tasks = ref
+              .watch(downloadManagerProvider)
+              .where((t) => t.animeId == animeId)
+              .toList();
+          if (tasks.isEmpty) {
+            return const SizedBox(
+              height: 120,
+              child: Center(child: Text('没有下载任务')),
+            );
+          }
+          return SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final t in tasks) _DownloadTile(task: t),
+                const SizedBox(height: 8),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
-class _DownloadDialogState extends State<_DownloadDialog> {
-  StreamSubscription<DownloadProgress>? _sub;
-  int _done = 0;
-  int _total = 0;
-  // Speed derived from progress deltas sampled once a second.
-  int _lastDone = 0;
-  DateTime _lastSample = DateTime.now();
-  double _speedBps = 0;
-  String? _error;
-  bool _finished = false;
+/// One row in the download sheet: filename, progress bar (hidden when done),
+/// and a cancel/dismiss action.
+class _DownloadTile extends ConsumerWidget {
+  final DownloadTask task;
+  const _DownloadTile({required this.task});
 
   @override
-  void initState() {
-    super.initState();
-    _start();
-  }
-
-  void _start() {
-    final stream = rust.smbDownload(
-      smbUri: widget.episode.filePath,
-      destDir: widget.destDir,
-    );
-    _sub = stream.listen(
-      (p) {
-        _done = p.bytesDone.toInt();
-        _total = p.bytesTotal.toInt();
-        final now = DateTime.now();
-        final dt = now.difference(_lastSample).inMilliseconds;
-        if (dt >= 1000) {
-          _speedBps = (_done - _lastDone) * 1000 / dt;
-          _lastDone = _done;
-          _lastSample = now;
-        }
-        if (mounted) setState(() {});
-      },
-      onError: (Object e) {
-        if (mounted) setState(() => _error = '$e');
-      },
-      onDone: () {
-        if (!mounted) return;
-        // The stream closing without error means the Rust call returned Ok.
-        if (_error == null && _total > 0 && _done >= _total) {
-          _finished = true;
-        }
-        setState(() {});
-        if (_finished) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('下载完成，之后播放将优先使用本地副本')),
-          );
-          Navigator.of(context).pop();
-        }
-      },
-    );
-  }
-
-  @override
-  void dispose() {
-    _sub?.cancel();
-    super.dispose();
-  }
-
-  String _fmtSpeed(double bps) {
-    if (bps >= 1024 * 1024) {
-      return '${(bps / (1024 * 1024)).toStringAsFixed(1)} MB/s';
-    }
-    if (bps >= 1024) return '${(bps / 1024).toStringAsFixed(0)} KB/s';
-    return '${bps.toStringAsFixed(0)} B/s';
-  }
-
-  String _fmtMb(int bytes) =>
-      '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-
-  @override
-  Widget build(BuildContext context) {
-    final progress = _total > 0 ? _done / _total : null;
-    return AlertDialog(
-      title: const Text('下载到本地'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            widget.episode.fileName,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.bodySmall,
-          ),
-          const SizedBox(height: 16),
-          if (_error != null)
-            Text('下载失败: $_error',
-                style: TextStyle(color: Theme.of(context).colorScheme.error))
-          else ...[
-            LinearProgressIndicator(value: progress),
-            const SizedBox(height: 8),
-            Text(
-              _total > 0
-                  ? '${_fmtMb(_done)} / ${_fmtMb(_total)} · ${_fmtSpeed(_speedBps)}'
-                  : '连接中…',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-        ],
+  Widget build(BuildContext context, WidgetRef ref) {
+    final cs = Theme.of(context).colorScheme;
+    final subtitle = task.error != null
+        ? Text('下载失败: ${task.error}', style: TextStyle(color: cs.error))
+        : task.done
+            ? const Text('已完成，播放将优先使用本地副本')
+            : Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: LinearProgressIndicator(value: task.progress),
+              );
+    return ListTile(
+      leading: Icon(
+        task.error != null
+            ? Icons.error_outline
+            : task.done
+                ? Icons.download_done
+                : Icons.downloading,
+        color: task.error != null ? cs.error : cs.primary,
       ),
-      actions: [
-        if (_error != null)
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('关闭'),
-          )
-        else
-          TextButton(
-            onPressed: () async {
-              await rust.smbCancelDownload();
-              if (context.mounted) Navigator.of(context).pop();
-            },
-            child: const Text('取消下载'),
-          ),
-      ],
+      title: Text(task.fileName, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: subtitle,
+      trailing: task.active
+          ? IconButton(
+              tooltip: '取消',
+              icon: const Icon(Icons.close),
+              onPressed: () => ref
+                  .read(downloadManagerProvider.notifier)
+                  .cancel(task.smbUri),
+            )
+          : null,
     );
   }
 }

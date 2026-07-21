@@ -39,10 +39,16 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
     await Process.start(path, [locator], mode: ProcessStartMode.detached);
     return;
   }
-  // OS default association, detached so it never blocks the caller.
+  // No configured player.
   if (Platform.isWindows) {
-    // rundll32 opens the file with its registered handler without going through
-    // cmd's `start` (whose argument quoting is fragile for paths with spaces/&).
+    // An http proxy URL (SMB stream) has no file association — opening it via
+    // the shell lands in the default *browser* (the "web player" bug), and the
+    // old .m3u wrapper could get stuck on a wrong association. Without a
+    // configured player there's no reliable target, so tell the user to pick
+    // one (the settings row next to the external-player toggle).
+    if (locator.startsWith('http')) {
+      throw Exception('未配置外置播放器。请在 设置 → 播放器 中选择播放器程序（SMB 流播放需要）');
+    }
     await Process.start(
       'rundll32',
       ['url.dll,FileProtocolHandler', locator],
@@ -53,6 +59,30 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
   } else {
     await Process.start('xdg-open', [locator], mode: ProcessStartMode.detached);
   }
+}
+
+/// Show the Windows "Open with" dialog so the user can choose / set the default
+/// program. `OpenAs_RunDLL` needs a real file, so we operate on a temp `.mp4`
+/// (its content doesn't matter — we only want the media-player list and, if the
+/// user ticks "always", the association that streamed playback will then use).
+Future<void> _openWithChooser() async {
+  final dir = await Directory.systemTemp.createTemp('abp_openas_');
+  final sample = File('${dir.path}\\sample.mp4');
+  try {
+    await sample.writeAsBytes(const [0]);
+  } catch (_) {}
+  await Process.start(
+    'rundll32',
+    ['shell32.dll,OpenAs_RunDLL', sample.path],
+    mode: ProcessStartMode.detached,
+  );
+}
+
+/// Open the Windows "Open with" chooser so the user can (re)pick / set the
+/// default program. Exposed for the settings "重选默认程序" action.
+Future<void> openWindowsProgramChooser() async {
+  if (!Platform.isWindows) return;
+  await _openWithChooser();
 }
 
 /// Hand a content:// (or file) URI to an external player via ACTION_VIEW. The

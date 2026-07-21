@@ -2,12 +2,17 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../state/providers.dart';
 
 /// Bangumi's image CDN (lain.bgm.tv) rejects requests without a User-Agent and
 /// serves some URLs over http. This helper normalises the URL and sends the
 /// headers Bangumi expects, so covers actually load. When [url] is a local file
 /// path (covers restored from an SMB snapshot), it's shown from disk instead.
-class CoverImage extends StatelessWidget {
+/// When the Bangumi mirror is enabled, the image host is swapped to the mirror's
+/// (bgmimg.anibt.net) so covers load on mainland networks too.
+class CoverImage extends ConsumerWidget {
   final String? url;
   final BoxFit fit;
   const CoverImage({super.key, required this.url, this.fit = BoxFit.cover});
@@ -17,8 +22,12 @@ class CoverImage extends StatelessWidget {
     'Referer': 'https://bgm.tv/',
   };
 
+  // Bangumi's official image CDN → the bangumi-proxy mirror's image host.
+  static const _officialImgHost = 'lain.bgm.tv';
+  static const _mirrorImgHost = 'bgmimg.anibt.net';
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final raw = url;
     if (raw == null || raw.isEmpty) {
@@ -34,9 +43,16 @@ class CoverImage extends StatelessWidget {
             _fallback(theme, Icons.broken_image_outlined),
       );
     }
-    final fixed = raw.startsWith('http://')
+    var fixed = raw.startsWith('http://')
         ? raw.replaceFirst('http://', 'https://')
         : raw;
+    // Route covers through whichever host matches the mirror setting.
+    final mirror = ref.watch(bangumiMirrorProvider);
+    if (mirror) {
+      fixed = fixed.replaceFirst(_officialImgHost, _mirrorImgHost);
+    } else {
+      fixed = fixed.replaceFirst(_mirrorImgHost, _officialImgHost);
+    }
     return CachedNetworkImage(
       imageUrl: fixed,
       httpHeaders: _headers,

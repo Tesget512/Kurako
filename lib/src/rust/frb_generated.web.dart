@@ -59,6 +59,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
+  DownloadDetail dco_decode_download_detail(dynamic raw);
+
+  @protected
   DownloadEntry dco_decode_download_entry(dynamic raw);
 
   @protected
@@ -87,6 +90,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<BlacklistEntry> dco_decode_list_blacklist_entry(dynamic raw);
+
+  @protected
+  List<DownloadDetail> dco_decode_list_download_detail(dynamic raw);
 
   @protected
   List<DownloadEntry> dco_decode_list_download_entry(dynamic raw);
@@ -180,6 +186,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  DownloadDetail sse_decode_download_detail(SseDeserializer deserializer);
+
+  @protected
   DownloadEntry sse_decode_download_entry(SseDeserializer deserializer);
 
   @protected
@@ -210,6 +219,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<BlacklistEntry> sse_decode_list_blacklist_entry(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<DownloadDetail> sse_decode_list_download_detail(
     SseDeserializer deserializer,
   );
 
@@ -328,6 +342,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_download_detail(
+    DownloadDetail self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_download_entry(DownloadEntry self, SseSerializer serializer);
 
   @protected
@@ -363,6 +383,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_blacklist_entry(
     List<BlacklistEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_download_detail(
+    List<DownloadDetail> self,
     SseSerializer serializer,
   );
 

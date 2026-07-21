@@ -75,6 +75,10 @@ dependencies:
   # Android native picture-in-picture (small window)
   simple_pip_mode: ^1.1.0
 
+  # Desktop frameless window + custom title bar (Windows/macOS/Linux). Used to
+  # drop the native OS title bar and draw our own drag region + window buttons.
+  window_manager: ^0.4.0
+
   rust_lib_anime_bd_player:
     path: rust_builder
 

@@ -20,6 +20,15 @@ class Anime {
   /// Bangumi community score (0-10).
   final double? rating;
 
+  /// Number of votes behind `rating`.
+  final PlatformInt64? ratingTotal;
+
+  /// Site-wide rank ("Bangumi Ranked #N").
+  final PlatformInt64? ratingRank;
+
+  /// Vote histogram "n1,n2,...,n10" (score 1 → 10), for the rating chart.
+  final String? ratingCounts;
+
   /// Broadcast weekday derived from air_date: 1=Mon .. 7=Sun.
   final PlatformInt64? airWeekday;
 
@@ -52,6 +61,9 @@ class Anime {
     this.airDate,
     this.totalEps,
     this.rating,
+    this.ratingTotal,
+    this.ratingRank,
+    this.ratingCounts,
     this.airWeekday,
     this.tags,
     required this.collection,
@@ -74,6 +86,9 @@ class Anime {
       airDate.hashCode ^
       totalEps.hashCode ^
       rating.hashCode ^
+      ratingTotal.hashCode ^
+      ratingRank.hashCode ^
+      ratingCounts.hashCode ^
       airWeekday.hashCode ^
       tags.hashCode ^
       collection.hashCode ^
@@ -98,6 +113,9 @@ class Anime {
           airDate == other.airDate &&
           totalEps == other.totalEps &&
           rating == other.rating &&
+          ratingTotal == other.ratingTotal &&
+          ratingRank == other.ratingRank &&
+          ratingCounts == other.ratingCounts &&
           airWeekday == other.airWeekday &&
           tags == other.tags &&
           collection == other.collection &&
@@ -118,6 +136,11 @@ class BangumiSubject {
   final String? airDate;
   final PlatformInt64? eps;
   final double? rating;
+  final PlatformInt64? ratingTotal;
+  final PlatformInt64? ratingRank;
+
+  /// Vote histogram "n1,n2,...,n10" (score 1 → 10).
+  final String? ratingCounts;
   final List<String> tags;
 
   const BangumiSubject({
@@ -129,6 +152,9 @@ class BangumiSubject {
     this.airDate,
     this.eps,
     this.rating,
+    this.ratingTotal,
+    this.ratingRank,
+    this.ratingCounts,
     required this.tags,
   });
 
@@ -142,6 +168,9 @@ class BangumiSubject {
       airDate.hashCode ^
       eps.hashCode ^
       rating.hashCode ^
+      ratingTotal.hashCode ^
+      ratingRank.hashCode ^
+      ratingCounts.hashCode ^
       tags.hashCode;
 
   @override
@@ -157,6 +186,9 @@ class BangumiSubject {
           airDate == other.airDate &&
           eps == other.eps &&
           rating == other.rating &&
+          ratingTotal == other.ratingTotal &&
+          ratingRank == other.ratingRank &&
+          ratingCounts == other.ratingCounts &&
           tags == other.tags;
 }
 
@@ -188,6 +220,64 @@ class BlacklistEntry {
           kind == other.kind &&
           value == other.value &&
           createdAt == other.createdAt;
+}
+
+/// A download joined with its library episode/anime (LEFT JOIN — the episode
+/// may have been removed from the library, in which case the anime fields are
+/// None and only the raw file info remains).
+class DownloadDetail {
+  final PlatformInt64 id;
+  final String smbUri;
+  final String localPath;
+  final PlatformInt64 bytesTotal;
+  final PlatformInt64 createdAt;
+  final PlatformInt64? animeId;
+  final String? animeTitle;
+  final String? coverUrl;
+  final PlatformInt64? episodeNo;
+  final String fileName;
+
+  const DownloadDetail({
+    required this.id,
+    required this.smbUri,
+    required this.localPath,
+    required this.bytesTotal,
+    required this.createdAt,
+    this.animeId,
+    this.animeTitle,
+    this.coverUrl,
+    this.episodeNo,
+    required this.fileName,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^
+      smbUri.hashCode ^
+      localPath.hashCode ^
+      bytesTotal.hashCode ^
+      createdAt.hashCode ^
+      animeId.hashCode ^
+      animeTitle.hashCode ^
+      coverUrl.hashCode ^
+      episodeNo.hashCode ^
+      fileName.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DownloadDetail &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          smbUri == other.smbUri &&
+          localPath == other.localPath &&
+          bytesTotal == other.bytesTotal &&
+          createdAt == other.createdAt &&
+          animeId == other.animeId &&
+          animeTitle == other.animeTitle &&
+          coverUrl == other.coverUrl &&
+          episodeNo == other.episodeNo &&
+          fileName == other.fileName;
 }
 
 /// A completed SMB→local download, tracked so playback can prefer the local

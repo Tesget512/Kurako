@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
 import '../services/bangumi_oauth.dart';
+import '../services/external_player.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
 import 'blacklist_page.dart';
@@ -132,6 +133,49 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onChanged: (v) =>
                 ref.read(settingsProvider.notifier).setUseExternalPlayer(v),
           ),
+          // Companion actions for the external player (desktop only): pick the
+          // program explicitly (required for SMB streams — http URLs have no
+          // file association), and re-pick the Windows default program if a
+          // wrong one got associated.
+          if (settings.useExternalPlayer && !Platform.isAndroid) ...[
+            ListTile(
+              contentPadding: const EdgeInsets.only(left: 16),
+              leading: const Icon(Icons.smart_display_outlined),
+              title: const Text('选择播放器程序'),
+              subtitle: Text(settings.externalPlayerPath.isEmpty
+                  ? '未选择 — 本地视频用系统默认；SMB 流播放必须在此选择程序'
+                  : settings.externalPlayerPath),
+              trailing: Wrap(
+                children: [
+                  if (settings.externalPlayerPath.isNotEmpty)
+                    IconButton(
+                      tooltip: '清除（改用系统默认）',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        _playerPathController.clear();
+                        ref
+                            .read(settingsProvider.notifier)
+                            .setExternalPlayerPath('');
+                      },
+                    ),
+                  IconButton(
+                    tooltip: '浏览选择 exe',
+                    icon: const Icon(Icons.folder_open),
+                    onPressed: _pickPlayer,
+                  ),
+                ],
+              ),
+            ),
+            if (Platform.isWindows)
+              ListTile(
+                contentPadding: const EdgeInsets.only(left: 16),
+                leading: const Icon(Icons.settings_applications_outlined),
+                title: const Text('重选系统默认程序'),
+                subtitle: const Text('打开 Windows「打开方式」选择器，纠正视频文件被错误程序关联的问题'),
+                trailing: const Icon(Icons.open_in_new, size: 18),
+                onTap: () => openWindowsProgramChooser(),
+              ),
+          ],
           // Touchscreen Windows devices: the desktop hover controls emulate a
           // mouse and are clumsy by touch — offer the mobile touch controls.
           if (Platform.isWindows)
@@ -143,41 +187,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ref.read(touchModePlayerProvider.notifier).set(v),
             ),
           _buildDecodeModeRow(context),
-          // The player-path field only makes sense on desktop; Android picks the
-          // player app via a system intent chooser.
-          if (settings.useExternalPlayer && !Platform.isAndroid)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: TextField(
-                controller: _playerPathController,
-                decoration: InputDecoration(
-                  labelText: '外置播放器路径（留空用系统默认）',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.folder_open),
-                        onPressed: _pickPlayer,
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.save),
-                        onPressed: () {
-                          ref
-                              .read(settingsProvider.notifier)
-                              .setExternalPlayerPath(
-                                _playerPathController.text.trim(),
-                              );
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('已保存播放器路径')),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          _buildSeekDurationRow(context),
           const Divider(height: 32),
           _section(context, '外观'),
           _buildAppearanceSection(context, themeSettings),
@@ -208,6 +218,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             },
           ),
           _buildDownloadDirRow(context),
+          const Divider(height: 32),
+          _section(context, '关于'),
+          const ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.info_outline),
+            title: Text('AnimeBDPlayer'),
+            subtitle: Text('本地番剧库播放器 · Flutter + Rust'),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.favorite_outline),
+            title: const Text('致谢'),
+            subtitle: const Text('详情页设计参考 Kazumi（GPL-3.0）；'
+                '元数据来自 Bangumi 番组计划；镜像由 bangumi-proxy 提供。'),
+            onTap: () => showAboutDialog(
+              context: context,
+              applicationName: 'AnimeBDPlayer',
+              applicationVersion: '1.0.0',
+              children: const [
+                Text('感谢以下开源项目与服务：\n\n'
+                    '• Kazumi — 详情页布局灵感\n'
+                    '• Bangumi 番组计划 — 番剧元数据与评分\n'
+                    '• bangumi-proxy (Yuri-NagaSaki) — 大陆可达镜像\n'
+                    '• media_kit / mpv — 视频播放\n'
+                    '• flutter_rust_bridge — Dart ↔ Rust 桥接'),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -247,9 +285,39 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
+  /// Quick-seek button duration — mirrors the in-player long-press setting so
+  /// it's discoverable here too. Independent of the fixed 10s double-tap seek.
+  Widget _buildSeekDurationRow(BuildContext context) {
+    final secs = ref.watch(seekDurationProvider);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('快进按钮时长：$secs 秒'),
+          const SizedBox(height: 2),
+          Text(
+            '播放器顶部快进按钮跳转的秒数（双击画面固定 10 秒，不受影响）',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+          ),
+          Slider(
+            value: secs.toDouble(),
+            min: 5,
+            max: 90,
+            divisions: 17,
+            label: '$secs 秒',
+            onChanged: (v) =>
+                ref.read(seekDurationProvider.notifier).set(v.round()),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Where SMB downloads are saved. Empty = app data dir / downloads.
-  Widget _buildDownloadDirRow(BuildContext context) {
-    final dir = ref.watch(downloadDirProvider);
+  Widget _buildDownloadDirRow(BuildContext context) {    final dir = ref.watch(downloadDirProvider);
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: const Icon(Icons.folder_outlined),
@@ -433,6 +501,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onPressed: _loggingIn ? null : _syncCollections,
           ),
         ],
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('使用 Bangumi 镜像'),
+          subtitle: const Text('通过大陆可达的镜像访问 Bangumi API 与封面图；'
+              '网络直连正常时可关闭。登录始终走官方域名。'),
+          value: ref.watch(bangumiMirrorProvider),
+          onChanged: (v) {
+            ref.read(bangumiMirrorProvider.notifier).set(v);
+            // Covers already cached under the old host must be re-fetched.
+            ref.invalidate(animeListProvider);
+          },
+        ),
       ],
     );
   }

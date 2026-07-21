@@ -25,6 +25,12 @@ pub struct Anime {
     pub total_eps: Option<i64>,
     /// Bangumi community score (0-10).
     pub rating: Option<f64>,
+    /// Number of votes behind `rating`.
+    pub rating_total: Option<i64>,
+    /// Site-wide rank ("Bangumi Ranked #N").
+    pub rating_rank: Option<i64>,
+    /// Vote histogram "n1,n2,...,n10" (score 1 → 10), for the rating chart.
+    pub rating_counts: Option<String>,
     /// Broadcast weekday derived from air_date: 1=Mon .. 7=Sun.
     pub air_weekday: Option<i64>,
     /// Top Bangumi tags, comma-separated.
@@ -81,6 +87,10 @@ pub struct BangumiSubject {
     pub air_date: Option<String>,
     pub eps: Option<i64>,
     pub rating: Option<f64>,
+    pub rating_total: Option<i64>,
+    pub rating_rank: Option<i64>,
+    /// Vote histogram "n1,n2,...,n10" (score 1 → 10).
+    pub rating_counts: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -118,6 +128,23 @@ pub struct DownloadEntry {
     pub local_path: String,
     pub bytes_total: i64,
     pub created_at: i64,
+}
+
+/// A download joined with its library episode/anime (LEFT JOIN — the episode
+/// may have been removed from the library, in which case the anime fields are
+/// None and only the raw file info remains).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadDetail {
+    pub id: i64,
+    pub smb_uri: String,
+    pub local_path: String,
+    pub bytes_total: i64,
+    pub created_at: i64,
+    pub anime_id: Option<i64>,
+    pub anime_title: Option<String>,
+    pub cover_url: Option<String>,
+    pub episode_no: Option<i64>,
+    pub file_name: String,
 }
 
 /// Progress event streamed back to Dart during a scan.

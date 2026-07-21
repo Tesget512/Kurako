@@ -11,7 +11,7 @@ use crate::models::ScannedFile;
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Mutex;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -382,11 +382,17 @@ fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
 
 // ---- Download to local ----
 
-/// Set when the user cancels an in-flight download; checked between chunks.
-static DOWNLOAD_CANCEL: AtomicBool = AtomicBool::new(false);
+/// URIs whose in-flight download the user cancelled; checked between chunks.
+/// Per-URI so concurrent downloads cancel independently.
+static DOWNLOAD_CANCELLED: Lazy<Mutex<std::collections::HashSet<String>>> =
+    Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 
-pub fn cancel_download() {
-    DOWNLOAD_CANCEL.store(true, Ordering::Relaxed);
+pub fn cancel_download(smb_uri: &str) {
+    DOWNLOAD_CANCELLED.lock().unwrap().insert(smb_uri.to_string());
+}
+
+fn is_cancelled(smb_uri: &str) -> bool {
+    DOWNLOAD_CANCELLED.lock().unwrap().contains(smb_uri)
 }
 
 /// Download an SMB file into `dest_dir`, reporting progress via `progress`.
@@ -397,7 +403,7 @@ pub async fn download(
     dest_dir: &str,
     progress: impl Fn(u64, u64),
 ) -> Result<String> {
-    DOWNLOAD_CANCEL.store(false, Ordering::Relaxed);
+    DOWNLOAD_CANCELLED.lock().unwrap().remove(smb_uri);
     let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
     let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
     let c = creds().context("smb not connected")?;
@@ -417,7 +423,7 @@ pub async fn download(
     const CHUNK: u64 = 1024 * 1024;
     let mut off: u64 = 0;
     while off < total {
-        if DOWNLOAD_CANCEL.load(Ordering::Relaxed) {
+        if is_cancelled(smb_uri) {
             drop(out);
             let _ = tokio::fs::remove_file(&part_path).await;
             let _ = client.disconnect_share(&tree).await;
