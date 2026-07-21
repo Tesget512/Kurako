@@ -642,6 +642,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   MaterialDesktopVideoControlsThemeData _desktopTheme() {
     return MaterialDesktopVideoControlsThemeData(
+      // Hide the mouse cursor when the controls auto-hide (idle over the video).
+      hideMouseOnControlsRemoval: true,
       // Top bar: back + title + secondary-menu buttons (each opens the right
       // drawer) + window buttons. Playback controls live below the seek bar.
       topButtonBar: [
