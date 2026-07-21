@@ -160,6 +160,36 @@ class BangumiSubject {
           tags == other.tags;
 }
 
+/// A user-blocked item. `kind` is "anime" (matches anime.title_raw — whole
+/// group skipped at scan time) or "file" (matches episodes.file_path).
+class BlacklistEntry {
+  final PlatformInt64 id;
+  final String kind;
+  final String value;
+  final PlatformInt64 createdAt;
+
+  const BlacklistEntry({
+    required this.id,
+    required this.kind,
+    required this.value,
+    required this.createdAt,
+  });
+
+  @override
+  int get hashCode =>
+      id.hashCode ^ kind.hashCode ^ value.hashCode ^ createdAt.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is BlacklistEntry &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          kind == other.kind &&
+          value == other.value &&
+          createdAt == other.createdAt;
+}
+
 class Episode {
   final PlatformInt64 id;
   final PlatformInt64 animeId;

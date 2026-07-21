@@ -37,6 +37,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BangumiSubject dco_decode_bangumi_subject(dynamic raw);
 
   @protected
+  BlacklistEntry dco_decode_blacklist_entry(dynamic raw);
+
+  @protected
   bool dco_decode_bool(dynamic raw);
 
   @protected
@@ -68,6 +71,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<BangumiSubject> dco_decode_list_bangumi_subject(dynamic raw);
+
+  @protected
+  List<BlacklistEntry> dco_decode_list_blacklist_entry(dynamic raw);
 
   @protected
   List<Episode> dco_decode_list_episode(dynamic raw);
@@ -129,6 +135,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   BangumiSubject sse_decode_bangumi_subject(SseDeserializer deserializer);
 
   @protected
+  BlacklistEntry sse_decode_blacklist_entry(SseDeserializer deserializer);
+
+  @protected
   bool sse_decode_bool(SseDeserializer deserializer);
 
   @protected
@@ -160,6 +169,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<BangumiSubject> sse_decode_list_bangumi_subject(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<BlacklistEntry> sse_decode_list_blacklist_entry(
     SseDeserializer deserializer,
   );
 
@@ -235,6 +249,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_blacklist_entry(
+    BlacklistEntry self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
@@ -270,6 +290,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_list_bangumi_subject(
     List<BangumiSubject> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_blacklist_entry(
+    List<BlacklistEntry> self,
     SseSerializer serializer,
   );
 

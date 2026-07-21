@@ -311,15 +311,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // Desktop (mouse/keyboard) and mobile (touch) need different control sets:
     // MaterialDesktopVideoControls has hover seek bar + keyboard shortcuts;
     // MaterialVideoControls has the touch gestures (double-tap seek, swipe
-    // volume/brightness, long-press speed). Pick per platform so PC keeps a
-    // full, usable control bar.
+    // volume/brightness, long-press speed). Touch-mode lets touchscreen
+    // desktop devices opt into the touch controls too.
     final isDesktop =
         Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+    final touchMode = ref.watch(touchModePlayerProvider);
+    final useTouchControls = !isDesktop || touchMode;
 
     final video = Video(
       controller: _controller,
       controls:
-          isDesktop ? MaterialDesktopVideoControls : MaterialVideoControls,
+          useTouchControls ? MaterialVideoControls : MaterialDesktopVideoControls,
       subtitleViewConfiguration: const SubtitleViewConfiguration(
         // libass draws subtitles onto the video texture; hide the Flutter
         // overlay to avoid double text.
@@ -327,15 +329,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       ),
     );
 
-    final Widget themed = isDesktop
-        ? MaterialDesktopVideoControlsTheme(
-            normal: _desktopTheme(),
-            fullscreen: _desktopTheme(),
-            child: video,
-          )
-        : MaterialVideoControlsTheme(
+    final Widget themed = useTouchControls
+        ? MaterialVideoControlsTheme(
             normal: _mobileTheme(),
             fullscreen: _mobileTheme(),
+            child: video,
+          )
+        : MaterialDesktopVideoControlsTheme(
+            normal: _desktopTheme(),
+            fullscreen: _desktopTheme(),
             child: video,
           );
 
@@ -343,7 +345,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
     return Theme(
       data: dark,
-      child: Scaffold(backgroundColor: Colors.black, body: themed),
+      // media_kit's controls-theme updateShouldNotify is broken (inverted), so
+      // a mounted controls tree never sees a new themeData. Key the subtree on
+      // the values baked into the theme (seek duration, control set) to force
+      // a clean remount whenever they change — double-tap durations included.
+      child: KeyedSubtree(
+        key: ValueKey('player-controls-$_seekSec-$useTouchControls'),
+        child: Scaffold(backgroundColor: Colors.black, body: themed),
+      ),
     );
   }
 
@@ -367,9 +376,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
         ),
         _desktopRateButton(),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.forward_10),
-          onPressed: _quickSeekForward,
+        // Quick-seek: click jumps forward; right-click or long-press opens the
+        // duration setting (desktop has no double-tap-hold convention).
+        Tooltip(
+          message: '快进 ${_seekSec}s（右键调节时长）',
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _quickSeekForward,
+            onLongPress: _showSeekDurationSheet,
+            onSecondaryTap: _showSeekDurationSheet,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.fast_forward,
+                      color: Colors.white, size: 20),
+                  const SizedBox(width: 2),
+                  Consumer(
+                    builder: (context, ref, _) {
+                      final s = ref.watch(seekDurationProvider);
+                      return Text('${s}s',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 11));
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
         MaterialDesktopCustomButton(
           icon: const Icon(Icons.subtitles_outlined),
@@ -425,16 +460,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       speedUpFactor: 2.0,
       seekOnDoubleTapBackwardDuration: Duration(seconds: _seekSec),
       seekOnDoubleTapForwardDuration: Duration(seconds: _seekSec),
-      // MD3 seek bar: theme-colored, thicker, and lifted off the very bottom
-      // edge so it's not easily mis-tapped (VLC-style). Extra height + a bigger
-      // thumb make it a comfortable touch target.
+      // MD3 seek bar: theme-colored, thicker, bigger thumb. Lifted fully above
+      // the bottom button row (bottom:56 > buttonBarHeight) — same layout as
+      // the desktop controls — so it can't be mis-tapped at the screen edge.
       seekBarThumbColor: _cs.primary,
       seekBarColor: Colors.white24,
       seekBarPositionColor: _cs.primary,
       seekBarBufferColor: Colors.white38,
       seekBarHeight: 4.2,
       seekBarThumbSize: 13,
-      seekBarMargin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      seekBarMargin: const EdgeInsets.only(left: 16, right: 16, bottom: 56),
       bottomButtonBarMargin:
           const EdgeInsets.only(left: 16, right: 16, bottom: 8),
       // Top bar: back + title + quick-seek + rate + tracks + subtitle-delay.

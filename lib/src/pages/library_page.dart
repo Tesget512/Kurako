@@ -7,6 +7,7 @@ import '../state/anime_sort.dart';
 import '../state/providers.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scan_progress_sheet.dart';
+import 'blacklist_page.dart';
 import 'detail_page.dart';
 
 class LibraryPage extends ConsumerWidget {
@@ -92,10 +93,11 @@ class LibraryPage extends ConsumerWidget {
           }
           if (!grouping || sort == LibrarySort.normal) {
             final sorted = sortAnime(list, sort, pinCollected: pinCollected);
-            return _grid(context, sorted);
+            return _grid(context, ref, sorted);
           }
           return _groupedGrid(
             context,
+            ref,
             groupAnime(list, sort, pinCollected: pinCollected),
           );
         },
@@ -140,7 +142,7 @@ class LibraryPage extends ConsumerWidget {
     );
   }
 
-  Widget _grid(BuildContext context, List<Anime> list) {
+  Widget _grid(BuildContext context, WidgetRef ref, List<Anime> list) {
     return GridView.builder(
       padding: const EdgeInsets.all(16),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -150,11 +152,12 @@ class LibraryPage extends ConsumerWidget {
         mainAxisSpacing: 16,
       ),
       itemCount: list.length,
-      itemBuilder: (context, i) => _card(context, list[i]),
+      itemBuilder: (context, i) => _card(context, ref, list[i]),
     );
   }
 
-  Widget _groupedGrid(BuildContext context, List<AnimeSection> sections) {
+  Widget _groupedGrid(
+      BuildContext context, WidgetRef ref, List<AnimeSection> sections) {
     return CustomScrollView(
       slivers: [
         for (final section in sections) ...[
@@ -188,7 +191,7 @@ class LibraryPage extends ConsumerWidget {
                 mainAxisSpacing: 16,
               ),
               delegate: SliverChildBuilderDelegate(
-                (context, i) => _card(context, section.items[i]),
+                (context, i) => _card(context, ref, section.items[i]),
                 childCount: section.items.length,
               ),
             ),
@@ -199,14 +202,54 @@ class LibraryPage extends ConsumerWidget {
     );
   }
 
-  Widget _card(BuildContext context, Anime anime) {
-    return AnimeCard(
-      anime: anime,
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => DetailPage(animeId: anime.id)),
-        );
-      },
+  Widget _card(BuildContext context, WidgetRef ref, Anime anime) {
+    // Long-press (touch) or right-click (desktop) opens the block menu.
+    return GestureDetector(
+      onLongPressStart: (d) =>
+          _showBlockMenu(context, ref, anime, d.globalPosition),
+      onSecondaryTapDown: (d) =>
+          _showBlockMenu(context, ref, anime, d.globalPosition),
+      child: AnimeCard(
+        anime: anime,
+        onTap: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => DetailPage(animeId: anime.id)),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showBlockMenu(BuildContext context, WidgetRef ref, Anime anime,
+      Offset position) async {
+    final overlay =
+        Overlay.of(context).context.findRenderObject() as RenderBox;
+    final choice = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        position.dx,
+        position.dy,
+        overlay.size.width - position.dx,
+        overlay.size.height - position.dy,
+      ),
+      items: const [
+        PopupMenuItem(
+          value: 'block',
+          child: ListTile(
+            leading: Icon(Icons.block_outlined),
+            title: Text('屏蔽该番剧'),
+            contentPadding: EdgeInsets.zero,
+          ),
+        ),
+      ],
+    );
+    if (choice != 'block' || !context.mounted) return;
+    await confirmAndBlacklist(
+      context,
+      ref,
+      kind: 'anime',
+      value: anime.titleRaw,
+      displayName: animeDisplayName(anime),
     );
   }
 

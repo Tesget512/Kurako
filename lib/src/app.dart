@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,11 +14,13 @@ class AnimeBdApp extends ConsumerWidget {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      // Use Android's predictive-back animation for page transitions so the
-      // system back gesture (Android 14+) is smooth instead of janky.
+      // FadeForwards (M3 spec) instead of PredictiveBack: predictive-back
+      // transforms the whole live route every frame and janks on heavy pages;
+      // this fade/slide is cheap and still plays nicely with the system back
+      // gesture on Android.
       pageTransitionsTheme: const PageTransitionsTheme(
         builders: {
-          TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+          TargetPlatform.android: FadeForwardsPageTransitionsBuilder(),
         },
       ),
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
@@ -29,22 +33,27 @@ class AnimeBdApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = ref.watch(themeProvider);
+    final scalePercent = ref.watch(uiScaleProvider);
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
-        // Follow-system Monet only when enabled AND the platform actually
-        // supplies a dynamic palette (Android 12+). Otherwise fall back to the
-        // chosen preset seed — this is the desktop path too, where the dynamic
-        // schemes are always null.
-        final useDynamic =
-            theme.followSystem && lightDynamic != null && darkDynamic != null;
-        final ColorScheme light = useDynamic
-            ? lightDynamic.harmonized()
-            : ColorScheme.fromSeed(
-                seedColor: theme.seedColor, brightness: Brightness.light);
-        final ColorScheme dark = useDynamic
-            ? darkDynamic.harmonized()
-            : ColorScheme.fromSeed(
-                seedColor: theme.seedColor, brightness: Brightness.dark);
+        // Follow-system (Monet) is an Android-only concept here. dynamic_color
+        // also returns a scheme on Windows/macOS (the system accent color),
+        // which would silently override the user's chosen preset — so gate on
+        // Android explicitly.
+        final useDynamic = theme.followSystem &&
+            Platform.isAndroid &&
+            lightDynamic != null &&
+            darkDynamic != null;
+        // Don't use the dynamic schemes directly: CorePalette.toColorScheme()
+        // leaves the new MD3 surfaceContainer* roles unset, so chips/cards lose
+        // their背景 tint. Re-seed from the Monet primary instead — keeps the
+        // wallpaper hue, fills every role.
+        final Color seed =
+            useDynamic ? lightDynamic.primary : theme.seedColor;
+        final light =
+            ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light);
+        final dark =
+            ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
         return MaterialApp(
           title: '动画仓库',
           debugShowCheckedModeBanner: false,
@@ -52,6 +61,27 @@ class AnimeBdApp extends ConsumerWidget {
           darkTheme: _theme(dark),
           themeMode: ThemeMode.system,
           home: const HomePage(),
+          builder: (context, child) {
+            if (scalePercent == 100 || child == null) return child!;
+            // UI scale: render at logical size / f then scale up — vector
+            // rendering keeps text crisp at any percentage.
+            final f = scalePercent / 100.0;
+            final mq = MediaQuery.of(context);
+            return FractionallySizedBox(
+              widthFactor: 1 / f,
+              heightFactor: 1 / f,
+              child: Transform.scale(
+                scale: f,
+                child: MediaQuery(
+                  data: mq.copyWith(
+                    size: mq.size / f,
+                    devicePixelRatio: mq.devicePixelRatio * f,
+                  ),
+                  child: child,
+                ),
+              ),
+            );
+          },
         );
       },
     );

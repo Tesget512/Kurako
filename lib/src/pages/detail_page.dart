@@ -7,6 +7,7 @@ import '../state/providers.dart';
 import '../services/external_player.dart';
 import '../widgets/cover_header.dart';
 import '../widgets/match_correction_dialog.dart';
+import 'blacklist_page.dart';
 import 'player_page.dart';
 
 class DetailPage extends ConsumerStatefulWidget {
@@ -104,6 +105,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                 data: (episodes) => _EpisodeList(
                   episodes: episodes,
                   onPlay: (e) => _play(context, ref, e),
+                  onBlocked: () {
+                    ref.invalidate(episodesProvider(widget.animeId));
+                    ref.invalidate(animeDetailProvider(widget.animeId));
+                  },
                 ),
               ),
               const SizedBox(height: 24),
@@ -301,8 +306,13 @@ class _CollectionRow extends StatelessWidget {
 class _EpisodeList extends StatelessWidget {
   final List<Episode> episodes;
   final void Function(Episode) onPlay;
+  final VoidCallback onBlocked;
 
-  const _EpisodeList({required this.episodes, required this.onPlay});
+  const _EpisodeList({
+    required this.episodes,
+    required this.onPlay,
+    required this.onBlocked,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -322,13 +332,17 @@ class _EpisodeList extends StatelessWidget {
     }
     final sources = bySource.keys.toList()..sort();
 
+    Widget tile(Episode e) => _EpisodeTile(
+          episode: e,
+          onPlay: () => onPlay(e),
+          onBlocked: onBlocked,
+        );
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (bySource.length <= 1)
-          ...numbered.map(
-            (e) => _EpisodeTile(episode: e, onPlay: () => onPlay(e)),
-          )
+          ...numbered.map(tile)
         else
           for (final s in sources) ...[
             _sectionHeader(
@@ -336,8 +350,7 @@ class _EpisodeList extends StatelessWidget {
               Icons.source_outlined,
               '$s · ${bySource[s]!.length} 个文件',
             ),
-            for (final e in bySource[s]!)
-              _EpisodeTile(episode: e, onPlay: () => onPlay(e)),
+            for (final e in bySource[s]!) tile(e),
           ],
         if (specials.isNotEmpty) ...[
           _sectionHeader(
@@ -345,8 +358,7 @@ class _EpisodeList extends StatelessWidget {
             Icons.auto_awesome_outlined,
             '番外 / 特典 · ${specials.length} 个文件',
           ),
-          for (final e in specials)
-            _EpisodeTile(episode: e, onPlay: () => onPlay(e)),
+          for (final e in specials) tile(e),
         ],
       ],
     );
@@ -371,14 +383,20 @@ class _EpisodeList extends StatelessWidget {
   }
 }
 
-class _EpisodeTile extends StatelessWidget {
+class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
   final VoidCallback onPlay;
+  /// Invalidate the parent's episode list after this file is blocked.
+  final VoidCallback onBlocked;
 
-  const _EpisodeTile({required this.episode, required this.onPlay});
+  const _EpisodeTile({
+    required this.episode,
+    required this.onPlay,
+    required this.onBlocked,
+  });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
     final resumed = episode.lastPositionMs > 0 && !episode.watched
         ? '（可续播）'
@@ -406,6 +424,19 @@ class _EpisodeTile extends StatelessWidget {
         ],
       ),
       onTap: onPlay,
+      // Long-press (touch) / right-click (desktop): block this video file.
+      onLongPress: () => _block(context, ref),
     );
+  }
+
+  Future<void> _block(BuildContext context, WidgetRef ref) async {
+    final blocked = await confirmAndBlacklist(
+      context,
+      ref,
+      kind: 'file',
+      value: episode.filePath,
+      displayName: episode.fileName,
+    );
+    if (blocked) onBlocked();
   }
 }

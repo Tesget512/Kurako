@@ -50,6 +50,12 @@ pub fn init(db_path: &str) -> Result<()> {
             duration_ms      INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(anime_id) REFERENCES anime(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS blacklist (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind       TEXT NOT NULL,
+            value      TEXT NOT NULL UNIQUE,
+            created_at INTEGER NOT NULL
+        );
         "#,
     )?;
     // Migrate databases created before these columns existed; the error on an
@@ -423,5 +429,75 @@ pub fn clear_all() -> Result<()> {
             "DELETE FROM episodes; DELETE FROM anime; UPDATE library_folders SET last_scanned = NULL;",
         )?;
         Ok(())
+    })
+}
+
+// ---- Blacklist (user-blocked anime titles / video file paths) ----
+
+use crate::models::BlacklistEntry;
+
+/// Block an item and immediately remove any matching rows from the library.
+/// kind "anime": value = anime.title_raw (episodes cascade via anime delete).
+/// kind "file":  value = episodes.file_path (anime left in place; it just
+/// loses that file — a later rescan won't bring it back).
+pub fn add_blacklist(kind: &str, value: &str, now: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "INSERT OR IGNORE INTO blacklist(kind, value, created_at) VALUES (?1, ?2, ?3)",
+            params![kind, value, now],
+        )?;
+        match kind {
+            "anime" => {
+                // No ON DELETE CASCADE enforcement without PRAGMA foreign_keys;
+                // delete episodes explicitly first.
+                c.execute(
+                    "DELETE FROM episodes WHERE anime_id IN (SELECT id FROM anime WHERE title_raw = ?1)",
+                    params![value],
+                )?;
+                c.execute("DELETE FROM anime WHERE title_raw = ?1", params![value])?;
+            }
+            "file" => {
+                c.execute("DELETE FROM episodes WHERE file_path = ?1", params![value])?;
+            }
+            _ => anyhow::bail!("unknown blacklist kind: {kind}"),
+        }
+        Ok(())
+    })
+}
+
+pub fn list_blacklist() -> Result<Vec<BlacklistEntry>> {
+    with_conn(|c| {
+        let mut stmt = c.prepare(
+            "SELECT id, kind, value, created_at FROM blacklist ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(BlacklistEntry {
+                    id: r.get(0)?,
+                    kind: r.get(1)?,
+                    value: r.get(2)?,
+                    created_at: r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    })
+}
+
+pub fn remove_blacklist(id: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute("DELETE FROM blacklist WHERE id = ?1", params![id])?;
+        Ok(())
+    })
+}
+
+/// Blocked values by kind, for the scanner's filter pass.
+pub fn blacklist_values(kind: &str) -> Result<std::collections::HashSet<String>> {
+    with_conn(|c| {
+        let mut stmt = c.prepare("SELECT value FROM blacklist WHERE kind = ?1")?;
+        let rows = stmt
+            .query_map(params![kind], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+        Ok(rows)
     })
 }

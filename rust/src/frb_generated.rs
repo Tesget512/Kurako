@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -219256208;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 410046991;
 
 // Section: executor
 
@@ -46,6 +46,40 @@ flutter_rust_bridge::frb_generated_default_handler!();
 
 // Section: wire_funcs
 
+fn wire__crate__api__add_blacklist_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "add_blacklist",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_kind = <String>::sse_decode(&mut deserializer);
+            let api_value = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::add_blacklist(api_kind, api_value)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__add_library_folder_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -311,6 +345,38 @@ fn wire__crate__api__list_anime_impl(
         },
     )
 }
+fn wire__crate__api__list_blacklist_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "list_blacklist",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::list_blacklist()?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__list_episodes_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -533,6 +599,39 @@ fn wire__crate__api__refresh_metadata_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::refresh_metadata(api_anime_id)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__remove_blacklist_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "remove_blacklist",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_id = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::remove_blacklist(api_id)?;
                     Ok(output_ok)
                 })())
             }
@@ -1172,6 +1271,22 @@ impl SseDecode for crate::models::BangumiSubject {
     }
 }
 
+impl SseDecode for crate::models::BlacklistEntry {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_id = <i64>::sse_decode(deserializer);
+        let mut var_kind = <String>::sse_decode(deserializer);
+        let mut var_value = <String>::sse_decode(deserializer);
+        let mut var_createdAt = <i64>::sse_decode(deserializer);
+        return crate::models::BlacklistEntry {
+            id: var_id,
+            kind: var_kind,
+            value: var_value,
+            created_at: var_createdAt,
+        };
+    }
+}
+
 impl SseDecode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1274,6 +1389,18 @@ impl SseDecode for Vec<crate::models::BangumiSubject> {
         let mut ans_ = Vec::with_capacity(len_ as usize);
         for idx_ in 0..len_ {
             ans_.push(<crate::models::BangumiSubject>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<crate::models::BlacklistEntry> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::models::BlacklistEntry>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -1452,36 +1579,39 @@ fn pde_ffi_dispatcher_primary_impl(
 ) {
     // Codec=Pde (Serialization + dispatch), see doc to use other codecs
     match func_id {
-        1 => wire__crate__api__add_library_folder_impl(port, ptr, rust_vec_len, data_len),
-        2 => wire__crate__api__bind_anime_impl(port, ptr, rust_vec_len, data_len),
-        3 => wire__crate__api__clear_collection_impl(port, ptr, rust_vec_len, data_len),
-        4 => wire__crate__api__clear_library_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__get_anime_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__init_db_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__list_anime_impl(port, ptr, rust_vec_len, data_len),
-        9 => wire__crate__api__list_episodes_impl(port, ptr, rust_vec_len, data_len),
-        10 => wire__crate__api__list_library_folders_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__oauth_authorize_url_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__oauth_exchange_code_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__oauth_redirect_uri_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__oauth_refresh_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__refresh_metadata_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__remove_library_folder_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__scan_and_match_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__scan_files_and_match_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
+        1 => wire__crate__api__add_blacklist_impl(port, ptr, rust_vec_len, data_len),
+        2 => wire__crate__api__add_library_folder_impl(port, ptr, rust_vec_len, data_len),
+        3 => wire__crate__api__bind_anime_impl(port, ptr, rust_vec_len, data_len),
+        4 => wire__crate__api__clear_collection_impl(port, ptr, rust_vec_len, data_len),
+        5 => wire__crate__api__clear_library_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__get_anime_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__init_db_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__list_anime_impl(port, ptr, rust_vec_len, data_len),
+        10 => wire__crate__api__list_blacklist_impl(port, ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__list_episodes_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__list_library_folders_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__oauth_authorize_url_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__oauth_exchange_code_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__oauth_redirect_uri_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__oauth_refresh_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__refresh_metadata_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__remove_blacklist_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__remove_library_folder_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__scan_and_match_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__scan_files_and_match_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1554,6 +1684,26 @@ impl flutter_rust_bridge::IntoIntoDart<crate::models::BangumiSubject>
     for crate::models::BangumiSubject
 {
     fn into_into_dart(self) -> crate::models::BangumiSubject {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::models::BlacklistEntry {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.id.into_into_dart().into_dart(),
+            self.kind.into_into_dart().into_dart(),
+            self.value.into_into_dart().into_dart(),
+            self.created_at.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::models::BlacklistEntry {}
+impl flutter_rust_bridge::IntoIntoDart<crate::models::BlacklistEntry>
+    for crate::models::BlacklistEntry
+{
+    fn into_into_dart(self) -> crate::models::BlacklistEntry {
         self
     }
 }
@@ -1722,6 +1872,16 @@ impl SseEncode for crate::models::BangumiSubject {
     }
 }
 
+impl SseEncode for crate::models::BlacklistEntry {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i64>::sse_encode(self.id, serializer);
+        <String>::sse_encode(self.kind, serializer);
+        <String>::sse_encode(self.value, serializer);
+        <i64>::sse_encode(self.created_at, serializer);
+    }
+}
+
 impl SseEncode for bool {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -1798,6 +1958,16 @@ impl SseEncode for Vec<crate::models::BangumiSubject> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::models::BangumiSubject>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::models::BlacklistEntry> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::models::BlacklistEntry>::sse_encode(item, serializer);
         }
     }
 }

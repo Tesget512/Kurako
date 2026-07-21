@@ -197,6 +197,23 @@ final seekDurationProvider =
       defaultValue: 10, min: 5, max: 90);
 });
 
+// ---- UI scale (percent of the adaptive default size), persisted ----
+
+/// Interface scale percentage. 100 = adaptive default; scaled via
+/// MaterialApp.builder so vector rendering stays crisp. Clamped to 75..150.
+final uiScaleProvider = StateNotifierProvider<_IntPrefNotifier, int>((ref) {
+  return _IntPrefNotifier('ui_scale_percent',
+      defaultValue: 100, min: 75, max: 150);
+});
+
+/// Desktop-only: use the touch-gesture player controls (double-tap seek, swipe
+/// volume/brightness) instead of the mouse-hover desktop controls. For
+/// touchscreen Windows devices where mouse emulation is clumsy. Persisted.
+final touchModePlayerProvider =
+    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+  return _BoolPrefNotifier('touch_mode_player', defaultValue: false);
+});
+
 // ---- SMB credentials (persisted; pushed into the Rust smb client) ----
 
 class SmbCredentials {

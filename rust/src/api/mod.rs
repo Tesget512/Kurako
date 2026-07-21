@@ -1,4 +1,4 @@
-use crate::models::{Anime, BangumiSubject, Episode, LibraryFolder, ScanProgress};
+use crate::models::{Anime, BangumiSubject, BlacklistEntry, Episode, LibraryFolder, ScanProgress};
 use crate::{bangumi, db, scan, smb};
 use crate::frb_generated::StreamSink;
 use flutter_rust_bridge::frb;
@@ -285,6 +285,21 @@ fn finish_scan(
         });
     };
 
+    // Drop blacklisted items before touching the DB: whole groups blocked by
+    // title, individual files blocked by path. Blocked entries thus never
+    // reappear on rescan.
+    let blocked_titles = db::blacklist_values("anime").map_err(|e| e.to_string())?;
+    let blocked_files = db::blacklist_values("file").map_err(|e| e.to_string())?;
+    let groups: Vec<scan::AnimeGroup> = groups
+        .into_iter()
+        .filter(|g| !blocked_titles.contains(&g.title))
+        .map(|mut g| {
+            g.files.retain(|f| !blocked_files.contains(&f.path));
+            g
+        })
+        .filter(|g| !g.files.is_empty())
+        .collect();
+
     let total = groups.len() as i64;
     for (i, g) in groups.iter().enumerate() {
         let anime_id = db::upsert_anime(&g.group_key, &g.title).map_err(|e| e.to_string())?;
@@ -503,6 +518,24 @@ pub fn refresh_metadata(anime_id: i64) -> Result<(), String> {
 /// a fresh scan to rebuild the library from scratch.
 pub fn clear_library() -> Result<(), String> {
     db::clear_all().map_err(|e| e.to_string())
+}
+
+// ---- Blacklist ----
+
+/// Block an anime (kind "anime", value = title_raw) or a single video file
+/// (kind "file", value = file_path). Matching library rows are removed
+/// immediately and the scanner skips blocked items on every future scan.
+pub fn add_blacklist(kind: String, value: String) -> Result<(), String> {
+    db::add_blacklist(&kind, &value, now_secs()).map_err(|e| e.to_string())
+}
+
+pub fn list_blacklist() -> Result<Vec<BlacklistEntry>, String> {
+    db::list_blacklist().map_err(|e| e.to_string())
+}
+
+/// Unblock an entry. The item reappears after the next rescan.
+pub fn remove_blacklist(id: i64) -> Result<(), String> {
+    db::remove_blacklist(id).map_err(|e| e.to_string())
 }
 
 // ---- Manual correction ----

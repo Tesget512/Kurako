@@ -8,6 +8,7 @@ import '../rust/api.dart' as rust;
 import '../services/bangumi_oauth.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
+import 'blacklist_page.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -130,6 +131,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onChanged: (v) =>
                 ref.read(settingsProvider.notifier).setUseExternalPlayer(v),
           ),
+          // Touchscreen Windows devices: the desktop hover controls emulate a
+          // mouse and are clumsy by touch — offer the mobile touch controls.
+          if (Platform.isWindows)
+            SwitchListTile(
+              title: const Text('播放器触屏控制模式'),
+              subtitle: const Text('为触屏设备启用触摸手势控件（双击快进、滑动调节音量/亮度）'),
+              value: ref.watch(touchModePlayerProvider),
+              onChanged: (v) =>
+                  ref.read(touchModePlayerProvider.notifier).set(v),
+            ),
           // The player-path field only makes sense on desktop; Android picks the
           // player app via a system intent chooser.
           if (settings.useExternalPlayer && !Platform.isAndroid)
@@ -168,6 +179,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const Divider(height: 32),
           _section(context, '外观'),
           _buildAppearanceSection(context, themeSettings),
+          const Divider(height: 32),
+          _section(context, '维护'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.block_outlined),
+            title: const Text('屏蔽管理'),
+            subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const BlacklistPage()),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -207,6 +232,42 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ],
             ),
           ),
+        ),
+        const SizedBox(height: 16),
+        _buildUiScaleRow(context),
+      ],
+    );
+  }
+
+  Widget _buildUiScaleRow(BuildContext context) {
+    final scale = ref.watch(uiScaleProvider);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '界面缩放：$scale%${scale == 100 ? '（自适应）' : ''}',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ),
+            if (scale != 100)
+              TextButton(
+                onPressed: () =>
+                    ref.read(uiScaleProvider.notifier).set(100),
+                child: const Text('重置'),
+              ),
+          ],
+        ),
+        Slider(
+          value: scale.toDouble(),
+          min: 75,
+          max: 150,
+          divisions: 15, // steps of 5
+          label: '$scale%',
+          onChanged: (v) =>
+              ref.read(uiScaleProvider.notifier).set(v.round()),
         ),
       ],
     );

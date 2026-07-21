@@ -84,6 +84,16 @@ pub struct BangumiSubject {
     pub tags: Vec<String>,
 }
 
+/// A user-blocked item. `kind` is "anime" (matches anime.title_raw — whole
+/// group skipped at scan time) or "file" (matches episodes.file_path).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlacklistEntry {
+    pub id: i64,
+    pub kind: String,
+    pub value: String,
+    pub created_at: i64,
+}
+
 /// Progress event streamed back to Dart during a scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgress {

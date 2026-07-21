@@ -179,6 +179,19 @@ Future<void> refreshMetadata({required PlatformInt64 animeId}) =>
 /// a fresh scan to rebuild the library from scratch.
 Future<void> clearLibrary() => RustLib.instance.api.crateApiClearLibrary();
 
+/// Block an anime (kind "anime", value = title_raw) or a single video file
+/// (kind "file", value = file_path). Matching library rows are removed
+/// immediately and the scanner skips blocked items on every future scan.
+Future<void> addBlacklist({required String kind, required String value}) =>
+    RustLib.instance.api.crateApiAddBlacklist(kind: kind, value: value);
+
+Future<List<BlacklistEntry>> listBlacklist() =>
+    RustLib.instance.api.crateApiListBlacklist();
+
+/// Unblock an entry. The item reappears after the next rescan.
+Future<void> removeBlacklist({required PlatformInt64 id}) =>
+    RustLib.instance.api.crateApiRemoveBlacklist(id: id);
+
 /// Search Bangumi for candidates to show in the correction dialog.
 Future<List<BangumiSubject>> searchBangumi({required String keyword}) =>
     RustLib.instance.api.crateApiSearchBangumi(keyword: keyword);
