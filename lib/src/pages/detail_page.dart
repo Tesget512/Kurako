@@ -14,6 +14,12 @@ import '../widgets/window_caption.dart';
 import 'blacklist_page.dart';
 import 'player_page.dart';
 
+/// Anime IDs whose Bangumi metadata has already been auto-refreshed during this
+/// app run. Lives at module scope so it survives page opens/closes but resets
+/// on restart — each subject refreshes at most once per launch, not once per
+/// visit, which would hammer the API when browsing back and forth.
+final Set<int> _autoRefreshedThisRun = <int>{};
+
 class DetailPage extends ConsumerStatefulWidget {
   final int animeId;
   const DetailPage({super.key, required this.animeId});
@@ -35,16 +41,21 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     _autoRefreshMetadata();
   }
 
-  /// Silently re-fetch Bangumi metadata every time the page opens, so ratings/
-  /// summary/tags/episode titles stay current without the user having to hit
-  /// the manual refresh button. Doesn't toggle [_refreshing] (no spinner) —
-  /// only a toast once it's actually done. Failures are swallowed; the manual
-  /// button is still there for the user to retry with visible errors.
+  /// Silently re-fetch Bangumi metadata once per app run per subject, so
+  /// ratings/summary/tags/episode titles stay current without the user having
+  /// to hit the manual refresh button — and without re-hitting the API every
+  /// time they reopen the same anime. Doesn't toggle [_refreshing] (no
+  /// spinner); only a toast once it's done. Failures are swallowed (the manual
+  /// button still surfaces errors); the manual button always refetches.
   Future<void> _autoRefreshMetadata() async {
+    if (_autoRefreshedThisRun.contains(widget.animeId)) return;
     try {
       final anime =
           await ref.read(animeDetailProvider(widget.animeId).future);
       if (anime == null || anime.bangumiId == null) return;
+      // Mark only once we know it's a refreshable (matched) subject, so an
+      // early return above doesn't burn the one-shot for a not-yet-matched one.
+      _autoRefreshedThisRun.add(widget.animeId);
       await rust.refreshMetadata(animeId: widget.animeId);
       if (!mounted) return;
       ref.invalidate(animeDetailProvider(widget.animeId));
@@ -54,7 +65,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         const SnackBar(content: Text('已自动更新 Bangumi 元数据')),
       );
     } catch (_) {
-      // Background convenience refresh — stay quiet on failure.
+      // Background convenience refresh — stay quiet on failure, and allow a
+      // retry on the next open since the fetch didn't actually succeed.
+      _autoRefreshedThisRun.remove(widget.animeId);
     }
   }
 

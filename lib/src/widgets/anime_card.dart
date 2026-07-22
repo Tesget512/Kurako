@@ -118,6 +118,12 @@ class AnimeCard extends StatelessWidget {
   }
 
   Widget _cover(ThemeData theme) {
-    return CoverImage(url: anime.coverUrl);
+    // Grid cards are ~200 logical px wide, so decode the cover down to a
+    // display-appropriate size instead of Bangumi's full ~1000px original.
+    // Full-res decodes are the main driver of the library's memory growth —
+    // dozens of covers at ~5.6MB decoded each fills the image cache and GPU
+    // texture pool fast. 400 physical px keeps it crisp on hi-DPI while
+    // cutting per-cover memory ~6×.
+    return CoverImage(url: anime.coverUrl, cacheWidth: 400);
   }
 }

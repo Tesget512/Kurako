@@ -150,7 +150,10 @@ class _HeaderCard extends StatelessWidget {
               child: SizedBox(
                 width: coverW,
                 height: coverH,
-                child: CoverImage(url: anime.coverUrl),
+                // Decode to ~2× the display width (crisp on hi-DPI) rather
+                // than Bangumi's full-res original — keeps each detail-page
+                // visit from adding a multi-MB full decode to the cache.
+                child: CoverImage(url: anime.coverUrl, cacheWidth: 400),
               ),
             ),
             SizedBox(width: narrow ? 12 : 16),

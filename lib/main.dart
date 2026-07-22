@@ -18,6 +18,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
 
+  // Cap the decoded-image cache. Covers are downsampled at the widget level
+  // (see CoverImage cacheWidth), but a hard byte ceiling is a cheap backstop so
+  // browsing a large library / bouncing between detail pages can't let the
+  // cache grow unbounded. 96MB comfortably holds a screenful of downsampled
+  // covers while evicting the long tail.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 96 << 20;
+
   await RustLib.init();
 
   // Desktop: drop the native OS title bar and manage the window ourselves
