@@ -1,3 +1,5 @@
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -654,6 +656,9 @@ class _EpisodeTile extends ConsumerWidget {
       } catch (_) {}
     }
     if (!context.mounted) return;
+    // Neither SMB nor SAF sources have a real filesystem path to hand the
+    // desktop file manager or an Android chooser — only plain "local".
+    final isPlainLocal = episode.sourceType == 'local';
     final action = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
@@ -677,6 +682,24 @@ class _EpisodeTile extends ConsumerWidget {
             title: Text('用外部播放器播放'),
           ),
         ),
+        if (isPlainLocal && !Platform.isAndroid && !Platform.isIOS)
+          const PopupMenuItem(
+            value: 'reveal',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.folder_open_outlined),
+              title: Text('在文件管理器中显示'),
+            ),
+          ),
+        if (isPlainLocal && Platform.isAndroid)
+          const PopupMenuItem(
+            value: 'choose_app',
+            child: ListTile(
+              dense: true,
+              leading: Icon(Icons.apps_outlined),
+              title: Text('选择打开方式'),
+            ),
+          ),
         if (isSmb && localCopy == null)
           const PopupMenuItem(
             value: 'download',
@@ -712,6 +735,10 @@ class _EpisodeTile extends ConsumerWidget {
         onPlayWith(false);
       case 'external':
         onPlayWith(true);
+      case 'reveal':
+        await revealInFileManager(episode.filePath);
+      case 'choose_app':
+        await chooseAndroidApp(episode.filePath);
       case 'download':
         onDownload();
       case 'delete_copy':

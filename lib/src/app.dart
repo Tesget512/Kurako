@@ -10,7 +10,7 @@ import 'state/providers.dart';
 class AnimeBdApp extends ConsumerWidget {
   const AnimeBdApp({super.key});
 
-  ThemeData _theme(ColorScheme scheme) {
+  ThemeData _theme(ColorScheme scheme, {required bool systemFont}) {
     return ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
@@ -24,9 +24,11 @@ class AnimeBdApp extends ConsumerWidget {
         },
       ),
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
-      // instead of the system fallback chain.
-      fontFamily: 'LXGWWenKaiGBScreen',
-      fontFamilyFallback: const ['Microsoft YaHei UI', 'Segoe UI'],
+      // instead of the system fallback chain. When the user opts into the
+      // system font, pass null so Flutter uses the platform default.
+      fontFamily: systemFont ? null : 'LXGWWenKaiGBScreen',
+      fontFamilyFallback:
+          systemFont ? null : const ['Microsoft YaHei UI', 'Segoe UI'],
     );
   }
 
@@ -34,6 +36,7 @@ class AnimeBdApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = ref.watch(themeProvider);
     final scalePercent = ref.watch(uiScaleProvider);
+    final systemFont = ref.watch(useSystemFontProvider);
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
         // Follow-system (Monet) is an Android-only concept here. dynamic_color
@@ -57,8 +60,8 @@ class AnimeBdApp extends ConsumerWidget {
         return MaterialApp(
           title: 'KURAKO',
           debugShowCheckedModeBanner: false,
-          theme: _theme(light),
-          darkTheme: _theme(dark),
+          theme: _theme(light, systemFont: systemFont),
+          darkTheme: _theme(dark, systemFont: systemFont),
           themeMode: ThemeMode.system,
           home: const HomePage(),
           builder: (context, child) {

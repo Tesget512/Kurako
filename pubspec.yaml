@@ -79,6 +79,13 @@ dependencies:
   # drop the native OS title bar and draw our own drag region + window buttons.
   window_manager: ^0.4.0
 
+  # Monitor work-area query (screen minus taskbar) — lets the Windows "fake
+  # maximize" workaround in window_caption.dart size the window exactly,
+  # instead of using the real SW_MAXIMIZE that leaves a black gap on frameless
+  # windows. Already pulled transitively by window_manager; declared directly
+  # since we call it ourselves.
+  screen_retriever: ^0.2.2
+
   rust_lib_anime_bd_player:
     path: rust_builder
 

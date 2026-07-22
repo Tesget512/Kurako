@@ -126,3 +126,40 @@ Future<void> _launchAndroidIntent(String uri) async {
   );
   await intent.launch();
 }
+
+/// Reveal a local file in the OS file manager (desktop only — SMB/SAF sources
+/// have no filesystem path to point at). Windows highlights the file itself;
+/// macOS does the same via Finder; Linux has no universal "select" verb, so it
+/// falls back to opening the containing folder.
+Future<void> revealInFileManager(String path) async {
+  if (Platform.isWindows) {
+    // Must be two separate argv entries: explorer.exe's "/select," parsing
+    // expects the switch bare and the path as its own (auto-quoted-if-needed)
+    // token. Interpolating them into one string made Dart wrap the whole
+    // "/select,<path>" blob in a single pair of quotes whenever the path had a
+    // space — which explorer.exe doesn't recognize as the /select switch at
+    // all, so it silently fell back to opening a plain Explorer window.
+    await Process.start('explorer.exe', ['/select,', path],
+        mode: ProcessStartMode.detached);
+  } else if (Platform.isMacOS) {
+    await Process.start('open', ['-R', path], mode: ProcessStartMode.detached);
+  } else if (Platform.isLinux) {
+    final dir = File(path).parent.path;
+    await Process.start('xdg-open', [dir], mode: ProcessStartMode.detached);
+  }
+}
+
+/// Force Android's "打开方式" chooser for a local/SAF file, even if the user
+/// previously set a default app for this type — unlike the plain ACTION_VIEW
+/// intent above (which silently reuses that default), `createChooser` always
+/// prompts.
+Future<void> chooseAndroidApp(String uri) async {
+  if (!Platform.isAndroid) return;
+  final intent = AndroidIntent(
+    action: 'action_view',
+    data: uri,
+    type: 'video/*',
+    flags: <int>[Flag.FLAG_GRANT_READ_URI_PERMISSION],
+  );
+  await intent.launchChooser('选择打开方式');
+}

@@ -32,6 +32,10 @@ Future<void> main() async {
       minimumSize: Size(800, 600),
       center: true,
       titleBarStyle: TitleBarStyle.hidden,
+      // macOS-only: window_manager's Windows plugin ignores this flag
+      // entirely, so it does nothing there. On macOS it hides the native
+      // traffic-light buttons in favor of our own WindowButtons.
+      windowButtonVisibility: false,
       title: 'KURAKO',
     );
     // Show only once ready to avoid a flash of the un-styled native frame.

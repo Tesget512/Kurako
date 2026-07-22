@@ -384,6 +384,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ),
         const SizedBox(height: 16),
         _buildUiScaleRow(context),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('使用系统默认字体'),
+          subtitle: const Text('关闭则使用软件内置的霞鹜文楷屏幕字体'),
+          value: ref.watch(useSystemFontProvider),
+          onChanged: (v) =>
+              ref.read(useSystemFontProvider.notifier).set(v),
+        ),
       ],
     );
   }

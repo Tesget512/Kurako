@@ -214,6 +214,13 @@ final touchModePlayerProvider =
   return _BoolPrefNotifier('touch_mode_player', defaultValue: false);
 });
 
+/// Use the operating-system default font instead of the bundled LXGW WenKai.
+/// Off by default (the app ships its own screen-tuned CJK font). Persisted.
+final useSystemFontProvider =
+    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+  return _BoolPrefNotifier('use_system_font', defaultValue: false);
+});
+
 // ---- Decode mode (player hardware/software acceleration) ----
 
 /// Cached at startup so PlayerPage's static _decodeConfig() can read it

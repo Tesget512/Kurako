@@ -26,7 +26,7 @@ class _Chapter {
 
 /// Which panel the right-side drawer shows. All the player's secondary menus
 /// (previously bottom sheets / a broken popup) share one endDrawer.
-enum _Panel { menu, episodes, tracks, subDelay, info, chapters }
+enum _Panel { menu, episodes, tracks, rate, seek, subDelay, info, chapters }
 
 class PlayerPage extends ConsumerStatefulWidget {
   /// The full playlist and the index to start at, so 上/下集 and autoplay work.
@@ -532,6 +532,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _Panel.menu => (Icons.tune, '播放器选项', _menuPanel()),
       _Panel.episodes => (Icons.playlist_play, '选集', _episodePanel()),
       _Panel.tracks => (Icons.subtitles, '字幕 / 音轨', _tracksPanel()),
+      _Panel.rate => (Icons.speed, '播放速度', _ratePanel()),
+      _Panel.seek => (Icons.fast_forward, '快进时长', _seekPanel()),
       _Panel.subDelay => (Icons.more_time, '字幕延迟', _subDelayPanel()),
       _Panel.info => (Icons.info_outline, '播放信息', _infoPanel()),
       _Panel.chapters => (Icons.bookmarks, '章节', _chaptersPanel()),
@@ -543,28 +545,34 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 16, 8, 8),
-              child: Row(
-                children: [
-                  Icon(icon, color: cs.onSurface),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(title,
-                        style: TextStyle(
-                            color: cs.onSurface,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold)),
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.close, color: cs.onSurfaceVariant),
-                    onPressed: () => Navigator.of(context).maybePop(),
-                  ),
-                ],
+            // Solid title bar so scrolled-up list items (with a highlighted
+            // background) don't show through / cover the title.
+            Material(
+              color: cs.surfaceContainerHigh,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                child: Row(
+                  children: [
+                    Icon(icon, color: cs.onSurface),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(title,
+                          style: TextStyle(
+                              color: cs.onSurface,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.close, color: cs.onSurfaceVariant),
+                      onPressed: () => Navigator.of(context).maybePop(),
+                    ),
+                  ],
+                ),
               ),
             ),
             const Divider(height: 1),
-            Expanded(child: body),
+            // Body on its own Material so it clips under the title bar.
+            Expanded(child: Material(color: cs.surface, child: body)),
           ],
         ),
       ),
@@ -652,12 +660,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           onPressed: _popSelf,
         ),
         const SizedBox(width: 8),
+        // Dragging the title moves the frameless window (double-click to
+        // maximize) — otherwise there's no way to reposition it while the
+        // player fills the route. No-op on mobile.
         Expanded(
-          child: Text(
-            _ep.fileName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+          child: WindowDragArea(
+            child: Text(
+              _ep.fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
           ),
         ),
         MaterialDesktopCustomButton(
@@ -705,8 +718,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _quickSeekForward,
-            onLongPress: _showSeekDurationSheet,
-            onSecondaryTap: _showSeekDurationSheet,
+            onLongPress: () => _openPanel(_Panel.seek),
+            onSecondaryTap: () => _openPanel(_Panel.seek),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Row(
@@ -743,7 +756,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             Text('${_rate}x', style: const TextStyle(fontSize: 11)),
           ],
         ),
-        onPressed: _showRateSheet,
+        onPressed: () => _openPanel(_Panel.rate),
       );
 
   // ---- Mobile controls (touch gestures) ----
@@ -757,6 +770,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       seekGesture: true,
       speedUpOnLongPress: true,
       speedUpFactor: 2.0,
+      // Tame the drag sensitivity — the package defaults (vertical 100,
+      // horizontal 1000) move brightness/volume/seek far too much per drag.
+      // Higher = less sensitive.
+      verticalGestureSensitivity: 400,
+      horizontalGestureSensitivity: 3000,
       // Double-tap seek stays at the fixed 10s convention; the customizable
       // duration ([seekDurationProvider]) drives only the top-bar quick-seek
       // button so the two gestures are independent.
@@ -780,12 +798,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: _popSelf,
         ),
+        // WindowDragArea is a no-op on real mobile; on a touchscreen Windows
+        // device with 触屏模式 enabled it lets the title drag-move the window.
         Expanded(
-          child: Text(
-            _ep.fileName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: Colors.white, fontSize: 14),
+          child: WindowDragArea(
+            child: Text(
+              _ep.fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+            ),
           ),
         ),
         _seekButton(),
@@ -804,6 +826,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           icon: const Icon(Icons.tune, color: Colors.white),
           onPressed: () => _openPanel(_Panel.menu),
         ),
+        // On a real phone/tablet this is a no-op; on Windows with 触屏模式
+        // (touch controls opted-in on a touchscreen desktop) the window still
+        // needs its minimize/maximize/close buttons somewhere.
+        if (!_isMobile) const WindowButtons(light: true),
       ],
       // Bottom primary bar: prev / play-pause / next around the seek bar.
       primaryButtonBar: [
@@ -845,7 +871,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               style: const TextStyle(color: Colors.white, fontSize: 11)),
         ],
       ),
-      onPressed: _showRateSheet,
+      onPressed: () => _openPanel(_Panel.rate),
     );
   }
 
@@ -858,7 +884,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _quickSeekForward,
-      onLongPress: _showSeekDurationSheet,
+      onLongPress: () => _openPanel(_Panel.seek),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
         child: Row(
@@ -879,78 +905,56 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
-  void _showSeekDurationSheet() {
-    final cs = Theme.of(context).colorScheme;
-    int local = _seekSec; // immediate feedback; provider write is async
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setSheet) => SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text('快进 / 快退时长：$local 秒',
-                    style: TextStyle(color: cs.onSurface, fontSize: 16)),
-                const SizedBox(height: 4),
-                Text('点击顶部快进按钮时跳转的时长（双击画面固定 10 秒）',
-                    style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
-                Slider(
-                  value: local.toDouble(),
-                  min: 5,
-                  max: 90,
-                  divisions: 17, // steps of 5
-                  label: '$local 秒',
-                  onChanged: (v) {
-                    local = v.round();
-                    ref.read(seekDurationProvider.notifier).set(local);
-                    setSheet(() {});
-                  },
-                ),
-              ],
+  Widget _seekPanel() {
+    final cs = _cs;
+    int local = _seekSec;
+    return StatefulBuilder(
+      builder: (context, setPanel) => SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('快进 / 快退时长：$local 秒',
+                style: TextStyle(color: cs.onSurface, fontSize: 16)),
+            const SizedBox(height: 4),
+            Text('点击顶部快进按钮时跳转的时长（双击画面固定 10 秒）',
+                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+            Slider(
+              value: local.toDouble(),
+              min: 5,
+              max: 90,
+              divisions: 17,
+              label: '$local 秒',
+              onChanged: (v) {
+                local = v.round();
+                ref.read(seekDurationProvider.notifier).set(local);
+                setPanel(() {});
+              },
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  void _showRateSheet() {
-    final cs = Theme.of(context).colorScheme;
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: cs.surfaceContainerHigh,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        // Scrollable so all speeds stay reachable in landscape / short
-        // viewports (a non-scrolling Wrap silently clipped the tail entries).
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final s in _speeds)
-                ListTile(
-                  dense: true,
-                  leading: s == _rate
-                      ? Icon(Icons.check, color: cs.primary)
-                      : const SizedBox(width: 24),
-                  title: Text('${s}x', style: TextStyle(color: cs.onSurface)),
-                  selected: s == _rate,
-                  selectedTileColor: cs.secondaryContainer,
-                  onTap: () {
-                    _setRate(s);
-                    Navigator.pop(context);
-                  },
-                ),
-            ],
+  Widget _ratePanel() {
+    final cs = _cs;
+    return ListView(
+      children: [
+        for (final s in _speeds)
+          ListTile(
+            leading: s == _rate
+                ? Icon(Icons.check, color: cs.primary)
+                : const SizedBox(width: 24),
+            title: Text('${s}x', style: TextStyle(color: cs.onSurface)),
+            selected: s == _rate,
+            selectedTileColor: cs.secondaryContainer,
+            onTap: () {
+              _setRate(s);
+              Navigator.pop(context);
+            },
           ),
-        ),
-      ),
+      ],
     );
   }
 
@@ -1010,6 +1014,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final cs = _cs;
     final tracks = _player.state.tracks;
     final current = _player.state.track;
+    // External subtitle files (loaded via mpv sub-add) also surface in
+    // tracks.subtitle with their filename as the title — skip those in the
+    // embedded list so each file shows once (in the 外部字幕 section below).
+    final extNames = _extSubs.map((s) => s.fileName).toSet();
+    final embeddedSubs = tracks.subtitle
+        .where((t) =>
+            t.id != 'auto' &&
+            t.id != 'no' &&
+            !(t.title != null && extNames.contains(t.title)))
+        .toList();
+    // Audio can arrive with duplicate entries over the SMB proxy — dedup by a
+    // composite key, and add an index when several share one label.
+    final audios =
+        tracks.audio.where((t) => t.id != 'auto' && t.id != 'no').toList();
+    final seenAudio = <String>{};
+    final uniqueAudio = <AudioTrack>[];
+    for (final t in audios) {
+      final key = '${t.id}|${t.title}|${t.language}|${t.codec}';
+      if (seenAudio.add(key)) uniqueAudio.add(t);
+    }
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1019,17 +1043,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             _activeExtSub = null;
             _player.setSubtitleTrack(SubtitleTrack.no());
           }),
-          for (final t in tracks.subtitle)
-            if (t.id != 'auto' && t.id != 'no')
-              _trackTile(
-                _trackLabel(t.title, t.language, t.id),
-                _activeExtSub == null && current.subtitle.id == t.id,
-                () {
-                  _activeExtSub = null;
-                  _player.setSubtitleTrack(t);
-                  _rememberSub(t);
-                },
-              ),
+          for (final t in embeddedSubs)
+            _trackTile(
+              _trackLabel(t.title, t.language, t.id),
+              _activeExtSub == null && current.subtitle.id == t.id,
+              () {
+                _activeExtSub = null;
+                _player.setSubtitleTrack(t);
+                _rememberSub(t);
+              },
+            ),
           if (_extSubs.isNotEmpty) ...[
             _trackHeader(Icons.folder_open, '外部字幕'),
             for (final s in _extSubs)
@@ -1050,20 +1073,32 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
           Divider(color: cs.outlineVariant, height: 1),
           _trackHeader(Icons.audiotrack, '音轨'),
-          for (final t in tracks.audio)
-            if (t.id != 'auto' && t.id != 'no')
-              _trackTile(
-                _trackLabel(t.title, t.language, t.id),
-                current.audio.id == t.id,
-                () {
-                  _player.setAudioTrack(t);
-                  _rememberAudio(t);
-                },
-              ),
+          for (var i = 0; i < uniqueAudio.length; i++)
+            _trackTile(
+              _audioLabel(uniqueAudio, i),
+              current.audio.id == uniqueAudio[i].id,
+              () {
+                _player.setAudioTrack(uniqueAudio[i]);
+                _rememberAudio(uniqueAudio[i]);
+              },
+            ),
           const SizedBox(height: 8),
         ],
       ),
     );
+  }
+
+  /// Audio track label; appends " · N" when several tracks share the same base
+  /// label so identical-language tracks stay distinguishable.
+  String _audioLabel(List<AudioTrack> audios, int i) {
+    final t = audios[i];
+    final base = _trackLabel(t.title, t.language, t.id);
+    final sameLabel =
+        audios.where((o) => _trackLabel(o.title, o.language, o.id) == base);
+    if (sameLabel.length <= 1) return base;
+    final ordinal = audios.take(i + 1).where((o) =>
+        _trackLabel(o.title, o.language, o.id) == base).length;
+    return '$base · $ordinal';
   }
 
   /// Manual subtitle pick — any subtitle file on the device.
