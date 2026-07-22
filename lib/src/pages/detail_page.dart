@@ -32,6 +32,30 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    _autoRefreshMetadata();
+  }
+
+  /// Silently re-fetch Bangumi metadata every time the page opens, so ratings/
+  /// summary/tags/episode titles stay current without the user having to hit
+  /// the manual refresh button. Doesn't toggle [_refreshing] (no spinner) —
+  /// only a toast once it's actually done. Failures are swallowed; the manual
+  /// button is still there for the user to retry with visible errors.
+  Future<void> _autoRefreshMetadata() async {
+    try {
+      final anime =
+          await ref.read(animeDetailProvider(widget.animeId).future);
+      if (anime == null || anime.bangumiId == null) return;
+      await rust.refreshMetadata(animeId: widget.animeId);
+      if (!mounted) return;
+      ref.invalidate(animeDetailProvider(widget.animeId));
+      ref.invalidate(episodesProvider(widget.animeId));
+      ref.invalidate(animeListProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已自动更新 Bangumi 元数据')),
+      );
+    } catch (_) {
+      // Background convenience refresh — stay quiet on failure.
+    }
   }
 
   void _onScroll() {
@@ -357,7 +381,23 @@ class _FloatingToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.paddingOf(context).top;
-    final bar = SizedBox(
+    // Only the title region drags the window (and double-click-to-maximizes)
+    // — NOT wrapped around the whole bar. A GestureDetector with onDoubleTap
+    // forces every tap that lands in its hit-test area to wait out the
+    // double-tap disambiguation window (~300ms) before it's allowed to
+    // resolve, and that delay applies to descendants' own tap recognizers too
+    // (they share the same gesture arena). Wrapping the whole toolbar used to
+    // put the window buttons inside that area, so minimize/close felt
+    // sluggish specifically on this page. Same fix as WindowCaption/player_page,
+    // which only ever wrapped the draggable title text, never the buttons.
+    Widget titleText = Text(
+      title,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: Theme.of(context).textTheme.titleMedium,
+    );
+    if (useCustomCaption) titleText = WindowDragArea(child: titleText);
+    return SizedBox(
       height: topPad + kToolbarHeight,
       child: Container(
         // Scrim so the icons/title read over any cover.
@@ -380,12 +420,7 @@ class _FloatingToolbar extends StatelessWidget {
               child: AnimatedOpacity(
                 opacity: showTitle ? 1 : 0,
                 duration: const Duration(milliseconds: 150),
-                child: Text(
-                  title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+                child: titleText,
               ),
             ),
             ...actions,
@@ -397,9 +432,6 @@ class _FloatingToolbar extends StatelessWidget {
         ),
       ),
     );
-    if (!useCustomCaption) return bar;
-    // Desktop: dragging the toolbar moves the frameless window.
-    return WindowDragArea(child: bar);
   }
 }
 

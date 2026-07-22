@@ -229,8 +229,17 @@ class SysAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bar = AppBar(
-      title: title,
+    // Only the title drags/double-click-maximizes — never wrap the whole
+    // AppBar (title+actions+buttons) in that GestureDetector. onDoubleTap
+    // forces every tap landing in its hit-test area to wait out the
+    // double-tap disambiguation window (~300ms) before it resolves, and
+    // descendants' own tap recognizers (the window buttons') share that same
+    // gesture arena, so they were getting delayed too. Same fix as
+    // WindowCaption/player_page, which only ever wrap the draggable title.
+    final draggableTitle =
+        useCustomCaption && title != null ? WindowDragArea(child: title!) : title;
+    return AppBar(
+      title: draggableTitle,
       leading: leading,
       bottom: bottom,
       actions: [
@@ -240,14 +249,6 @@ class SysAppBar extends StatelessWidget implements PreferredSizeWidget {
           const WindowButtons(),
         ],
       ],
-    );
-    if (!useCustomCaption) return bar;
-    // Drag the window from the toolbar background (buttons/actions still work).
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => windowManager.startDragging(),
-      onDoubleTap: _toggleMaximize,
-      child: bar,
     );
   }
 }

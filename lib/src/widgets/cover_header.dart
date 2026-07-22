@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../rust/models.dart';
 import 'cover_image.dart';
+import 'window_caption.dart' show useCustomCaption;
 
 String _titleOf(Anime a) {
   if (a.nameCn != null && a.nameCn!.isNotEmpty) return a.nameCn!;
@@ -131,7 +132,13 @@ class _HeaderCard extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = constraints.maxWidth < 560;
-        final coverW = narrow ? 128.0 : 168.0;
+        // Desktop windows are typically viewed from further away / at higher
+        // resolutions than a phone in hand, so bump the cover, histogram and
+        // facts text up a notch there. Row uses crossAxisAlignment.start
+        // throughout, so the enlarged cover/facts/histogram all still line up
+        // along the same top edge — only their relative heights change.
+        final desktop = !narrow && useCustomCaption;
+        final coverW = narrow ? 128.0 : (desktop ? 196.0 : 168.0);
         final coverH = coverW * 214 / 150;
         final counts = _histogramCounts(anime);
 
@@ -147,13 +154,17 @@ class _HeaderCard extends StatelessWidget {
               ),
             ),
             SizedBox(width: narrow ? 12 : 16),
-            Expanded(child: _Facts(anime: anime)),
+            Expanded(child: _Facts(anime: anime, desktop: desktop)),
             // Histogram beside facts only when there's room.
             if (!narrow && counts != null) ...[
               const SizedBox(width: 16),
               SizedBox(
-                width: 260,
-                child: RatingHistogram(counts: counts, height: 88),
+                width: desktop ? 300.0 : 260.0,
+                child: RatingHistogram(
+                  counts: counts,
+                  height: desktop ? 100 : 88,
+                  desktop: desktop,
+                ),
               ),
             ],
           ],
@@ -202,7 +213,8 @@ class _CollapsibleHistogram extends StatelessWidget {
 
 class _Facts extends StatelessWidget {
   final Anime anime;
-  const _Facts({required this.anime});
+  final bool desktop;
+  const _Facts({required this.anime, this.desktop = false});
 
   @override
   Widget build(BuildContext context) {
@@ -213,7 +225,7 @@ class _Facts extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(_titleOf(anime),
-            style: theme.textTheme.titleLarge,
+            style: desktop ? theme.textTheme.headlineSmall : theme.textTheme.titleLarge,
             maxLines: 2,
             overflow: TextOverflow.ellipsis),
         if (anime.name != null &&
@@ -221,7 +233,7 @@ class _Facts extends StatelessWidget {
             anime.name != _titleOf(anime)) ...[
           const SizedBox(height: 2),
           Text(anime.name!,
-              style: theme.textTheme.bodySmall
+              style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
               maxLines: 1,
               overflow: TextOverflow.ellipsis),
@@ -264,10 +276,10 @@ class _Facts extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(label,
-              style: theme.textTheme.bodySmall
+              style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           Text(value,
-              style: theme.textTheme.titleSmall
+              style: (desktop ? theme.textTheme.titleMedium : theme.textTheme.titleSmall)
                   ?.copyWith(color: theme.colorScheme.primary)),
         ],
       ),
@@ -285,18 +297,18 @@ class _Facts extends StatelessWidget {
         children: [
           Text(
             anime.ratingTotal != null ? '${anime.ratingTotal!.toInt()} 人评分' : '评分',
-            style: theme.textTheme.bodySmall
+            style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
                 ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           Row(
             children: [
               Text(score.toStringAsFixed(1),
-                  style: theme.textTheme.titleSmall
+                  style: (desktop ? theme.textTheme.titleMedium : theme.textTheme.titleSmall)
                       ?.copyWith(color: theme.colorScheme.primary)),
               const SizedBox(width: 6),
               for (var i = 0; i < 5; i++)
                 Icon(i < stars ? Icons.star : Icons.star_border,
-                    size: 15, color: theme.colorScheme.primary),
+                    size: desktop ? 18 : 15, color: theme.colorScheme.primary),
             ],
           ),
         ],
@@ -402,11 +414,13 @@ class RatingHistogram extends StatelessWidget {
   final List<int> counts;
   final double height;
   final bool showLabel;
+  final bool desktop;
   const RatingHistogram({
     super.key,
     required this.counts,
     this.height = 64,
     this.showLabel = true,
+    this.desktop = false,
   });
 
   @override
@@ -419,7 +433,7 @@ class RatingHistogram extends StatelessWidget {
       children: [
         if (showLabel) ...[
           Text('评分透视',
-              style: theme.textTheme.bodySmall
+              style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
                   ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
           const SizedBox(height: 6),
         ],
@@ -457,7 +471,7 @@ class RatingHistogram extends StatelessWidget {
                     textAlign: TextAlign.center,
                     style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
-                        fontSize: 9)),
+                        fontSize: desktop ? 11 : 9)),
               ),
           ],
         ),
