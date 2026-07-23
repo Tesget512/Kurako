@@ -47,5 +47,14 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Lets canResolveActivity() (external_player.dart) accurately see
+             whether an SMB-capable player is installed before attempting to
+             launch a raw smb:// URI — without this, package-visibility
+             restrictions (API 30+) can make that introspection call return
+             false even when a matching app IS installed. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="smb"/>
+        </intent>
     </queries>
 </manifest>

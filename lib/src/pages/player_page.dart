@@ -107,10 +107,27 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // (especially SMB, which registers a proxy token + opens a stream) don't race
   // two overlapping opens into a deadlock.
   int _openSeq = 0;
+  // Debounce for rapid episode switching (next/prev/list-tap) over SMB — same
+  // logic on every platform. Fixes "快速连续切集，视频几秒加载不出来": a burst
+  // of N taps used to hammer N SMB file opens at the NAS at once (Windows via
+  // the redirector, Android via our loopback proxy), which throttles the
+  // surplus so the final episode only loads once the stale connections are
+  // reaped (a few seconds). Now the index/highlight update instantly but the
+  // actual open waits until the user settles, so a burst collapses to a single
+  // open of the last target. Local/SAF sources skip this (no NAS to throttle).
+  Timer? _switchDebounce;
   // Scaffold key so the control bars can open the right-side episode drawer.
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   // Which panel the endDrawer currently shows.
   _Panel _drawerPanel = _Panel.episodes;
+  // Uniform row height for the episode picker (set as the ListView's
+  // itemExtent) so the current episode's scroll offset is a simple
+  // multiplication — no post-frame layout query needed.
+  static const double _episodeTileHeight = 72;
+  // Recreated each time the episode panel opens (see [_openPanel]) so it
+  // starts scrolled to the currently-playing episode instead of always at the
+  // top — the drawer used to reset to the first episode on every open.
+  ScrollController? _episodeScrollController;
 
   // Desktop native fullscreen state (window_manager.setFullScreen). We DON'T
   // use media_kit's own fullscreen: it pushes a fresh Video on the root
@@ -177,6 +194,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
   }
 
+  // Bounded retry for a stuck/occupied open (e.g. a file another player just
+  // released is still momentarily locked — commonly hit switching from the
+  // external player back to this one for the same episode). media_kit's
+  // `open()` doesn't throw for a file that never actually loads — it just sits
+  // spinning — so success is confirmed by watching for a real duration within
+  // [_openWatchdog]; a timeout retries after [_openRetryGap], up to
+  // [_maxOpenAttempts], then reports a real error instead of spinning forever.
+  static const int _maxOpenAttempts = 3;
+  static const Duration _openWatchdog = Duration(seconds: 7);
+  static const Duration _openRetryGap = Duration(seconds: 3);
+
   Future<void> _openCurrent() async {
     final seq = ++_openSeq;
     _resumed = false;
@@ -193,23 +221,52 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     await old?.release();
     // A newer open superseded us while releasing — abandon this one.
     if (seq != _openSeq) return;
-    try {
-      final handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
-      if (seq != _openSeq) {
-        // Superseded during resolve — release what we just acquired and bail.
-        await handle.release();
-        return;
-      }
-      _handle = handle;
-      await _player.open(Media(handle.uri));
-      if (seq != _openSeq) return;
-      _loadExternalSubtitles(seq);
-      _loadChapters(seq);
-    } catch (e) {
-      if (mounted && seq == _openSeq) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('无法打开视频: $e')),
-        );
+
+    for (var attempt = 1; attempt <= _maxOpenAttempts; attempt++) {
+      try {
+        final handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
+        if (seq != _openSeq) {
+          // Superseded during resolve — release what we just acquired and bail.
+          await handle.release();
+          return;
+        }
+        _handle = handle;
+        await _player.open(Media(handle.uri));
+        if (seq != _openSeq) return;
+        final loaded = await _player.stream.duration
+            .firstWhere((d) => d > Duration.zero)
+            .timeout(_openWatchdog)
+            .then((_) => true)
+            .catchError((_) => false);
+        if (seq != _openSeq) return;
+        if (loaded) {
+          _loadExternalSubtitles(seq);
+          _loadChapters(seq);
+          break;
+        }
+        await _handle?.release();
+        _handle = null;
+        if (attempt == _maxOpenAttempts) {
+          if (mounted && seq == _openSeq) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('视频加载超时，可能被其他播放器占用，请稍后重试')),
+            );
+          }
+          break;
+        }
+        await Future.delayed(_openRetryGap);
+        if (seq != _openSeq) return;
+      } catch (e) {
+        if (attempt == _maxOpenAttempts) {
+          if (mounted && seq == _openSeq) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('无法打开视频: $e')),
+            );
+          }
+          break;
+        }
+        await Future.delayed(_openRetryGap);
+        if (seq != _openSeq) return;
       }
     }
     if (mounted && seq == _openSeq) setState(() {});
@@ -403,11 +460,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   bool get _hasPrev => _index > 0;
   bool get _hasNext => _index < widget.episodes.length - 1;
 
+  /// Open the currently-selected episode. Local/SAF sources open immediately;
+  /// SMB sources debounce (same on every platform) so a burst of rapid switches
+  /// only opens the final target, avoiding the SMB connection pile-up the NAS
+  /// throttles. See [_switchDebounce].
+  void _scheduleOpen() {
+    if (_ep.sourceType != 'smb') {
+      _openCurrent();
+      return;
+    }
+    _switchDebounce?.cancel();
+    _switchDebounce = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _openCurrent();
+    });
+  }
+
   Future<void> _playPrev() async {
     if (!_hasPrev) return;
     await _save();
     setState(() => _index--);
-    await _openCurrent();
+    _scheduleOpen();
   }
 
   Future<void> _playNext({bool auto = false}) async {
@@ -421,7 +493,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
     await _save();
     setState(() => _index++);
-    await _openCurrent();
+    _scheduleOpen();
   }
 
   Future<void> _setRate(double rate) async {
@@ -447,7 +519,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _switchDebounce?.cancel();
     _completedSub?.cancel();
+    _episodeScrollController?.dispose();
     _save();
     _player.dispose();
     _handle?.release();
@@ -547,6 +621,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// they render inside the Scaffold (fixing the popup that didn't work over
   /// media_kit's control layer).
   void _openPanel(_Panel panel) {
+    if (panel == _Panel.episodes) {
+      // A small look-ahead so the selected row isn't pinned to the very top
+      // edge; the ListView clamps this to a valid offset once it lays out.
+      final target = (_index - 1) * _episodeTileHeight;
+      _episodeScrollController = ScrollController(
+        initialScrollOffset: target < 0 ? 0 : target,
+      );
+    }
     setState(() => _drawerPanel = panel);
     _scaffoldKey.currentState?.openEndDrawer();
   }
@@ -629,6 +711,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Widget _episodePanel() {
     final cs = _cs;
     return ListView.builder(
+      controller: _episodeScrollController,
+      itemExtent: _episodeTileHeight,
       itemCount: widget.episodes.length,
       itemBuilder: (context, i) {
         final ep = widget.episodes[i];
@@ -654,7 +738,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             if (i == _index) return;
             await _save();
             setState(() => _index = i);
-            await _openCurrent();
+            _scheduleOpen();
           },
         );
       },

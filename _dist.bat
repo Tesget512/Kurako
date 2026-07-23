@@ -34,6 +34,17 @@ set "WINSRC=build\windows\x64\runner\Release"
 if exist "%OUT%\windows" rmdir /S /Q "%OUT%\windows"
 xcopy "%WINSRC%" "%OUT%\windows\" /E /I /Y >nul
 echo   -> %OUT%\windows\anime_bd_player.exe
+
+echo === 生成 Windows 安装包 (Inno Setup) ===
+set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+if exist "%ISCC%" (
+  "%ISCC%" installer.iss
+  if errorlevel 1 ( echo BUILD FAILED ^(installer^) & exit /b 1 )
+  copy /Y "dist\KURAKO-Setup-1.0.0.exe" "%OUT%\KURAKO-Setup-1.0.0.exe" >nul
+  echo   -> %OUT%\KURAKO-Setup-1.0.0.exe
+) else (
+  echo   [跳过] 未找到 ISCC.exe，未生成安装包
+)
 if /I "%MODE%"=="win" goto :done
 
 :apk

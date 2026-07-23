@@ -22,7 +22,7 @@ class DetailPage extends ConsumerStatefulWidget {
   ConsumerState<DetailPage> createState() => _DetailPageState();
 }
 
-class _DetailPageState extends ConsumerState<DetailPage> {
+class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObserver {
   bool _refreshing = false;
   final _scrollController = ScrollController();
   // Whether the header has scrolled far enough to show the toolbar title.
@@ -35,6 +35,18 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     // Metadata is no longer refreshed per-anime on open; the whole library is
     // refreshed once at startup (see HomePage._refreshAllMetadataOnce). The
     // manual refresh button below still force-refetches this one subject.
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // The internal player already invalidates on pop (see _play), but an
+    // external player is a detached process we never await — the only signal
+    // that playback may have progressed (updating "可续播"/watched) is the app
+    // coming back to the foreground.
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(episodesProvider(widget.animeId));
+    }
   }
 
   void _onScroll() {
@@ -202,6 +214,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _scrollController.dispose();
     // Once the user leaves the page, drop lingering completed/failed downloads
     // so the badge doesn't persist on the next visit (active ones stay).
@@ -369,10 +382,13 @@ class _FloatingToolbar extends StatelessWidget {
     // put the window buttons inside that area, so minimize/close felt
     // sluggish specifically on this page. Same fix as WindowCaption/player_page,
     // which only ever wrapped the draggable title text, never the buttons.
-    Widget titleText = Text(
+    // On narrow (phone-width) screens a long anime title often can't fit the
+    // toolbar even ellipsized — auto-scroll it into view periodically instead
+    // of just truncating. _MarqueeText only animates when the text actually
+    // overflows its available width, so wide desktop windows render a plain
+    // static (ellipsized) title with no animation overhead.
+    Widget titleText = _MarqueeText(
       title,
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
       style: Theme.of(context).textTheme.titleMedium,
     );
     if (useCustomCaption) titleText = WindowDragArea(child: titleText);
@@ -410,6 +426,109 @@ class _FloatingToolbar extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// A single-line title that auto-scrolls into view when it doesn't fit its
+/// available width, instead of just ellipsizing — for the toolbar title on
+/// narrow (phone-width) screens where long anime titles get cut off. Falls
+/// back to a plain static (ellipsized) [Text] when the text already fits, so
+/// it costs nothing on wide desktop windows.
+class _MarqueeText extends StatefulWidget {
+  final String text;
+  final TextStyle? style;
+  const _MarqueeText(this.text, {this.style});
+
+  @override
+  State<_MarqueeText> createState() => _MarqueeTextState();
+}
+
+class _MarqueeTextState extends State<_MarqueeText>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  bool _disposed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 3),
+    );
+    _runCycle();
+  }
+
+  // Idle, slowly scroll to reveal the tail, hold briefly, scroll back, repeat —
+  // a self-rescheduling loop (NOT a Timer.periodic) so each cycle only starts
+  // once the previous one (forward + hold + reverse) has fully finished. A
+  // fixed-period timer shorter than one full cycle would fire again while the
+  // controller was still mid-reverse, snapping it back to 0 and restarting —
+  // which read as the text getting stuck half-scrolled with clipped glyphs.
+  Future<void> _runCycle() async {
+    while (!_disposed) {
+      await Future.delayed(const Duration(seconds: 4));
+      if (_disposed) return;
+      await _controller.forward(from: 0);
+      if (_disposed) return;
+      await Future.delayed(const Duration(seconds: 1));
+      if (_disposed) return;
+      await _controller.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = widget.style ?? DefaultTextStyle.of(context).style;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final painter = TextPainter(
+          text: TextSpan(text: widget.text, style: style),
+          maxLines: 1,
+          textDirection: Directionality.of(context),
+        )..layout();
+        final overflow = painter.width - constraints.maxWidth;
+        if (overflow <= 0) {
+          return Text(
+            widget.text,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          );
+        }
+        // ClipRect alone isn't enough: it clips *paint*, not layout — the Text
+        // child would still be LAID OUT at the same bounded width as this box
+        // (ClipRect passes constraints through unchanged) and clip itself
+        // internally before Transform ever got a chance to slide it into view.
+        // OverflowBox relaxes the width constraint so Text lays out at its full
+        // natural width; ClipRect (sized to the original bounded constraints)
+        // then clips the *visible window* around whatever Transform slides
+        // into it.
+        return ClipRect(
+          child: OverflowBox(
+            alignment: Alignment.centerLeft,
+            minWidth: 0,
+            maxWidth: double.infinity,
+            child: AnimatedBuilder(
+              animation: _controller,
+              child: Text(widget.text, maxLines: 1, softWrap: false, style: style),
+              builder: (context, child) {
+                return Transform.translate(
+                  offset: Offset(-overflow * _controller.value, 0),
+                  child: child,
+                );
+              },
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -612,6 +731,10 @@ class _EpisodeTile extends ConsumerWidget {
     final resumed = episode.lastPositionMs > 0 && !episode.watched
         ? '（可续播）'
         : '';
+    final downloadedUris = ref.watch(downloadedSmbUrisProvider).value ??
+        const <String>{};
+    final isDownloaded =
+        episode.sourceType == 'smb' && downloadedUris.contains(episode.filePath);
     // Long-press (touch) and right-click (desktop) both open the context menu:
     // choose a player, download (SMB), or block the file. The gestures live on
     // a wrapping GestureDetector because ListTile has no onSecondaryTap.
@@ -635,6 +758,12 @@ class _EpisodeTile extends ConsumerWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (isDownloaded)
+              Tooltip(
+                message: '已下载到本地',
+                child: Icon(Icons.download_done,
+                    color: theme.colorScheme.outline),
+              ),
             if (episode.watched)
               Icon(Icons.check_circle, color: theme.colorScheme.primary),
             IconButton(icon: const Icon(Icons.play_arrow), onPressed: onPlay),
@@ -702,7 +831,14 @@ class _EpisodeTile extends ConsumerWidget {
               title: Text('在文件管理器中显示'),
             ),
           ),
-        if (isPlainLocal && Platform.isAndroid)
+        // The universal "open with" chooser only makes sense for a real local
+        // file (content/file scheme, which every video app matches): an
+        // undownloaded SMB episode's smb:// URI only opens in a player that
+        // itself registers an intent-filter for that scheme — offering the
+        // generic chooser for it just leads to the same empty "没有应用可执行
+        // 此操作" dead end. "用外部播放器播放" below still attempts it and now
+        // gives a clear message instead.
+        if ((isPlainLocal || (isSmb && localCopy != null)) && Platform.isAndroid)
           const PopupMenuItem(
             value: 'choose_app',
             child: ListTile(
@@ -749,7 +885,11 @@ class _EpisodeTile extends ConsumerWidget {
       case 'reveal':
         await revealInFileManager(episode.filePath);
       case 'choose_app':
-        await chooseAndroidApp(episode.filePath);
+        // externalPlayerLocator resolves the right URI per source: a
+        // downloaded local copy, or (SMB) a smb://user:pass@host/path VLC/MX
+        // open with their own bundled client — never the raw filePath, which
+        // for SMB has no credentials embedded.
+        await chooseAndroidApp(await externalPlayerLocator(episode));
       case 'download':
         onDownload();
       case 'delete_copy':

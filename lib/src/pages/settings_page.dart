@@ -143,7 +143,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               leading: const Icon(Icons.smart_display_outlined),
               title: const Text('选择播放器程序'),
               subtitle: Text(settings.externalPlayerPath.isEmpty
-                  ? '未选择 — 本地视频用系统默认；SMB 流播放必须在此选择程序'
+                  ? '未选择 — 本地与 SMB 视频均用系统默认播放器打开；也可在此指定固定程序'
                   : settings.externalPlayerPath),
               trailing: Wrap(
                 children: [

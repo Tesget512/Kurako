@@ -23,6 +23,15 @@ const VIDEO_EXTS: &[&str] = &[
 
 const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
 
+/// Cap every SMB *setup* step (TCP connect, share connect, file open) so a NAS
+/// that has hit its per-client session limit — or is briefly unresponsive —
+/// can't hang the call forever. This is the cross-folder freeze: switching to a
+/// video in a different folder opens fresh connections while the old ones are
+/// still draining; if the server refuses the new session the connect blocks
+/// indefinitely and the player spins on "loading". A bounded connect turns that
+/// into a clean, recoverable failure instead of a deadlock.
+const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
 /// Cached SMB credentials. `smb2::Client` holds a live TCP connection that isn't
 /// convenient to keep across separate `block_on` calls, so we cache the login
 /// details and open a fresh connection per operation instead.
@@ -43,6 +52,10 @@ pub fn creds() -> Option<SmbCreds> {
 
 pub fn set_creds(c: Option<SmbCreds>) {
     *CREDS.lock().unwrap() = c;
+    // Credentials changed (reconnect/reconfigure) — drop any persistent proxy
+    // session so the next stream reconnects under the current creds instead of
+    // reusing one tied to the old (possibly now-invalid) ones.
+    invalidate_session();
 }
 
 /// The `smb://addr/share/subdir/` URI prefix that enumerated files under
@@ -85,12 +98,13 @@ fn normalize_addr(host: &str) -> String {
 
 /// Open a client + connect the share using the given credentials.
 async fn open(c: &SmbCreds) -> Result<(smb2::SmbClient, smb2::Tree)> {
-    let mut client = smb2::connect(&c.addr, &c.user, &c.password)
+    let mut client = tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&c.addr, &c.user, &c.password))
         .await
+        .context("smb connect timed out")?
         .context("smb connect")?;
-    let tree = client
-        .connect_share(&c.share)
+    let tree = tokio::time::timeout(SETUP_TIMEOUT, client.connect_share(&c.share))
         .await
+        .context("smb connect_share timed out")?
         .context("smb connect_share")?;
     Ok((client, tree))
 }
@@ -236,7 +250,106 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
 static PLAYABLE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 /// The port the proxy bound to (0 = not started yet).
 static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
+
+/// **Dedicated** runtime for the loopback proxy (accept loop + every `serve`
+/// stream task). Kept *separate* from the main `RT` that flutter_rust_bridge
+/// drives its `block_on` calls on. This is the core freeze fix: previously the
+/// proxy's streaming tasks were spawned on the shared RT, so a burst of rapid
+/// episode switches (even within one folder) piled up serve tasks that occupied
+/// all worker threads, and the next episode's `block_on` (resolve/register)
+/// could no longer get a thread — wedging the whole UI. Isolating proxy I/O here
+/// means no amount of SMB streaming can starve the calls the UI waits on.
+static PROXY_RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .thread_name("smb-proxy")
+        .enable_all()
+        .build()
+        .expect("smb proxy runtime")
+});
+
+/// Cap concurrent reads the proxy issues against the shared session at once —
+/// now a plain concurrency throttle (the connection itself is reused, see
+/// [SESSION]), not a connection-count limiter. Old streams are aborted on
+/// switch, releasing their permits promptly.
+static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaphore::new(6));
+
+/// One persistent, authenticated SMB2 connection + tree, reused across every
+/// proxy stream instead of connecting fresh per HTTP request. This mirrors how
+/// Windows' own SMB redirector serves a UNC path — one session per share for
+/// the whole app lifetime — and is the fix for the "切换次数多了会卡住几秒"
+/// symptom: previously `serve()` called `open()` (full TCP + negotiate +
+/// session-setup + tree-connect) for *every* proxy request, and libmpv issues
+/// several requests per single episode open (probe, moov/index read, each
+/// seek's Range) — so normal viewing, not just rapid switching, kept opening
+/// fresh SMB sessions against the NAS, which eventually hit its per-client
+/// session cap and stalled new connects for a few seconds until it reaped old
+/// ones. `SmbClient::open_file_reader`/`FileReader::read_at` only need `&self`
+/// (the crate's `Connection` is an actor-backed, cheaply-cloneable handle
+/// designed for concurrent multiplexed requests — see its `pipeline` module),
+/// so many concurrent reads through one shared session is a supported,
+/// intended usage, not a workaround.
+struct SmbSession {
+    client: smb2::SmbClient,
+    tree: smb2::Tree,
+}
+static SESSION: Mutex<Option<std::sync::Arc<SmbSession>>> = Mutex::new(None);
+/// Serializes session (re)establishment so a burst of concurrent proxy
+/// requests (e.g. mpv's initial multi-range probe) pays for one handshake, not
+/// N racing ones.
+static SESSION_INIT: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+/// Get the persistent session, connecting on first use.
+async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
+    if let Some(s) = SESSION.lock().unwrap().clone() {
+        return Ok(s);
+    }
+    let _guard = SESSION_INIT.lock().await;
+    // Re-check: another caller may have connected while we waited for the lock.
+    if let Some(s) = SESSION.lock().unwrap().clone() {
+        return Ok(s);
+    }
+    let (client, tree) = open(c).await?;
+    let s = std::sync::Arc::new(SmbSession { client, tree });
+    *SESSION.lock().unwrap() = Some(s.clone());
+    Ok(s)
+}
+
+/// Drop the cached session. Called on a read/open failure (the connection is
+/// presumed dead — NAS idle-closed it, network blip, credentials changed) so
+/// the *next* request reconnects instead of repeatedly failing against a dead
+/// handle. In-flight `FileReader`s are unaffected (each owns its own cloned
+/// connection handle once opened).
+fn invalidate_session() {
+    *SESSION.lock().unwrap() = None;
+}
+
+/// Serializes proxy start-up so two concurrent `register_playable` calls don't
+/// both bind a listener.
+static PROXY_INIT: Mutex<()> = Mutex::new(());
 static TOKEN_SEQ: AtomicU64 = AtomicU64::new(1);
+/// Abort handles for in-flight proxy stream tasks, keyed by a per-stream id.
+/// A folder/episode switch forcibly aborts these so the *previous* file's SMB
+/// connections close immediately instead of lingering — stale streams piling up
+/// against the NAS's per-client session limit is what freezes the next open
+/// (the cross-folder freeze). The map is drained on every switch, so the rare
+/// already-finished entry (task removed itself before we inserted) is harmless.
+static ACTIVE_STREAMS: Lazy<Mutex<HashMap<u64, tokio::task::AbortHandle>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static STREAM_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Forcibly abort every in-flight proxy stream. Aborting a task drops its future,
+/// which drops the smb2 client and closes its TCP connection to the NAS, freeing
+/// the session right away. Called whenever a token is released (i.e. on switch).
+pub fn abort_all_streams() {
+    let handles: Vec<tokio::task::AbortHandle> = {
+        let mut m = ACTIVE_STREAMS.lock().unwrap();
+        m.drain().map(|(_, h)| h).collect()
+    };
+    for h in handles {
+        h.abort();
+    }
+}
 /// Total bytes streamed to clients since process start. Dart polls this and
 /// derives MB/s from consecutive samples (for the playback-info panel).
 static BYTES_SERVED: AtomicU64 = AtomicU64::new(0);
@@ -250,7 +363,7 @@ pub fn proxy_bytes_served() -> u64 {
 /// Starts the proxy on first use. Must be called from within the tokio runtime.
 pub async fn register_playable(smb_uri: &str) -> Result<String> {
     let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
-    let port = ensure_proxy().await?;
+    let port = ensure_proxy()?;
     let token = format!("t{}", TOKEN_SEQ.fetch_add(1, Ordering::Relaxed));
     PLAYABLE.lock().unwrap().insert(token.clone(), path);
     Ok(format!("http://127.0.0.1:{port}/{token}"))
@@ -261,29 +374,54 @@ pub fn unregister_playable(url: &str) {
     if let Some(token) = url.rsplit('/').next() {
         PLAYABLE.lock().unwrap().remove(token);
     }
+    // Release is called at the *start* of a switch (before the next file opens),
+    // so tear down every lingering stream from the file we're leaving. This is
+    // the active fix for the cross-folder freeze: don't wait for old connections
+    // to drain (a passive timeout) — close them now so the next open has free
+    // NAS sessions to work with.
+    abort_all_streams();
 }
 
-/// Start the loopback HTTP server once; returns its port.
-async fn ensure_proxy() -> Result<u16> {
+/// Start the loopback HTTP server once (on the dedicated `PROXY_RT`); returns
+/// its port. Synchronous: binds with std then hands the listener to `PROXY_RT`,
+/// so it never runs the accept/serve loop on the shared `RT`.
+fn ensure_proxy() -> Result<u16> {
     let existing = PROXY_PORT.load(Ordering::Relaxed);
     if existing != 0 {
         return Ok(existing);
     }
-    let listener = TcpListener::bind("127.0.0.1:0").await.context("bind proxy")?;
-    let port = listener.local_addr()?.port();
-    PROXY_PORT.store(port, Ordering::Relaxed);
-    tokio::spawn(async move {
+    let _guard = PROXY_INIT.lock().unwrap();
+    // Re-check under the lock: another caller may have started it while we waited.
+    let existing = PROXY_PORT.load(Ordering::Relaxed);
+    if existing != 0 {
+        return Ok(existing);
+    }
+    let std_listener = std::net::TcpListener::bind("127.0.0.1:0").context("bind proxy")?;
+    std_listener
+        .set_nonblocking(true)
+        .context("proxy listener nonblocking")?;
+    let port = std_listener.local_addr()?.port();
+    PROXY_RT.spawn(async move {
+        let listener = match TcpListener::from_std(std_listener) {
+            Ok(l) => l,
+            Err(_) => return,
+        };
         loop {
             match listener.accept().await {
                 Ok((stream, _)) => {
-                    tokio::spawn(async move {
+                    let id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
+                    // serve() runs on PROXY_RT (current runtime), isolated from RT.
+                    let jh = tokio::spawn(async move {
                         let _ = serve(stream).await;
+                        ACTIVE_STREAMS.lock().unwrap().remove(&id);
                     });
+                    ACTIVE_STREAMS.lock().unwrap().insert(id, jh.abort_handle());
                 }
                 Err(_) => break,
             }
         }
     });
+    PROXY_PORT.store(port, Ordering::Relaxed);
     Ok(port)
 }
 
@@ -330,10 +468,42 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         return Ok(());
     };
 
-    // Open a dedicated connection + reader for this request.
-    let mut client = smb2::connect(&c.addr, &c.user, &c.password).await?;
-    let tree = client.connect_share(&c.share).await?;
-    let reader = client.open_file_reader(&tree, &path).await?;
+    // Bound concurrent reads against the shared session (see [SMB_CONN]). On a
+    // switch the old streams are aborted, which drops their permits, so the new
+    // file's streams get in promptly instead of a burst piling up.
+    let _permit = SMB_CONN.acquire().await;
+
+    // Reuse the persistent session (see [SESSION]) instead of connecting fresh
+    // per request — this is the fix for the cumulative-switches freeze. Every
+    // step stays bounded (see SETUP_TIMEOUT): on a timeout / error we invalidate
+    // the session (it's presumed dead) and answer with a real HTTP 500, so
+    // libmpv sees a clean failure — and the *next* request reconnects — instead
+    // of spinning forever or repeatedly failing against a stale handle.
+    let sess = match session(&c).await {
+        Ok(s) => s,
+        Err(_) => {
+            invalidate_session();
+            let _ = stream
+                .write_all(b"HTTP/1.1 500 SMB Connect Failed\r\nContent-Length: 0\r\n\r\n")
+                .await;
+            return Ok(());
+        }
+    };
+    let reader = match tokio::time::timeout(
+        SETUP_TIMEOUT,
+        sess.client.open_file_reader(&sess.tree, &path),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        _ => {
+            invalidate_session();
+            let _ = stream
+                .write_all(b"HTTP/1.1 500 SMB Open Failed\r\nContent-Length: 0\r\n\r\n")
+                .await;
+            return Ok(());
+        }
+    };
     let total = reader.size();
 
     let (start, end) = match range {
@@ -362,10 +532,30 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     const CHUNK: u64 = 256 * 1024;
     let mut off = start;
     while off <= end {
+        // Stop as soon as this stream's token is released (episode/anime switch
+        // unregisters it): keeps a superseded stream from streaming into a dead
+        // socket and holding a worker thread + NAS connection during rapid
+        // switching (the freeze). The live player disconnects the socket too,
+        // but the token check reacts immediately without waiting on that.
+        if !PLAYABLE.lock().unwrap().contains_key(&token) {
+            break;
+        }
         let want = CHUNK.min(end - off + 1);
-        let data = match reader.read_at(off, want).await {
-            Ok(d) => d,
-            Err(_) => break,
+        // Bound each read so a hung NAS can't pin a worker thread forever.
+        let data = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            reader.read_at(off, want),
+        )
+        .await
+        {
+            Ok(Ok(d)) => d,
+            _ => {
+                // Read failed/timed out on the shared session — assume the
+                // connection died (NAS idle-closed it, network blip) so the
+                // next request reconnects instead of repeating the same error.
+                invalidate_session();
+                break;
+            }
         };
         if data.is_empty() {
             break;
@@ -376,7 +566,9 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         BYTES_SERVED.fetch_add(data.len() as u64, Ordering::Relaxed);
         off += data.len() as u64;
     }
-    let _ = client.disconnect_share(&tree).await;
+    // No disconnect here: `sess` is the shared persistent session (see
+    // [SESSION]), reused by every other in-flight and future stream — only a
+    // detected failure (above) invalidates it, a normal finish must not.
     Ok(())
 }
 

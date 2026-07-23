@@ -11,7 +11,11 @@ use tokio::runtime::Runtime;
 
 static RT: Lazy<Runtime> = Lazy::new(|| {
     tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        // 4 (was 2): the SMB loopback proxy holds a streaming task per open
+        // connection; during rapid episode/anime switching an old stream stuck
+        // on a slow NAS read plus the accept loop could exhaust 2 threads and
+        // freeze further SMB calls (block_on). 4 gives headroom for switches.
+        .worker_threads(4)
         .enable_all()
         .build()
         .expect("tokio runtime")

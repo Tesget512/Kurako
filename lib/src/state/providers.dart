@@ -399,6 +399,16 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
   return creds.isConfigured;
 });
 
+/// The smbUri of every SMB episode with a completed local download — lets the
+/// episode list show a "downloaded" badge without an async round-trip per
+/// tile. Re-fetches whenever a download task changes (starts/finishes/is
+/// removed) so a just-finished download's badge appears without a restart.
+final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((ref) async {
+  ref.watch(downloadManagerProvider);
+  final list = await rust.listDownloads();
+  return list.map((d) => d.smbUri).toSet();
+});
+
 // ---- Bangumi API mirror (default on; routes API through the China mirror) ----
 
 /// When on, Bangumi API calls go through the mainland-China mirror

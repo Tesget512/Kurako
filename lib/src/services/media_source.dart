@@ -6,6 +6,7 @@ import 'package:saf_util/saf_util_platform_interface.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import 'external_player.dart' show smbUncPath, ensureUncAuth;
 
 /// Abstracts where the library's video files live and how to reach them, so the
 /// scan + playback code is identical across desktop (POSIX paths) and Android
@@ -218,7 +219,21 @@ class SmbMediaSource extends MediaSource {
     if (local != null) {
       return PlayableHandle('file:///$local');
     }
-    // Otherwise register with the local proxy; libmpv plays the http:// URL.
+    // Windows: play the UNC path directly through the OS SMB redirector, exactly
+    // like the external player. Windows keeps ONE persistent authenticated
+    // session per share and serves every file like a local file — so switching
+    // episodes (same folder or across folders) reuses that session instead of
+    // hammering the loopback proxy with a fresh smb2 connection per request,
+    // which was starving the NAS session table and freezing playback.
+    if (Platform.isWindows) {
+      final unc = smbUncPath(episode.filePath);
+      if (unc.startsWith(r'\\')) {
+        await ensureUncAuth(unc);
+        return PlayableHandle(unc);
+      }
+    }
+    // Other platforms (Android/macOS/Linux) have no UNC: register with the local
+    // proxy; libmpv plays the http:// URL.
     final url = await rust.smbPlayableUrl(smbUri: episode.filePath);
     return PlayableHandle(url, smb: true);
   }
@@ -230,6 +245,20 @@ class SmbMediaSource extends MediaSource {
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
     if (local != null) {
       return listLocalSubtitles(local);
+    }
+    // Windows: the UNC share behaves like a local directory once authenticated,
+    // so enumerate sidecar subtitles with the normal filesystem walk (their UNC
+    // paths load straight into mpv, no proxy).
+    if (Platform.isWindows) {
+      final unc = smbUncPath(episode.filePath);
+      if (unc.startsWith(r'\\')) {
+        try {
+          await ensureUncAuth(unc);
+          return await listLocalSubtitles(unc);
+        } catch (_) {
+          return const [];
+        }
+      }
     }
     try {
       return await rust.smbListSubtitles(smbUri: episode.filePath);

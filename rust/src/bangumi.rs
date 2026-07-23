@@ -78,11 +78,33 @@ async fn current_username() -> Result<String> {
     Ok(me.username)
 }
 
+/// Process-wide HTTP client, built once and reused. A `reqwest::Client` owns a
+/// connection pool with keep-alive, so reusing it lets the many per-scan
+/// requests (each anime does several sequential search/detail calls) share warm
+/// TCP+TLS connections instead of paying a fresh handshake every time — the real
+/// reason auto-match felt slow despite matching animes concurrently. Cloning a
+/// Client is cheap (it's `Arc` inside). Cleared by `reset_http_client` when the
+/// proxy environment may have changed.
+static HTTP_CLIENT: Lazy<Mutex<Option<reqwest::Client>>> = Lazy::new(|| Mutex::new(None));
+
+/// Drop the cached client so the next `client()` rebuilds it (e.g. after the
+/// system proxy changes). Cheap; the pool is re-established lazily.
+pub fn reset_http_client() {
+    *HTTP_CLIENT.lock().unwrap() = None;
+}
+
 fn client() -> Result<reqwest::Client> {
+    let mut guard = HTTP_CLIENT.lock().unwrap();
+    if let Some(c) = guard.as_ref() {
+        return Ok(c.clone());
+    }
+
     let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .connect_timeout(std::time::Duration::from_secs(15))
-        .timeout(std::time::Duration::from_secs(30));
+        .timeout(std::time::Duration::from_secs(30))
+        // Keep idle connections warm across the burst of scan requests.
+        .pool_idle_timeout(std::time::Duration::from_secs(90));
 
     // Bangumi (api.bgm.tv / lain.bgm.tv) is frequently DNS-poisoned in mainland
     // China, so a direct connection times out. Auto-detect the system HTTP proxy
@@ -93,7 +115,9 @@ fn client() -> Result<reqwest::Client> {
         }
     }
 
-    builder.build().context("build http client")
+    let built = builder.build().context("build http client")?;
+    *guard = Some(built.clone());
+    Ok(built)
 }
 
 /// Detect a system HTTP proxy: env vars first, then (on Windows) the per-user

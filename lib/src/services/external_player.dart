@@ -10,16 +10,30 @@ import '../state/providers.dart';
 /// The locator to hand an external player for [ep].
 ///
 /// - A downloaded local copy is always preferred (instant, seekable).
-/// - **Android SMB (not downloaded):** the loopback proxy is unreachable from
-///   another app's sandbox (each app has its own 127.0.0.1), so we hand the
-///   player a real `smb://user:pass@host/share/path` URL, which VLC / MX Player
-///   open natively.
-/// - **Desktop SMB (not downloaded):** the loopback proxy works same-machine, so
-///   use its http:// URL.
+/// - **Windows SMB (not downloaded):** hand a UNC path `\\host\share\path` and
+///   let Windows' own SMB client serve it — the default video player opens it
+///   exactly like a local file (no loopback proxy, no forced program choice).
+///   This is why external SMB playback now behaves identically to local.
+/// - **Android SMB (not downloaded):** hand a real `smb://user:pass@host/path`
+///   URI (see [_smbUrlWithCreds]) so the external player's *own* bundled SMB
+///   client (VLC/MX Player both ship one, same as our Rust smb2 client) connects
+///   directly — mirrors how VLC's own network browser opens SMB shares. This is
+///   NOT the loopback proxy: our proxy runs inside our app's process, and
+///   Android freezes a fully-backgrounded app's threads within seconds (the
+///   "cached app freezer"), which happens the moment the external player takes
+///   focus — the proxy stops responding right as the player tries to connect
+///   ("无法播放位置 http://127.0.0.1:.../tN"). A direct smb:// URI has no such
+///   dependency on our app staying alive.
+/// - **macOS/Linux SMB (not downloaded):** fall back to the loopback proxy's
+///   http:// URL (no universal UNC equivalent, unconfirmed whether their common
+///   players accept smb:// via ACTION_VIEW-equivalent — untested).
 Future<String> externalPlayerLocator(Episode ep) async {
   if (ep.sourceType != 'smb') return ep.filePath;
   final local = await rust.downloadedLocalPath(smbUri: ep.filePath);
   if (local != null) return local;
+  if (Platform.isWindows) {
+    return smbUncPath(ep.filePath);
+  }
   if (Platform.isAndroid) {
     return _smbUrlWithCreds(ep.filePath);
   }
@@ -44,6 +58,47 @@ Future<String> _smbUrlWithCreds(String smbUri) async {
   return 'smb://$u:$p@$host$pathPart';
 }
 
+/// Convert `smb://host[:port]/share/sub/file.mkv` → Windows UNC
+/// `\\host\share\sub\file.mkv` (drop the port, `/` → `\`). Windows opens UNC
+/// paths through its built-in SMB redirector, so any video player handles it
+/// like a local file. Returns the input unchanged if it isn't an smb:// URI.
+String smbUncPath(String smbUri) {
+  final rest = smbUri.replaceFirst('smb://', '');
+  final slash = rest.indexOf('/');
+  if (slash < 0) return smbUri;
+  var host = rest.substring(0, slash);
+  final colon = host.indexOf(':');
+  if (colon >= 0) host = host.substring(0, colon); // drop :445
+  final pathPart = rest.substring(slash + 1).replaceAll('/', '\\');
+  return '\\\\$host\\$pathPart';
+}
+
+/// Establish a Windows SMB session for the `\\host\share` root of [uncPath]
+/// using the stored credentials, so the default player (or a configured one)
+/// can read the file. Best-effort: `net use` fails harmlessly if the share is
+/// already connected (error 1219) or needs no auth, so we ignore the result and
+/// let playback proceed regardless. No-op when no username is stored (guest /
+/// pre-authenticated share).
+Future<void> ensureUncAuth(String uncPath) async {
+  final creds = await SmbCredentials.load();
+  if (creds.user.isEmpty) return;
+  // uncPath = \\host\share\sub\file → share root = \\host\share
+  final parts = uncPath.split('\\')..removeWhere((s) => s.isEmpty);
+  if (parts.length < 2) return;
+  final shareRoot = '\\\\${parts[0]}\\${parts[1]}';
+  final args = <String>[
+    'use',
+    shareRoot,
+    creds.password,
+    '/user:${creds.user}',
+  ];
+  try {
+    // Wait for completion (fast) so the session exists before the player opens
+    // the file; swallow any error (already-connected / no-auth shares).
+    await Process.run('net', args);
+  } catch (_) {}
+}
+
 /// Launch a video in an external player.
 ///
 /// - Desktop (Windows/macOS/Linux): [locator] is a filesystem path. Uses the
@@ -57,6 +112,13 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
     return;
   }
 
+  // A Windows UNC path (\\host\share\...) points at an authenticated share:
+  // establish the session first so both a configured player and the default
+  // association can read it, exactly like a local file.
+  if (Platform.isWindows && locator.startsWith(r'\\')) {
+    await ensureUncAuth(locator);
+  }
+
   final path = playerPath.trim();
   if (path.isNotEmpty) {
     // Detached so the child owns no stdio pipes and the Dart side never waits on
@@ -67,10 +129,10 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
   // No configured player.
   if (Platform.isWindows) {
     // An http proxy URL (SMB stream) has no file association — opening it via
-    // the shell lands in the default *browser* (the "web player" bug), and the
-    // old .m3u wrapper could get stuck on a wrong association. Without a
-    // configured player there's no reliable target, so tell the user to pick
-    // one (the settings row next to the external-player toggle).
+    // the shell lands in the default *browser* (the "web player" bug). SMB now
+    // resolves to a UNC path on Windows, which HAS a normal file association, so
+    // it opens in the default video player like any local file — no forced
+    // program choice. Only the (macOS/Linux-only) proxy fallback stays http.
     if (locator.startsWith('http')) {
       throw Exception('未配置外置播放器。请在 设置 → 播放器 中选择播放器程序（SMB 流播放需要）');
     }
@@ -111,20 +173,51 @@ Future<void> openWindowsProgramChooser() async {
 }
 
 /// Hand a content:// / smb:// / file URI to an external player via ACTION_VIEW.
-/// The grant flag lets the receiving app read a SAF document; for smb:// we omit
-/// the video/* MIME so an SMB-capable player (VLC/MX) claims the scheme itself.
+/// Always sets an explicit `video/*` MIME — video players generally register a
+/// scheme-agnostic `video/*` filter (matching local/content files) rather than
+/// one per network scheme, so even though VLC has no `smb` intent-filter, an
+/// explicit `video/*` type still matches its generic video-view filter for any
+/// data scheme. Omitting the type (as this used to for smb://) leaves the
+/// implicit type unresolved for schemes with no ContentResolver mapping, which
+/// only matches scheme-specific filters — VLC has none for `smb`, hence the
+/// old "No Activity found" error. The grant flag lets the receiving app read a
+/// SAF document. Falls back to an explicit chooser if the direct intent finds
+/// no default handler.
 Future<void> _launchAndroidIntent(String uri) async {
-  final isSmb = uri.startsWith('smb://');
   final intent = AndroidIntent(
     action: 'action_view',
     data: uri,
-    type: isSmb ? null : 'video/*',
+    type: 'video/*',
     flags: <int>[
       Flag.FLAG_ACTIVITY_NEW_TASK,
       Flag.FLAG_GRANT_READ_URI_PERMISSION,
     ],
   );
-  await intent.launch();
+  // A raw smb:// URI (not-yet-downloaded SMB episode) only opens in a player
+  // that registers its OWN intent-filter for the `smb` scheme — confirmed on a
+  // real device that neither VLC nor MX Player do this for external
+  // ACTION_VIEW (their SMB support is for browsing shares *within* the app,
+  // not for another app handing them a smb:// link). Falling back to the OS's
+  // own chooser in that case just shows an unhelpful, unbranded "没有应用可执行
+  // 此操作" sheet — so check resolvability first and give a clear, actionable
+  // message instead of ever inflicting that dead end on the user.
+  if (uri.startsWith('smb://')) {
+    final canResolve = await intent.canResolveActivity() ?? false;
+    if (!canResolve) {
+      throw Exception(
+        '未找到支持 SMB 网络串流的播放器（如 VLC、MX Player）。请安装兼容的播放器，'
+        '或先将该集下载到本地后再用外部播放器打开',
+      );
+    }
+    await intent.launch();
+    return;
+  }
+  try {
+    await intent.launch();
+  } catch (_) {
+    // No default handler for this data/type — let the user pick an app.
+    await intent.launchChooser('选择播放器');
+  }
 }
 
 /// Reveal a local file in the OS file manager (desktop only — SMB/SAF sources
