@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/media_source.dart';
+import 'window_caption.dart';
 
 class ScanProgressSheet extends StatefulWidget {
   /// When true, folders whose files haven't changed since the last scan are
@@ -94,7 +95,15 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('扫描与匹配', style: theme.textTheme.titleLarge),
+          // This sheet blocks interaction with the rest of the window
+          // (isDismissible/enableDrag both false) until the scan finishes, so
+          // if the window ended up positioned awkwardly (partly off-screen,
+          // behind another window) there was previously no way to drag it
+          // into view to reach the "完成" button. The title text doubles as a
+          // drag handle on desktop, same as the player/detail page toolbars.
+          WindowDragArea(
+            child: Text('扫描与匹配', style: theme.textTheme.titleLarge),
+          ),
           const SizedBox(height: 16),
           LinearProgressIndicator(value: _done ? 1 : value),
           const SizedBox(height: 12),

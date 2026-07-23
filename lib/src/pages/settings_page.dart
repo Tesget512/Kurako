@@ -297,7 +297,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           Text('快进按钮时长：$secs 秒'),
           const SizedBox(height: 2),
           Text(
-            '播放器顶部快进按钮跳转的秒数（双击画面固定 10 秒，不受影响）',
+            '播放器快进按钮跳转的秒数（双击画面固定 10 秒，不受影响）',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),

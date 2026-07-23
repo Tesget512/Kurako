@@ -11,7 +11,7 @@ class AnimeBdApp extends ConsumerWidget {
   const AnimeBdApp({super.key});
 
   ThemeData _theme(ColorScheme scheme, {required bool systemFont}) {
-    return ThemeData(
+    final base = ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
       // PredictiveBackPageTransitionsBuilder: tracks the Android system back
@@ -25,10 +25,57 @@ class AnimeBdApp extends ConsumerWidget {
       ),
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
       // instead of the system fallback chain. When the user opts into the
-      // system font, pass null so Flutter uses the platform default.
-      fontFamily: systemFont ? null : 'LXGWWenKaiGBScreen',
-      fontFamilyFallback:
-          systemFont ? null : const ['Microsoft YaHei UI', 'Segoe UI'],
+      // system font on Windows, use ONE real system font — 'Microsoft YaHei
+      // UI' — for everything, rather than a [primary, fallback] pair. Two
+      // different font FILES in the same fallback chain means Latin glyphs
+      // and CJK glyphs (this app mixes English release-group names with
+      // Chinese titles constantly) come from different type designs with
+      // different hinting/smoothing, which showed up as both inconsistent
+      // weight ("有粗有细") *and* inconsistent sharpness ("有的地方糊有的
+      // 地方锐利") depending on which font a given glyph fell back to.
+      // Microsoft YaHei UI alone covers both scripts (it's Windows' own
+      // native zh-CN default), so there's nothing left to mix. Android isn't
+      // affected — its own Roboto+Noto Sans CJK pairing is already internally
+      // consistent — so leave it on null (true platform default) there.
+      fontFamily: systemFont
+          ? (Platform.isWindows ? 'Microsoft YaHei UI' : null)
+          : 'LXGWWenKaiGBScreen',
+      fontFamilyFallback: systemFont
+          ? null
+          : const ['Microsoft YaHei UI', 'Segoe UI'],
+    );
+    if (!systemFont) return base;
+    // Material 3's default TextTheme assigns different roles different font
+    // weights (w500 for titles/labels, w400 for body, etc). Our bundled font
+    // ships all of those weights as real glyphs, so it looked fine — but the
+    // OS default UI font commonly only has Regular + Bold installed, so the
+    // in-between weights Material asks for get synthetically bolded by the
+    // renderer, inconsistently, per role. Normalizing every role to one real
+    // weight avoids that synthesis entirely.
+    return base.copyWith(
+      textTheme: _normalizeWeight(base.textTheme),
+      primaryTextTheme: _normalizeWeight(base.primaryTextTheme),
+    );
+  }
+
+  TextTheme _normalizeWeight(TextTheme t) {
+    TextStyle? norm(TextStyle? s) => s?.copyWith(fontWeight: FontWeight.w400);
+    return TextTheme(
+      displayLarge: norm(t.displayLarge),
+      displayMedium: norm(t.displayMedium),
+      displaySmall: norm(t.displaySmall),
+      headlineLarge: norm(t.headlineLarge),
+      headlineMedium: norm(t.headlineMedium),
+      headlineSmall: norm(t.headlineSmall),
+      titleLarge: norm(t.titleLarge),
+      titleMedium: norm(t.titleMedium),
+      titleSmall: norm(t.titleSmall),
+      bodyLarge: norm(t.bodyLarge),
+      bodyMedium: norm(t.bodyMedium),
+      bodySmall: norm(t.bodySmall),
+      labelLarge: norm(t.labelLarge),
+      labelMedium: norm(t.labelMedium),
+      labelSmall: norm(t.labelSmall),
     );
   }
 
