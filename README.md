@@ -1,4 +1,4 @@
-# anime_bd_player
+# KURAKO
 
 A new Flutter project.
 

@@ -1504,7 +1504,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_lib_anime_bd_player"
+name = "rust_lib_kurako"
 version = "0.1.0"
 dependencies = [
  "anitomy",

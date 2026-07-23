@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.animebd.anime_bd_player"
+    namespace = "com.alts.kurako"
     // Force compileSdk 36 to satisfy flutter_plugin_android_lifecycle (file_picker
     // transitive dep was compiled against 34, causing AAR metadata check failure).
     compileSdk = 36
@@ -18,7 +18,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.animebd.anime_bd_player"
+        applicationId = "com.alts.kurako"
         // media_kit / libmpv require Android 5.0 (API 21) or newer.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion

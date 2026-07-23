@@ -4,20 +4,20 @@
 ; Then compile this script with Inno Setup 6 (ISCC.exe installer.iss), or open
 ; it in the Inno Setup IDE and hit Build. Output: dist/KURAKO-Setup.exe
 ;
-; The app stores its library + settings in Documents\AnimeBDPlayer, NOT in the
+; The app stores its library + settings in Documents\KURAKO, NOT in the
 ; install directory — so updating (reinstalling over the top) never touches user
 ; data, and uninstalling leaves the library intact.
 
 #define AppName "KURAKO"
 #define AppNameEn "KURAKO"
 #define AppVersion "1.0.0"
-#define AppPublisher "com.animebd"
-#define AppExeName "anime_bd_player.exe"
+#define AppPublisher "com.alts"
+#define AppExeName "kurako.exe"
 ; Path to the flutter release bundle, relative to this script (project root).
 #define ReleaseDir "build\windows\x64\runner\Release"
 
 [Setup]
-AppId={{9F4B2C7A-8E1D-4A3F-9B6E-ANIMEBDPLAYER}}
+AppId={{17E6CBB0-5F44-446A-B193-51100DE2F0EB}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}

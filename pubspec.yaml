@@ -1,4 +1,4 @@
-name: anime_bd_player
+name: kurako
 description: "A new Flutter project."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
@@ -79,7 +79,7 @@ dependencies:
   # drop the native OS title bar and draw our own drag region + window buttons.
   window_manager: ^0.4.0
 
-  rust_lib_anime_bd_player:
+  rust_lib_kurako:
     path: rust_builder
 
 dev_dependencies:

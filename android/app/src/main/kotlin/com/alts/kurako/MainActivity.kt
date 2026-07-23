@@ -1,4 +1,4 @@
-package com.animebd.anime_bd_player
+package com.alts.kurako
 
 import io.flutter.embedding.android.FlutterActivity
 

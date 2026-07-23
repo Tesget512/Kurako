@@ -28,7 +28,7 @@ class CoverImage extends ConsumerWidget {
   });
 
   static const _headers = {
-    'User-Agent': 'animebdplayer/1.0 (https://github.com/animebd/anime-bd-player)',
+    'User-Agent': 'KURAKO/1.0',
     'Referer': 'https://bgm.tv/',
   };
 

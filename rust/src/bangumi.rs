@@ -28,7 +28,7 @@ fn api_base() -> &'static str {
         BASE_OFFICIAL
     }
 }
-const USER_AGENT: &str = "animebdplayer/1.0 (https://github.com/animebd/anime-bd-player)";
+const USER_AGENT: &str = "KURAKO/1.0";
 
 // Bangumi OAuth application credentials. The real values live in the
 // git-ignored `secrets.rs` (copy `secrets.rs.example` → `secrets.rs`). A desktop

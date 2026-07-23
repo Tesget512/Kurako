@@ -576,7 +576,7 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.6.1"
-  rust_lib_anime_bd_player:
+  rust_lib_kurako:
     dependency: "direct main"
     description:
       path: rust_builder

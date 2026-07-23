@@ -26,14 +26,14 @@ if /I "%MODE%"=="apk" goto :apk
 
 REM ---- Windows Release ----
 echo === [1/2] flutter build windows --release ===
-taskkill /IM anime_bd_player.exe /F >nul 2>&1
+taskkill /IM kurako.exe /F >nul 2>&1
 call flutter build windows --release
 if errorlevel 1 ( echo BUILD FAILED ^(windows^) & exit /b 1 )
 echo === 打包 Windows 便携版到 dist\out ===
 set "WINSRC=build\windows\x64\runner\Release"
 if exist "%OUT%\windows" rmdir /S /Q "%OUT%\windows"
 xcopy "%WINSRC%" "%OUT%\windows\" /E /I /Y >nul
-echo   -> %OUT%\windows\anime_bd_player.exe
+echo   -> %OUT%\windows\kurako.exe
 
 echo === 生成 Windows 安装包 (Inno Setup) ===
 set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"

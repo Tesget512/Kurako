@@ -89,12 +89,12 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.animebd" "\0"
+            VALUE "CompanyName", "com.alts" "\0"
             VALUE "FileDescription", "KURAKO" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "anime_bd_player" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.animebd. All rights reserved." "\0"
-            VALUE "OriginalFilename", "anime_bd_player.exe" "\0"
+            VALUE "InternalName", "kurako" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.alts. All rights reserved." "\0"
+            VALUE "OriginalFilename", "kurako.exe" "\0"
             VALUE "ProductName", "KURAKO" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END

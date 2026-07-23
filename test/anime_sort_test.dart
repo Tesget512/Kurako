@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:anime_bd_player/src/rust/models.dart';
-import 'package:anime_bd_player/src/state/anime_sort.dart';
-import 'package:anime_bd_player/src/state/providers.dart';
+import 'package:kurako/src/rust/models.dart';
+import 'package:kurako/src/state/anime_sort.dart';
+import 'package:kurako/src/state/providers.dart';
 
 /// Minimal Anime with just the fields the sort logic reads.
 Anime a(String title, {String? airDate}) => Anime(
