@@ -443,6 +443,55 @@ pub fn set_watched(episode_id: i64, watched: bool) -> Result<()> {
     })
 }
 
+/// Prune episodes that vanished from disk/share within a scanned scope.
+///
+/// Deletes every episode of `source_type` whose `file_path` starts with one of
+/// `prefixes` (the folders actually walked this scan) but is NOT in `kept` (the
+/// files found this scan). This is what makes an incremental scan delete files
+/// removed from a folder — for local, SMB and SAF alike, since each locator is
+/// a plain string prefix (`D:\anime\…`, `smb://addr/share/sub/…`,
+/// `content://…/tree/…/document/…`). Prefix-scoping means an incremental scan
+/// that skipped a folder never prunes that folder's still-present episodes.
+/// Returns the number of episodes deleted.
+pub fn prune_missing(
+    source_type: &str,
+    prefixes: &[String],
+    kept: &std::collections::HashSet<String>,
+) -> Result<usize> {
+    if prefixes.is_empty() {
+        return Ok(0);
+    }
+    with_conn(|c| {
+        let mut stmt =
+            c.prepare("SELECT file_path FROM episodes WHERE source_type = ?1")?;
+        let paths: Vec<String> = stmt
+            .query_map(params![source_type], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut deleted = 0usize;
+        for path in paths {
+            let in_scope = prefixes.iter().any(|pre| path.starts_with(pre.as_str()));
+            if in_scope && !kept.contains(&path) {
+                c.execute("DELETE FROM episodes WHERE file_path = ?1", params![path])?;
+                deleted += 1;
+            }
+        }
+        Ok(deleted)
+    })
+}
+
+/// Delete anime rows left with no episodes (e.g. after [prune_missing] removed
+/// their last file). Returns the number of anime deleted.
+pub fn delete_empty_anime() -> Result<usize> {
+    with_conn(|c| {
+        let n = c.execute(
+            "DELETE FROM anime WHERE id NOT IN (SELECT DISTINCT anime_id FROM episodes)",
+            [],
+        )?;
+        Ok(n)
+    })
+}
+
 /// Remove an anime and its episodes (used when a folder is dropped and rescanned).
 pub fn clear_all() -> Result<()> {
     with_conn(|c| {

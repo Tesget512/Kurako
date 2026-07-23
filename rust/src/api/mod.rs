@@ -182,8 +182,11 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
     };
 
     // 1. Group video files by folder into anime, then upsert. Skip unchanged
-    //    folders when doing an incremental scan.
+    //    folders when doing an incremental scan. `scanned_prefixes` records the
+    //    folders actually walked, so pruning only deletes missing files within
+    //    them (a skipped folder's still-present episodes are never touched).
     let mut groups = Vec::new();
+    let mut scanned_prefixes: Vec<String> = Vec::new();
     for f in &folders {
         // Only walkdir-scannable local folders are handled here; SAF folders are
         // enumerated on the Dart side and go through scan_files_and_match.
@@ -201,11 +204,12 @@ pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Resu
         }
         emit("scanning", 0, 0, &format!("扫描 {}", f.path), &sink);
         groups.extend(scan::group_library(&f.path));
+        scanned_prefixes.push(f.path.clone());
         // Record the scan time so the next incremental run can skip it.
         let _ = db::set_folder_scanned(f.id, now_secs());
     }
 
-    finish_scan(groups, "local", &sink)
+    finish_scan(groups, "local", scanned_prefixes, &sink)
 }
 
 /// Scan a folder whose files were enumerated on the Dart side (Android SAF) or
@@ -228,7 +232,44 @@ pub fn scan_files_and_match(
         .collect();
     let groups = scan::group_files(scanned);
     let _ = db::set_folder_scanned(folder_id, now_secs());
-    finish_scan(groups, &source_type, &sink)
+    // Scope deletion-pruning to this folder's locator prefix so files removed
+    // from the SMB share / SAF tree are dropped from the library too.
+    let prefixes = prune_prefixes_for(folder_id, &source_type);
+    finish_scan(groups, &source_type, prefixes, &sink)
+}
+
+/// The locator-URI prefix(es) covering one enumerated folder, used to scope
+/// deletion-pruning. SAF tree URIs are already a clean prefix of their child
+/// document URIs; SMB paths are normalized through the cached creds so they
+/// match the `addr:port` form stored on episodes.
+fn prune_prefixes_for(folder_id: i64, source_type: &str) -> Vec<String> {
+    let folders = match db::list_folders() {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let Some(folder) = folders.into_iter().find(|f| f.id == folder_id) else {
+        return Vec::new();
+    };
+    match source_type {
+        "smb" => {
+            // folder.path is smb://host/share/subdir (host as entered); rebuild
+            // it from creds so it matches episode URIs (smb://addr:port/share/…).
+            let subdir = smb_subdir_of(&folder.path);
+            smb::uri_prefix(&subdir).into_iter().collect()
+        }
+        // saf (and any other prefix-clean source): the folder path is already a
+        // prefix of every file discovered under it.
+        _ => vec![folder.path],
+    }
+}
+
+/// Extract the share-relative sub-path from an `smb://host/share/sub/dir` URI.
+fn smb_subdir_of(path: &str) -> String {
+    let rest = path.strip_prefix("smb://").unwrap_or(path);
+    let mut it = rest.splitn(3, '/');
+    let _host = it.next();
+    let _share = it.next();
+    it.next().unwrap_or("").trim_matches('/').to_string()
 }
 
 // ---- SMB network share ----
@@ -367,6 +408,7 @@ pub fn downloaded_local_path(smb_uri: String) -> Result<Option<String>, String> 
 fn finish_scan(
     groups: Vec<scan::AnimeGroup>,
     source_type: &str,
+    prune_prefixes: Vec<String>,
     sink: &StreamSink<ScanProgress>,
 ) -> Result<(), String> {
     let emit = |stage: &str, current: i64, total: i64, message: &str| {
@@ -411,6 +453,23 @@ fn finish_scan(
         emit("scanning", i as i64 + 1, total, &g.title);
     }
 
+    // 1b. Prune episodes that disappeared from the scanned scope: anything of
+    // this source under a walked prefix that we DIDN'T just find is gone from
+    // disk/share, so delete it (and any anime left with no episodes). Runs after
+    // the upserts so the kept set reflects everything currently present.
+    if !prune_prefixes.is_empty() {
+        let kept: std::collections::HashSet<String> = groups
+            .iter()
+            .flat_map(|g| g.files.iter().map(|f| f.path.clone()))
+            .collect();
+        if let Ok(removed) = db::prune_missing(source_type, &prune_prefixes, &kept) {
+            if removed > 0 {
+                let _ = db::delete_empty_anime();
+                emit("scanning", total, total, &format!("清理 {removed} 个失效文件"));
+            }
+        }
+    }
+
     // 2. Auto-match unmatched anime against Bangumi, concurrently (bounded).
     let unmatched = db::unmatched_anime().map_err(|e| e.to_string())?;
     let match_total = unmatched.len() as i64;
@@ -419,9 +478,10 @@ fn finish_scan(
     RT.block_on(async {
         use futures::stream::{self, StreamExt};
         stream::iter(unmatched)
-            // Low concurrency: Bangumi rate-limits aggressively, and a 429 on
-            // the full-title query degrades match quality for that title.
-            .for_each_concurrent(2, |(anime_id, title)| {
+            // Bounded concurrency: parallel matching speeds up large scans, but
+            // Bangumi rate-limits, and a 429 on the full-title query degrades
+            // match quality — 4 is the sweet spot (via the mainland mirror).
+            .for_each_concurrent(4, |(anime_id, title)| {
                 let done = &done;
                 async move {
                     if let Ok(Some(best)) = bangumi::best_match(&title).await {
@@ -588,41 +648,80 @@ pub fn refresh_metadata(anime_id: i64) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or("anime not found")?;
     let subject_id = anime.bangumi_id.ok_or("not yet matched to Bangumi")?;
-    RT.block_on(async {
-        let s = bangumi::subject(subject_id).await?;
-        let tags = if s.tags.is_empty() { None } else { Some(s.tags.join(",")) };
-        let weekday = s.air_date.as_deref().and_then(bangumi::weekday_of);
-        db::bind_bangumi(
-            anime_id,
-            s.id,
-            &s.name,
-            &s.name_cn,
-            &s.summary,
-            s.cover_url.as_deref(),
-            s.air_date.as_deref(),
-            s.eps,
-            s.rating,
-            s.rating_total,
-            s.rating_rank,
-            s.rating_counts.as_deref(),
-            weekday,
-            tags.as_deref(),
-            "high",
-            anime.corrected,
-        )?;
-        // Enrich on-disk episodes with Bangumi episode titles (only fills NULL
-        // titles; never overwrites user-visible data).
-        if let Ok(titles) = bangumi::subject_episode_titles(subject_id, 500).await {
-            for t in titles {
-                let title = if !t.name_cn.is_empty() { &t.name_cn } else { &t.name };
-                if !title.is_empty() {
-                    db::set_episode_title(anime_id, t.ep, title)?;
-                }
+    RT.block_on(async { refresh_one(anime_id, subject_id, anime.corrected).await })
+        .map_err(|e| e.to_string())
+}
+
+/// Re-fetch and rebind one subject's metadata + episode titles. Shared by the
+/// single-anime [refresh_metadata] and the startup bulk [refresh_all_metadata].
+async fn refresh_one(anime_id: i64, subject_id: i64, corrected: bool) -> anyhow::Result<()> {
+    let s = bangumi::subject(subject_id).await?;
+    let tags = if s.tags.is_empty() { None } else { Some(s.tags.join(",")) };
+    let weekday = s.air_date.as_deref().and_then(bangumi::weekday_of);
+    db::bind_bangumi(
+        anime_id,
+        s.id,
+        &s.name,
+        &s.name_cn,
+        &s.summary,
+        s.cover_url.as_deref(),
+        s.air_date.as_deref(),
+        s.eps,
+        s.rating,
+        s.rating_total,
+        s.rating_rank,
+        s.rating_counts.as_deref(),
+        weekday,
+        tags.as_deref(),
+        "high",
+        corrected,
+    )?;
+    // Enrich on-disk episodes with Bangumi episode titles (only fills NULL
+    // titles; never overwrites user-visible data).
+    if let Ok(titles) = bangumi::subject_episode_titles(subject_id, 500).await {
+        for t in titles {
+            let title = if !t.name_cn.is_empty() { &t.name_cn } else { &t.name };
+            if !title.is_empty() {
+                db::set_episode_title(anime_id, t.ep, title)?;
             }
         }
-        Ok::<_, anyhow::Error>(())
-    })
-    .map_err(|e| e.to_string())
+    }
+    Ok(())
+}
+
+/// Refresh Bangumi metadata for EVERY bound anime, concurrently (bounded).
+///
+/// Called once per app launch (from Dart's startup) so ratings/summaries/tags/
+/// episode titles across the whole library stay current — replacing the old
+/// per-anime "refresh the first time you open each subject" behaviour, which
+/// re-hit the API on every browse. Bounded parallelism keeps it fast without
+/// tripping Bangumi's rate limiter. Returns the number of entries refreshed.
+pub fn refresh_all_metadata() -> Result<i64, String> {
+    let bound = db::bound_anime().map_err(|e| e.to_string())?;
+    if bound.is_empty() {
+        return Ok(0);
+    }
+    let done = std::sync::atomic::AtomicI64::new(0);
+    RT.block_on(async {
+        use futures::stream::{self, StreamExt};
+        stream::iter(bound)
+            .for_each_concurrent(4, |(anime_id, subject_id)| {
+                let done = &done;
+                async move {
+                    // `corrected` guards a user-fixed match; preserve it.
+                    let corrected = db::get_anime(anime_id)
+                        .ok()
+                        .flatten()
+                        .map(|a| a.corrected)
+                        .unwrap_or(false);
+                    if refresh_one(anime_id, subject_id, corrected).await.is_ok() {
+                        done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            })
+            .await;
+    });
+    Ok(done.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 /// Clear all recognised anime and episodes (keeps library folders). Use before

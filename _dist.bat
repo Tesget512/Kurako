@@ -27,7 +27,7 @@ if /I "%MODE%"=="apk" goto :apk
 REM ---- Windows Release ----
 echo === [1/2] flutter build windows --release ===
 taskkill /IM anime_bd_player.exe /F >nul 2>&1
-flutter build windows --release
+call flutter build windows --release
 if errorlevel 1 ( echo BUILD FAILED ^(windows^) & exit /b 1 )
 echo === 打包 Windows 便携版到 dist\out ===
 set "WINSRC=build\windows\x64\runner\Release"
@@ -39,13 +39,13 @@ if /I "%MODE%"=="win" goto :done
 :apk
 REM ---- Android Release APK (split-per-abi) ----
 echo === [2/2] flutter build apk --release --split-per-abi ===
-flutter build apk --release --split-per-abi
+call flutter build apk --release --split-per-abi
 if errorlevel 1 ( echo BUILD FAILED ^(apk^) & exit /b 1 )
 echo === 复制 APK 到 dist\out ===
-copy /Y "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk"   "%OUT%\AnimeBDPlayer-arm64-v8a.apk" >nul
-copy /Y "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "%OUT%\AnimeBDPlayer-armeabi-v7a.apk" >nul 2>&1
-copy /Y "build\app\outputs\flutter-apk\app-x86_64-release.apk"      "%OUT%\AnimeBDPlayer-x86_64.apk" >nul 2>&1
-echo   -> %OUT%\AnimeBDPlayer-arm64-v8a.apk
+copy /Y "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk"   "%OUT%\KURAKO-arm64-v8a.apk" >nul
+copy /Y "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "%OUT%\KURAKO-armeabi-v7a.apk" >nul 2>&1
+copy /Y "build\app\outputs\flutter-apk\app-x86_64-release.apk"      "%OUT%\KURAKO-x86_64.apk" >nul 2>&1
+echo   -> %OUT%\KURAKO-arm64-v8a.apk
 
 :done
 echo.

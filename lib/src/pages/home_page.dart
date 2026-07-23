@@ -1,19 +1,52 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../rust/api.dart' as rust;
+import '../state/providers.dart';
 import '../widgets/window_caption.dart';
 import 'collection_page.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
 
-class HomePage extends StatefulWidget {
+/// Guards the once-per-launch library-wide metadata refresh so it fires exactly
+/// once even if HomePage is rebuilt/remounted. Resets naturally on app restart.
+bool _metadataRefreshedThisRun = false;
+
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  ConsumerState<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends ConsumerState<HomePage> {
   int _index = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshAllMetadataOnce();
+  }
+
+  /// Silently refresh Bangumi metadata for the WHOLE library once per app
+  /// launch, so ratings/summaries/tags/episode titles stay current without the
+  /// old per-anime-on-open API hammering. Runs in the background (no spinner);
+  /// a single toast reports how many entries updated. Failures stay quiet and
+  /// leave the guard clear so the next launch retries.
+  Future<void> _refreshAllMetadataOnce() async {
+    if (_metadataRefreshedThisRun) return;
+    _metadataRefreshedThisRun = true;
+    try {
+      final n = await rust.refreshAllMetadata();
+      if (!mounted || n <= 0) return;
+      ref.invalidate(animeListProvider);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('已自动更新 $n 部番剧的 Bangumi 元数据')),
+      );
+    } catch (_) {
+      _metadataRefreshedThisRun = false;
+    }
+  }
 
   static const _pages = [LibraryPage(), CollectionPage(), SettingsPage()];
 

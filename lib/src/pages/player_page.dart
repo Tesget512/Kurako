@@ -10,6 +10,7 @@ import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
@@ -111,6 +112,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // Which panel the endDrawer currently shows.
   _Panel _drawerPanel = _Panel.episodes;
 
+  // Desktop native fullscreen state (window_manager.setFullScreen). We DON'T
+  // use media_kit's own fullscreen: it pushes a fresh Video on the root
+  // Navigator, orphaning this Scaffold + its endDrawer, so the control buttons
+  // (which open our drawer) silently no-op until you leave fullscreen. Toggling
+  // the OS window instead keeps the single Scaffold hosting the Video, so every
+  // button and the drawer keep working. A ValueNotifier (not setState) drives
+  // the button icon because the controls subtree is keyed and won't rebuild on
+  // a plain setState.
+  final ValueNotifier<bool> _fullscreen = ValueNotifier<bool>(false);
+
   // Quick-seek jump (seconds), read from [seekDurationProvider] each build.
   int _seekSec = 10;
 
@@ -144,6 +155,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
     _openCurrent();
     _listen();
+  }
+
+  /// Toggle native OS fullscreen (desktop only). No-op on real mobile, which is
+  /// already fullscreen+landscape.
+  Future<void> _toggleFullscreen() async {
+    if (_isMobile) return;
+    final next = !_fullscreen.value;
+    try {
+      await windowManager.setFullScreen(next);
+      _fullscreen.value = next;
+    } catch (_) {}
   }
 
   Future<void> _enterPip() async {
@@ -433,7 +455,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (_isMobile) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    } else if (_fullscreen.value) {
+      // Leave the OS window as we found it (windowed) when closing the player.
+      windowManager.setFullScreen(false);
     }
+    _fullscreen.dispose();
     super.dispose();
   }
 
@@ -652,6 +678,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return MaterialDesktopVideoControlsThemeData(
       // Hide the mouse cursor when the controls auto-hide (idle over the video).
       hideMouseOnControlsRemoval: true,
+      // Disable media_kit's own fullscreen (a root-navigator route push that
+      // orphans this Scaffold's endDrawer). We drive the OS window instead.
+      toggleFullscreenOnDoublePress: false,
+      // Replace the default shortcut map so keyF/escape use our native toggle;
+      // keep the usual space/arrow/mute bindings wired to the player directly.
+      keyboardShortcuts: {
+        const SingleActivator(LogicalKeyboardKey.space): () =>
+            _player.playOrPause(),
+        const SingleActivator(LogicalKeyboardKey.mediaPlay): () =>
+            _player.play(),
+        const SingleActivator(LogicalKeyboardKey.mediaPause): () =>
+            _player.pause(),
+        const SingleActivator(LogicalKeyboardKey.mediaPlayPause): () =>
+            _player.playOrPause(),
+        const SingleActivator(LogicalKeyboardKey.arrowLeft): () => _player.seek(
+            Duration(milliseconds: _positionMs) - const Duration(seconds: 10)),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () => _player.seek(
+            Duration(milliseconds: _positionMs) + const Duration(seconds: 10)),
+        const SingleActivator(LogicalKeyboardKey.arrowUp): () => _player
+            .setVolume((_player.state.volume + 5).clamp(0.0, 100.0)),
+        const SingleActivator(LogicalKeyboardKey.arrowDown): () => _player
+            .setVolume((_player.state.volume - 5).clamp(0.0, 100.0)),
+        const SingleActivator(LogicalKeyboardKey.keyM): () =>
+            _player.setVolume(_player.state.volume > 0 ? 0 : 100),
+        const SingleActivator(LogicalKeyboardKey.keyF): _toggleFullscreen,
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_fullscreen.value) _toggleFullscreen();
+        },
+      },
       // Top bar: back + title + secondary-menu buttons (each opens the right
       // drawer) + window buttons. Playback controls live below the seek bar.
       topButtonBar: [
@@ -743,10 +798,21 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         const MaterialDesktopVolumeButton(),
         const MaterialDesktopPositionIndicator(),
         const Spacer(),
-        const MaterialDesktopFullscreenButton(),
+        _desktopFullscreenButton(),
       ],
     );
   }
+
+  /// Native-fullscreen toggle button; the icon tracks [_fullscreen] via a
+  /// ValueListenableBuilder since the keyed controls subtree won't rebuild on a
+  /// plain setState when fullscreen flips.
+  Widget _desktopFullscreenButton() => ValueListenableBuilder<bool>(
+        valueListenable: _fullscreen,
+        builder: (context, fs, _) => MaterialDesktopCustomButton(
+          icon: Icon(fs ? Icons.fullscreen_exit : Icons.fullscreen),
+          onPressed: _toggleFullscreen,
+        ),
+      );
 
   Widget _desktopRateButton() => MaterialDesktopCustomButton(
         icon: Row(
@@ -847,15 +913,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           onPressed: _hasNext ? () => _playNext() : () {},
         ),
       ],
-      // Bottom bar: position only — no fullscreen button, since the mobile
-      // player is already fullscreen+landscape (avoids a redundant nested
-      // fullscreen route and the double-back it caused).
-      bottomButtonBar: const [
-        MaterialPositionIndicator(),
-        Spacer(),
+      // Bottom bar: position + (on Windows 触屏模式 only) a native-fullscreen
+      // toggle. Real mobile is already fullscreen+landscape, so the button is
+      // omitted there (guarded by !_isMobile) to avoid a redundant control.
+      bottomButtonBar: [
+        const MaterialPositionIndicator(),
+        const Spacer(),
+        if (!_isMobile) _touchFullscreenButton(),
       ],
     );
   }
+
+  /// Windows-touch fullscreen toggle; icon tracks [_fullscreen] live.
+  Widget _touchFullscreenButton() => ValueListenableBuilder<bool>(
+        valueListenable: _fullscreen,
+        builder: (context, fs, _) => MaterialCustomButton(
+          icon: Icon(fs ? Icons.fullscreen_exit : Icons.fullscreen,
+              color: Colors.white),
+          onPressed: _toggleFullscreen,
+        ),
+      );
 
   void _popSelf() {
     if (mounted) Navigator.of(context).maybePop();

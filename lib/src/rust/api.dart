@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `finish_scan`, `now_secs`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `finish_scan`, `now_secs`, `prune_prefixes_for`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -218,6 +218,16 @@ Future<void> clearCollection({required PlatformInt64 animeId}) =>
 /// rating updates or newly-published episode names.
 Future<void> refreshMetadata({required PlatformInt64 animeId}) =>
     RustLib.instance.api.crateApiRefreshMetadata(animeId: animeId);
+
+/// Refresh Bangumi metadata for EVERY bound anime, concurrently (bounded).
+///
+/// Called once per app launch (from Dart's startup) so ratings/summaries/tags/
+/// episode titles across the whole library stay current — replacing the old
+/// per-anime "refresh the first time you open each subject" behaviour, which
+/// re-hit the API on every browse. Bounded parallelism keeps it fast without
+/// tripping Bangumi's rate limiter. Returns the number of entries refreshed.
+Future<PlatformInt64> refreshAllMetadata() =>
+    RustLib.instance.api.crateApiRefreshAllMetadata();
 
 /// Clear all recognised anime and episodes (keeps library folders). Use before
 /// a fresh scan to rebuild the library from scratch.

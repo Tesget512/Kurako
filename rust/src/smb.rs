@@ -45,6 +45,20 @@ pub fn set_creds(c: Option<SmbCreds>) {
     *CREDS.lock().unwrap() = c;
 }
 
+/// The `smb://addr/share/subdir/` URI prefix that enumerated files under
+/// `subdir` share, built from the cached creds (so it matches the `addr:port`
+/// form stored on episodes, unlike a user-entered host). Used to scope
+/// deletion-pruning of a network folder. Returns None if not connected.
+pub fn uri_prefix(subdir: &str) -> Option<String> {
+    let c = creds()?;
+    let sub = subdir.trim_matches('/');
+    if sub.is_empty() {
+        Some(format!("smb://{}/{}/", c.addr, c.share))
+    } else {
+        Some(format!("smb://{}/{}/{}/", c.addr, c.share, sub))
+    }
+}
+
 fn is_video(name: &str) -> bool {
     match name.rsplit_once('.') {
         Some((_, ext)) => VIDEO_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
