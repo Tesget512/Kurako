@@ -284,14 +284,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
     if (!mounted || subs.isEmpty || seq != _openSeq) return;
     setState(() => _extSubs = subs);
-    // Prefer simplified Chinese variants (sc/chs/simplified), then any.
+    // Prefer whichever Chinese script (simplified/traditional) matches the
+    // system language — see _scriptScore — falling back to the first entry if
+    // nothing matches either dictionary so a differently-named file still loads.
     SubtitleCandidate best = subs.first;
     var bestScore = -1;
     for (final s in subs) {
-      final n = s.fileName.toLowerCase();
-      var score = 0;
-      if (n.contains('sc') || n.contains('chs') || n.contains('简')) score = 2;
-      if (n.contains('tc') || n.contains('cht') || n.contains('繁')) score = 1;
+      final score = _scriptScore(s.fileName.toLowerCase());
       if (score > bestScore) {
         bestScore = score;
         best = s;
@@ -427,21 +426,56 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final meta = '${language ?? ''} ${title ?? ''}'.toLowerCase();
     final isChinese = meta.contains('zh') ||
         meta.contains('chi') ||
-        meta.contains('chs') ||
-        meta.contains('cht') ||
         meta.contains('中') ||
-        meta.contains('简') ||
-        meta.contains('繁') ||
         meta.contains('汉') ||
-        meta.contains('漢');
+        meta.contains('漢') ||
+        _kSimplifiedMarkers.any(meta.contains) ||
+        _kTraditionalMarkers.any(meta.contains);
     if (!isChinese) return 0;
-    if (meta.contains('简') ||
-        meta.contains('chs') ||
-        meta.contains('hans') ||
-        meta.contains('sc')) {
-      return 3;
+    return 2 + _scriptScore(meta);
+  }
+
+  // Typical fansub filename/track-title markers for each Chinese script — a
+  // small literal dictionary, not a language detector. "gb"/"big5" are the
+  // legacy encoding names fansub groups still use as a stand-in for
+  // simplified/traditional in release names; "simplified"/"traditional" spelled
+  // out is how mpv/libass often labels a track derived from an ISO language tag
+  // (e.g. "Chinese (Simplified) · chi") — neither word contains "sc"/"tc".
+  static const _kSimplifiedMarkers = [
+    'sc', 'chs', 'gb', 'hans', 'simplified', '简体', '简中', '简',
+  ];
+  static const _kTraditionalMarkers = [
+    'tc', 'cht', 'big5', 'hant', 'traditional', '繁体', '繁中', '繁',
+  ];
+
+  /// Whether the OS is set to a Traditional-Chinese locale (script tag, or
+  /// a region conventionally associated with Traditional — TW/HK/MO).
+  /// Non-Chinese systems fall through to "prefer simplified" (the prior
+  /// hardcoded default), same as a zh-CN/zh-SG system would.
+  bool get _systemPrefersTraditional {
+    final locale = WidgetsBinding.instance.platformDispatcher.locale;
+    if (locale.languageCode != 'zh') return false;
+    switch (locale.scriptCode?.toLowerCase()) {
+      case 'hant':
+        return true;
+      case 'hans':
+        return false;
     }
-    return 2;
+    final region = locale.countryCode?.toUpperCase();
+    return region == 'TW' || region == 'HK' || region == 'MO';
+  }
+
+  /// 2 = matches the system's preferred Chinese script, 1 = matches the other
+  /// script, 0 = no script marker found at all in [textLower].
+  int _scriptScore(String textLower) {
+    final matchesSimplified = _kSimplifiedMarkers.any(textLower.contains);
+    final matchesTraditional = _kTraditionalMarkers.any(textLower.contains);
+    final preferTraditional = _systemPrefersTraditional;
+    final preferredMatch = preferTraditional ? matchesTraditional : matchesSimplified;
+    final otherMatch = preferTraditional ? matchesSimplified : matchesTraditional;
+    if (preferredMatch) return 2;
+    if (otherMatch) return 1;
+    return 0;
   }
 
   Future<void> _save() async {
