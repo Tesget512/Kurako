@@ -29,6 +29,46 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     super.dispose();
   }
 
+  /// Confirm, then delete every manual-match config (per-folder sidecars +
+  /// the app fallback store). The library grouping isn't touched immediately —
+  /// a rescan re-groups everything by filename as if nothing was hand-matched.
+  Future<void> _clearMatchConfig(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('删除手动匹配配置'),
+        content: const Text('将删除所有"单独匹配"和"移出此番剧"的记录，包括写入番剧文件夹内的匹配文件'
+            '和软件自身的配置。已有的分组不会立即改变，但下次扫描与匹配后会恢复为自动分组。\n\n确定继续吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      final n = await rust.clearMatchConfig();
+      ref.invalidate(animeListProvider);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已删除 $n 个匹配配置文件，重新扫描后生效')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('删除失败: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider);
@@ -216,6 +256,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 MaterialPageRoute(builder: (_) => const DownloadsPage()),
               );
             },
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.link_off_outlined),
+            title: const Text('删除手动匹配配置'),
+            subtitle: const Text('清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
+                '下次扫描将恢复为自动分组'),
+            onTap: () => _clearMatchConfig(context),
           ),
           _buildDownloadDirRow(context),
           const Divider(height: 32),

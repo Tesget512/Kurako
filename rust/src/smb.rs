@@ -238,6 +238,62 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
     Ok(out)
 }
 
+/// Read the `.kurako-match.json` sidecar in the SMB folder identified by
+/// `folder_uri` (an `smb://addr/share/dir` locator). Returns the parsed map, or
+/// an empty map if the sidecar is absent/unreadable (a missing sidecar is the
+/// normal case for folders the user never corrected).
+pub async fn read_sidecar(folder_uri: &str) -> Result<crate::sidecar::SidecarMap> {
+    let dir = smb_path_from_uri(folder_uri).context("bad smb folder uri")?;
+    let path = if dir.is_empty() {
+        crate::sidecar::SIDECAR_NAME.to_string()
+    } else {
+        format!("{dir}/{}", crate::sidecar::SIDECAR_NAME)
+    };
+    let c = creds().context("smb not connected")?;
+    let (mut client, mut tree) = open(&c).await?;
+    let bytes = client.read_file(&mut tree, &path).await;
+    let _ = client.disconnect_share(&tree).await;
+    // A read failure here is almost always "file not found" (no sidecar in this
+    // folder), which is normal — treat it as an empty map, not an error.
+    Ok(bytes.map(|b| crate::sidecar::parse(&b)).unwrap_or_default())
+}
+
+/// Write (create or overwrite) the `.kurako-match.json` sidecar in the SMB
+/// folder identified by `folder_uri`. Propagates the write error so the caller
+/// can warn the user when the share is read-only (no write permission).
+pub async fn write_sidecar(folder_uri: &str, map: &crate::sidecar::SidecarMap) -> Result<()> {
+    let dir = smb_path_from_uri(folder_uri).context("bad smb folder uri")?;
+    let path = if dir.is_empty() {
+        crate::sidecar::SIDECAR_NAME.to_string()
+    } else {
+        format!("{dir}/{}", crate::sidecar::SIDECAR_NAME)
+    };
+    let c = creds().context("smb not connected")?;
+    let (mut client, mut tree) = open(&c).await?;
+    let data = crate::sidecar::serialize(map);
+    let res = client.write_file(&mut tree, &path, &data).await;
+    let _ = client.disconnect_share(&tree).await;
+    res.map(|_| ()).context("smb write sidecar")
+}
+
+/// Delete the `.kurako-match.json` sidecar in the SMB folder identified by
+/// `folder_uri`. Returns whether a file was actually deleted (Ok(false) when the
+/// folder had no sidecar). Best-effort — used by the "clear manual matches"
+/// maintenance action.
+pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
+    let dir = smb_path_from_uri(folder_uri).context("bad smb folder uri")?;
+    let path = if dir.is_empty() {
+        crate::sidecar::SIDECAR_NAME.to_string()
+    } else {
+        format!("{dir}/{}", crate::sidecar::SIDECAR_NAME)
+    };
+    let c = creds().context("smb not connected")?;
+    let (mut client, mut tree) = open(&c).await?;
+    let res = client.delete_file(&mut tree, &path).await;
+    let _ = client.disconnect_share(&tree).await;
+    Ok(res.is_ok())
+}
+
 // ---- Local HTTP streaming proxy ----
 //
 // libmpv's bundled FFmpeg usually lacks the smb:// protocol, so we serve SMB

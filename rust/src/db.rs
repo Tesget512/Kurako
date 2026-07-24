@@ -421,6 +421,94 @@ pub fn merge_duplicate_bindings() -> Result<()> {
     })
 }
 
+/// The id of the anime currently bound to `bangumi_id`, if any. After a
+/// merge/bind this is "the entry that survived" — the detail page navigates
+/// there so a re-match never strands the user on a deleted (now-null) entry.
+pub fn anime_id_for_bangumi(bangumi_id: i64) -> Result<Option<i64>> {
+    with_conn(|c| {
+        let id = c
+            .query_row(
+                "SELECT id FROM anime WHERE bangumi_id = ?1 ORDER BY id LIMIT 1",
+                params![bangumi_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?;
+        Ok(id)
+    })
+}
+
+/// The file_path of a single episode, used to key its manual-match override.
+pub fn episode_file_path(episode_id: i64) -> Result<Option<String>> {
+    with_conn(|c| {
+        let p = c
+            .query_row(
+                "SELECT file_path FROM episodes WHERE id = ?1",
+                params![episode_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(p)
+    })
+}
+
+/// Whether a file with this path is currently in the library.
+pub fn episode_exists(file_path: &str) -> Result<bool> {
+    with_conn(|c| {
+        let n: i64 = c.query_row(
+            "SELECT COUNT(*) FROM episodes WHERE file_path=?1",
+            params![file_path],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    })
+}
+
+/// Move one episode (by id) under `anime_id`. Used by the per-file manual match
+/// to split a file out of its mis-grouped anime.
+pub fn move_episode_to_anime(episode_id: i64, anime_id: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "UPDATE episodes SET anime_id=?2 WHERE id=?1",
+            params![episode_id, anime_id],
+        )?;
+        Ok(())
+    })
+}
+
+/// Move an episode (by file_path) under `anime_id`, if that file currently
+/// exists. Returns whether a row was actually moved. Used to re-apply
+/// manual-match overrides after a scan re-inserts the file.
+pub fn move_episode_by_path(file_path: &str, anime_id: i64) -> Result<bool> {
+    with_conn(|c| {
+        let n = c.execute(
+            "UPDATE episodes SET anime_id=?2 WHERE file_path=?1",
+            params![file_path, anime_id],
+        )?;
+        Ok(n > 0)
+    })
+}
+
+/// Distinct parent folders of every episode of `source_type` currently in the
+/// library — where its `.kurako-match.json` sidecar would live. Derived by
+/// stripping the last path segment (either separator) off each file_path. Used
+/// at the scan tail to know which folders to check for sidecars.
+pub fn episode_parents(source_type: &str) -> Result<Vec<String>> {
+    with_conn(|c| {
+        let mut stmt =
+            c.prepare("SELECT DISTINCT file_path FROM episodes WHERE source_type = ?1")?;
+        let paths: Vec<String> = stmt
+            .query_map(params![source_type], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut parents: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for p in paths {
+            if let Some(idx) = p.rfind(['/', '\\']) {
+                parents.insert(p[..idx].to_string());
+            }
+        }
+        Ok(parents.into_iter().collect())
+    })
+}
+
 pub fn update_progress(episode_id: i64, position_ms: i64, duration_ms: i64) -> Result<()> {
     with_conn(|c| {
         // mark watched when past 90% of the runtime

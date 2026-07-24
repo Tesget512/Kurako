@@ -4,5 +4,6 @@ pub mod db;
 pub mod models;
 pub mod recognize;
 pub mod scan;
+pub mod sidecar;
 pub mod smb;
 mod frb_generated;

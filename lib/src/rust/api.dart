@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `finish_scan`, `now_secs`, `prune_prefixes_for`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `ensure_anime_for_subject`, `finish_scan`, `now_secs`, `persist_match`, `prune_prefixes_for`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -250,14 +250,50 @@ Future<void> removeBlacklist({required PlatformInt64 id}) =>
 Future<List<BangumiSubject>> searchBangumi({required String keyword}) =>
     RustLib.instance.api.crateApiSearchBangumi(keyword: keyword);
 
-/// Bind an anime to a chosen Bangumi subject (manual correction).
-Future<void> bindAnime({
+/// Bind an anime to a chosen Bangumi subject (manual correction). Returns the
+/// id of the entry that survives — a re-match can point this entry at a subject
+/// another entry already holds, and the merge below folds the smaller into the
+/// larger, DELETING one of them. The detail page navigates to the returned id
+/// so it never strands the user on a now-deleted (null) entry — the old bug
+/// behind the bare "未找到" screen.
+Future<PlatformInt64> bindAnime({
   required PlatformInt64 animeId,
   required PlatformInt64 bangumiId,
 }) => RustLib.instance.api.crateApiBindAnime(
   animeId: animeId,
   bangumiId: bangumiId,
 );
+
+/// Manually bind ONE video file to a Bangumi subject, splitting it out of its
+/// (mis-grouped) anime into the right entry. The match is persisted next to the
+/// media (a `.kurako-match.json` sidecar) when the folder is writable, else in
+/// the app's fallback config — either way it survives ANY rescan, including
+/// "清空并重新扫描" which drops the whole episodes table. Returns the id of the
+/// anime the file now belongs to. Fixes files a wrong filename lumped into the
+/// wrong show.
+Future<PlatformInt64> matchEpisode({
+  required PlatformInt64 episodeId,
+  required PlatformInt64 bangumiId,
+}) => RustLib.instance.api.crateApiMatchEpisode(
+  episodeId: episodeId,
+  bangumiId: bangumiId,
+);
+
+/// Detach a single file from its current anime into the 未分类 bucket, recording
+/// a `DETACHED` entry so a rescan keeps it out of any show. For a file a wrong
+/// filename wrongly grouped, when the user just wants it gone from this entry
+/// without matching it to anything. Returns the 未分类 anime id.
+Future<PlatformInt64> detachEpisode({required PlatformInt64 episodeId}) =>
+    RustLib.instance.api.crateApiDetachEpisode(episodeId: episodeId);
+
+/// Remove ALL manual-match configuration: the per-folder `.kurako-match.json`
+/// sidecars (local via std::fs, SMB via smb2 delete) and the app-data fallback
+/// store (which also covers SAF, whose matches only ever live there). Returns
+/// the number of physical files removed. The DB grouping isn't changed here — a
+/// subsequent rescan re-groups everything by filename as if nothing had been
+/// manually matched. Best-effort: a folder that can't be written is skipped.
+Future<int> clearMatchConfig() =>
+    RustLib.instance.api.crateApiClearMatchConfig();
 
 /// Result of an OAuth token exchange/refresh, surfaced to Dart for persistence.
 class OAuthResult {

@@ -2,7 +2,7 @@ use crate::models::{
     Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode,
     LibraryFolder, ScanProgress, SubtitleCandidate,
 };
-use crate::{bangumi, db, scan, smb};
+use crate::{bangumi, db, scan, sidecar, smb};
 use crate::frb_generated::StreamSink;
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
@@ -35,6 +35,7 @@ pub fn init_app() {
 
 /// Open (and create if needed) the SQLite database at the given path.
 pub fn init_db(db_path: String) -> Result<(), String> {
+    sidecar::set_data_dir_from_db(&db_path);
     db::init(&db_path).map_err(|e| e.to_string())
 }
 
@@ -566,6 +567,17 @@ fn finish_scan(
     // fold them into one entry; episodes keep their release_group label.
     let _ = db::merge_duplicate_bindings();
 
+    // 3b. Re-apply manual per-file matches from the per-folder sidecars: the
+    // scanner just re-grouped every file by filename, so any file the user
+    // hand-matched (or detached) needs to be pulled back onto its chosen
+    // subject. Runs last so it always wins, and reads the `.kurako-match.json`
+    // sidecars that live IN the media folders (durable across a full
+    // clear+rescan, which drops the whole episodes table).
+    apply_sidecars(source_type);
+    // Also re-apply the app-data fallback store (read-only SMB + SAF matches):
+    // keyed by full file path and source-agnostic, so one call covers all.
+    apply_fallback();
+
     // 4. With an access token, mark which entries the user has collected on
     // Bangumi so the UI can pin them.
     let _ = sync_collections_inner();
@@ -767,8 +779,13 @@ pub fn search_bangumi(keyword: String) -> Result<Vec<BangumiSubject>, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Bind an anime to a chosen Bangumi subject (manual correction).
-pub fn bind_anime(anime_id: i64, bangumi_id: i64) -> Result<(), String> {
+/// Bind an anime to a chosen Bangumi subject (manual correction). Returns the
+/// id of the entry that survives — a re-match can point this entry at a subject
+/// another entry already holds, and the merge below folds the smaller into the
+/// larger, DELETING one of them. The detail page navigates to the returned id
+/// so it never strands the user on a now-deleted (null) entry — the old bug
+/// behind the bare "未找到" screen.
+pub fn bind_anime(anime_id: i64, bangumi_id: i64) -> Result<i64, String> {
     let subject = RT
         .block_on(async { bangumi::subject(bangumi_id).await })
         .map_err(|e| e.to_string())?;
@@ -804,7 +821,219 @@ pub fn bind_anime(anime_id: i64, bangumi_id: i64) -> Result<(), String> {
         }
     }
     // Manual re-match can point this entry at a subject another entry already
-    // has — fold them together like the auto-matcher does.
+    // has — fold them together like the auto-matcher does, then report whichever
+    // row survived so the caller can navigate there.
     let _ = db::merge_duplicate_bindings();
-    Ok(())
+    let survivor = db::anime_id_for_bangumi(bangumi_id)
+        .map_err(|e| e.to_string())?
+        .unwrap_or(anime_id);
+    // Persist this whole-anime match so a rescan keeps every file of the entry on
+    // this subject (the detail page's top-right 重新匹配 uses this path). Write a
+    // sidecar/fallback entry for each of the survivor's files. New per-file
+    // pinned entries created by ensure_anime_for_subject have no episodes yet, so
+    // this loop is a harmless no-op for them.
+    if let Ok(episodes) = db::list_episodes(survivor) {
+        for ep in &episodes {
+            persist_match(&ep.file_path, bangumi_id);
+        }
+    }
+    Ok(survivor)
+}
+
+/// Manually bind ONE video file to a Bangumi subject, splitting it out of its
+/// (mis-grouped) anime into the right entry. The match is persisted next to the
+/// media (a `.kurako-match.json` sidecar) when the folder is writable, else in
+/// the app's fallback config — either way it survives ANY rescan, including
+/// "清空并重新扫描" which drops the whole episodes table. Returns the id of the
+/// anime the file now belongs to. Fixes files a wrong filename lumped into the
+/// wrong show.
+pub fn match_episode(episode_id: i64, bangumi_id: i64) -> Result<i64, String> {
+    let file_path = db::episode_file_path(episode_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("episode not found")?;
+    persist_match(&file_path, bangumi_id);
+    let anime_id = ensure_anime_for_subject(bangumi_id, &file_path)?;
+    db::move_episode_to_anime(episode_id, anime_id).map_err(|e| e.to_string())?;
+    // The file may have left an empty anime behind (its group's last episode);
+    // clean it up so the library doesn't keep a ghost entry.
+    let _ = db::delete_empty_anime();
+    Ok(anime_id)
+}
+
+/// Detach a single file from its current anime into the 未分类 bucket, recording
+/// a `DETACHED` entry so a rescan keeps it out of any show. For a file a wrong
+/// filename wrongly grouped, when the user just wants it gone from this entry
+/// without matching it to anything. Returns the 未分类 anime id.
+pub fn detach_episode(episode_id: i64) -> Result<i64, String> {
+    let file_path = db::episode_file_path(episode_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("episode not found")?;
+    persist_match(&file_path, sidecar::DETACHED);
+    let misc_id = db::upsert_anime("__misc__", "未分类").map_err(|e| e.to_string())?;
+    db::move_episode_to_anime(episode_id, misc_id).map_err(|e| e.to_string())?;
+    let _ = db::delete_empty_anime();
+    Ok(misc_id)
+}
+
+/// Persist `file_path -> bangumi_id` so a rescan re-applies it. Best-effort and
+/// silent: the primary target is a `.kurako-match.json` sidecar IN the file's
+/// folder (durable + travels with the media); when that folder can't be written
+/// — a read-only SMB share, or Android SAF (Rust can't write content://) — it
+/// falls back to a single `match_fallback.json` in the app data directory, which
+/// is always writable. Either way the match is preserved, so no warning is
+/// surfaced to the UI.
+fn persist_match(file_path: &str, bangumi_id: i64) {
+    let Some((parent, name)) = sidecar::split_parent_name(file_path) else {
+        // No resolvable folder — keep it in the always-writable fallback.
+        let _ = sidecar::set_fallback(file_path, bangumi_id);
+        return;
+    };
+    match sidecar::source_of(&parent) {
+        sidecar::Source::Local => {
+            let mut map = sidecar::read_local(&parent);
+            map.insert(name, bangumi_id);
+            if sidecar::write_local(&parent, &map).is_err() {
+                let _ = sidecar::set_fallback(file_path, bangumi_id);
+            }
+        }
+        sidecar::Source::Smb => {
+            let wrote = RT.block_on(async {
+                let mut map = smb::read_sidecar(&parent).await.unwrap_or_default();
+                map.insert(name, bangumi_id);
+                smb::write_sidecar(&parent, &map).await
+            });
+            // Read-only share → keep it in the app fallback instead.
+            if wrote.is_err() {
+                let _ = sidecar::set_fallback(file_path, bangumi_id);
+            }
+        }
+        // SAF content:// can't be written from Rust — always use the fallback.
+        sidecar::Source::Saf => {
+            let _ = sidecar::set_fallback(file_path, bangumi_id);
+        }
+    }
+}
+
+/// The anime entry a subject should live in: reuse an existing bound entry, else
+/// make a fresh per-file group (unique group_key from the file path so nothing
+/// else joins it) and bind it. Shared by the manual match and the post-scan
+/// sidecar re-apply.
+fn ensure_anime_for_subject(bangumi_id: i64, file_path: &str) -> Result<i64, String> {
+    match db::anime_id_for_bangumi(bangumi_id).map_err(|e| e.to_string())? {
+        Some(id) => Ok(id),
+        None => {
+            let key = format!("pinned:{file_path}");
+            let new_id = db::upsert_anime(&key, file_path).map_err(|e| e.to_string())?;
+            bind_anime(new_id, bangumi_id)
+        }
+    }
+}
+
+/// Route a single `file_path -> bangumi_id` decision to the right anime entry
+/// (existing subject / fresh pinned entry / 未分类 for DETACHED) if the file is
+/// currently in the library. Shared by both re-apply passes below.
+fn apply_one(file_path: &str, bangumi_id: i64) {
+    match db::episode_exists(file_path) {
+        Ok(true) => {}
+        _ => return,
+    }
+    let target = if bangumi_id == sidecar::DETACHED {
+        db::upsert_anime("__misc__", "未分类").ok()
+    } else {
+        ensure_anime_for_subject(bangumi_id, file_path).ok()
+    };
+    if let Some(anime_id) = target {
+        let _ = db::move_episode_by_path(file_path, anime_id);
+    }
+}
+
+/// Re-apply the app-data fallback store (read-only SMB / SAF matches) after a
+/// scan. Keyed by full file locator, source-agnostic, so it's read ONCE per scan
+/// regardless of source_type. Best-effort.
+fn apply_fallback() {
+    let map = sidecar::read_fallback();
+    if map.is_empty() {
+        return;
+    }
+    for (file_path, bangumi_id) in map {
+        apply_one(&file_path, bangumi_id);
+    }
+    let _ = db::delete_empty_anime();
+}
+
+/// Re-apply every manual per-file match after a scan by reading the
+/// `.kurako-match.json` sidecar of each folder that currently has episodes. For
+/// each `file_name -> bangumi_id` entry whose file is present, move it under the
+/// right (existing or freshly bound) subject — or into 未分类 for a `DETACHED`
+/// entry — undoing whatever grouping the scanner just did for that file.
+/// Best-effort: a missing/corrupt sidecar or one bad entry never aborts the scan
+/// tail. `source_type` selects local vs SMB sidecar I/O (SAF is never written,
+/// so it has no sidecars to read).
+fn apply_sidecars(source_type: &str) {
+    // Distinct folders currently holding episodes of this source; each may carry
+    // a sidecar. `episode_parents` returns the folder locator + a present file
+    // name so we can rebuild absolute file paths without re-deriving separators.
+    let folders = match db::episode_parents(source_type) {
+        Ok(f) => f,
+        Err(_) => return,
+    };
+    for parent in folders {
+        let map = match source_type {
+            "smb" => RT
+                .block_on(async { smb::read_sidecar(&parent).await })
+                .unwrap_or_default(),
+            "local" => sidecar::read_local(&parent),
+            // SAF sidecars are never written, so nothing to read.
+            _ => continue,
+        };
+        if map.is_empty() {
+            continue;
+        }
+        for (name, bangumi_id) in map {
+            let file_path = match sidecar::source_of(&parent) {
+                sidecar::Source::Local => std::path::Path::new(&parent)
+                    .join(&name)
+                    .to_string_lossy()
+                    .to_string(),
+                _ => format!("{parent}/{name}"),
+            };
+            apply_one(&file_path, bangumi_id);
+        }
+    }
+    let _ = db::delete_empty_anime();
+}
+
+/// Remove ALL manual-match configuration: the per-folder `.kurako-match.json`
+/// sidecars (local via std::fs, SMB via smb2 delete) and the app-data fallback
+/// store (which also covers SAF, whose matches only ever live there). Returns
+/// the number of physical files removed. The DB grouping isn't changed here — a
+/// subsequent rescan re-groups everything by filename as if nothing had been
+/// manually matched. Best-effort: a folder that can't be written is skipped.
+pub fn clear_match_config() -> Result<u32, String> {
+    let mut removed = 0u32;
+    // Local sidecars.
+    if let Ok(parents) = db::episode_parents("local") {
+        for parent in parents {
+            let p = std::path::Path::new(&parent).join(sidecar::SIDECAR_NAME);
+            if std::fs::remove_file(&p).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    // SMB sidecars (best-effort; read-only shares just report false).
+    if let Ok(parents) = db::episode_parents("smb") {
+        for parent in parents {
+            if RT
+                .block_on(async { smb::delete_sidecar(&parent).await })
+                .unwrap_or(false)
+            {
+                removed += 1;
+            }
+        }
+    }
+    // App-data fallback (read-only SMB + all SAF matches live here).
+    if sidecar::remove_all_fallback() {
+        removed += 1;
+    }
+    Ok(removed)
 }

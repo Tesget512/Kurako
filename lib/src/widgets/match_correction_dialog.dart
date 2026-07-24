@@ -5,14 +5,23 @@ import '../rust/models.dart';
 import 'cover_image.dart';
 
 class MatchCorrectionDialog extends StatefulWidget {
-  final int animeId;
+  /// Re-match a whole anime entry: pass its id. Mutually exclusive with
+  /// [episodeId].
+  final int? animeId;
+
+  /// Match a single video file into its own entry (split it out of a
+  /// mis-grouped anime): pass the episode's id. Mutually exclusive with
+  /// [animeId].
+  final int? episodeId;
   final String initialKeyword;
 
   const MatchCorrectionDialog({
     super.key,
-    required this.animeId,
+    this.animeId,
+    this.episodeId,
     required this.initialKeyword,
-  });
+  }) : assert((animeId == null) != (episodeId == null),
+            'exactly one of animeId / episodeId must be given');
 
   @override
   State<MatchCorrectionDialog> createState() => _MatchCorrectionDialogState();
@@ -56,8 +65,24 @@ class _MatchCorrectionDialogState extends State<MatchCorrectionDialog> {
   Future<void> _bind(BangumiSubject subject) async {
     setState(() => _binding = true);
     try {
-      await rust.bindAnime(animeId: widget.animeId, bangumiId: subject.id);
-      if (mounted) Navigator.of(context).pop(true);
+      // Both paths resolve to the id of the anime the file/entry now belongs to
+      // (a merge or a per-file split may not be the id we started from), so the
+      // caller can navigate to whichever entry actually survived. The match is
+      // persisted (sidecar next to the media, or the app fallback config) inside
+      // these calls, so it survives a rescan — nothing more to do here.
+      final int resultId;
+      if (widget.episodeId != null) {
+        resultId = (await rust.matchEpisode(
+          episodeId: widget.episodeId!,
+          bangumiId: subject.id,
+        )).toInt();
+      } else {
+        resultId = (await rust.bindAnime(
+          animeId: widget.animeId!,
+          bangumiId: subject.id,
+        )).toInt();
+      }
+      if (mounted) Navigator.of(context).pop(resultId);
     } catch (e) {
       if (mounted) {
         setState(() => _binding = false);

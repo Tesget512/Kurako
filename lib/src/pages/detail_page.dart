@@ -75,9 +75,9 @@ class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObse
       ),
       body: animeAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败: $e')),
+        error: (e, _) => _NotFound(message: '加载失败: $e'),
         data: (anime) {
-          if (anime == null) return const Center(child: Text('未找到'));
+          if (anime == null) return const _NotFound(message: '未找到');
           return Stack(
             children: [
               CustomScrollView(
@@ -140,6 +140,22 @@ class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObse
                           ref.invalidate(episodesProvider(widget.animeId));
                           ref.invalidate(animeDetailProvider(widget.animeId));
                         },
+                        onRematched: (newAnimeId) {
+                          // A single file was split into its own (or an
+                          // existing) entry, or detached to 未分类 — refresh
+                          // this list so it drops out, refresh the library, and
+                          // jump to the entry it now belongs to.
+                          ref.invalidate(episodesProvider(widget.animeId));
+                          ref.invalidate(animeDetailProvider(widget.animeId));
+                          ref.invalidate(animeListProvider);
+                          if (newAnimeId != widget.animeId && context.mounted) {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => DetailPage(animeId: newAnimeId),
+                              ),
+                            );
+                          }
+                        },
                       ),
                     ),
                   ),
@@ -190,16 +206,27 @@ class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObse
         tooltip: '重新匹配',
         icon: const Icon(Icons.edit),
         onPressed: () async {
-          final changed = await showDialog<bool>(
+          final resultId = await showDialog<int>(
             context: context,
             builder: (_) => MatchCorrectionDialog(
               animeId: widget.animeId,
               initialKeyword: anime.titleRaw,
             ),
           );
-          if (changed == true) {
+          if (resultId == null || !context.mounted) return;
+          ref.invalidate(animeListProvider);
+          if (resultId == widget.animeId) {
+            // Same entry survived — just refresh it in place.
             ref.invalidate(animeDetailProvider(widget.animeId));
-            ref.invalidate(animeListProvider);
+          } else {
+            // A merge folded this entry into another (deleting this one). The
+            // old id is now gone, which used to strand the page on the bare
+            // "未找到" screen. Replace this route with the surviving entry.
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => DetailPage(animeId: resultId),
+              ),
+            );
           }
         },
       ),
@@ -354,6 +381,26 @@ class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObse
 
   bool _hasProgress(List<Episode> episodes) =>
       episodes.any((e) => e.watched || e.lastPositionMs.toInt() > 0);
+}
+
+/// The detail page's empty/error state. Unlike a bare centered Text, this keeps
+/// a back button (and, on desktop, the window min/max/close buttons) so a
+/// re-match that deleted the entry being viewed can't strand the user with no
+/// way out — the original bug was that this state had no toolbar at all, and
+/// desktop has no system back gesture.
+class _NotFound extends StatelessWidget {
+  final String message;
+  const _NotFound({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Center(child: Text(message)),
+        const _FloatingToolbar(title: '', showTitle: false, actions: []),
+      ],
+    );
+  }
 }
 
 /// Toolbar floating over the detail hero: a top scrim for legibility, a back
@@ -627,6 +674,7 @@ class _EpisodeList extends StatelessWidget {
   final void Function(Episode, bool external) onPlayWith;
   final void Function(Episode) onDownload;
   final VoidCallback onBlocked;
+  final void Function(int newAnimeId) onRematched;
 
   const _EpisodeList({
     required this.episodes,
@@ -634,6 +682,7 @@ class _EpisodeList extends StatelessWidget {
     required this.onPlayWith,
     required this.onDownload,
     required this.onBlocked,
+    required this.onRematched,
   });
 
   @override
@@ -660,6 +709,7 @@ class _EpisodeList extends StatelessWidget {
           onPlayWith: (external) => onPlayWith(e, external),
           onDownload: () => onDownload(e),
           onBlocked: onBlocked,
+          onRematched: onRematched,
         );
 
     return Column(
@@ -716,6 +766,10 @@ class _EpisodeTile extends ConsumerWidget {
   final VoidCallback onDownload;
   /// Invalidate the parent's episode list after this file is blocked.
   final VoidCallback onBlocked;
+  /// Called after a single-file manual match splits this episode into another
+  /// entry (or detaches it to 未分类); the arg is that entry's anime id so the
+  /// page can refresh and navigate to it.
+  final void Function(int newAnimeId) onRematched;
 
   const _EpisodeTile({
     required this.episode,
@@ -723,6 +777,7 @@ class _EpisodeTile extends ConsumerWidget {
     required this.onPlayWith,
     required this.onDownload,
     required this.onBlocked,
+    required this.onRematched,
   });
 
   @override
@@ -867,6 +922,22 @@ class _EpisodeTile extends ConsumerWidget {
           ),
         const PopupMenuDivider(),
         const PopupMenuItem(
+          value: 'match',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.edit_outlined),
+            title: Text('单独匹配 Bangumi'),
+          ),
+        ),
+        const PopupMenuItem(
+          value: 'detach',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.link_off_outlined),
+            title: Text('移出此番剧'),
+          ),
+        ),
+        const PopupMenuItem(
           value: 'block',
           child: ListTile(
             dense: true,
@@ -892,10 +963,48 @@ class _EpisodeTile extends ConsumerWidget {
         await chooseAndroidApp(await externalPlayerLocator(episode));
       case 'download':
         onDownload();
+      case 'match':
+        await _matchEpisode(context);
+      case 'detach':
+        await _detachEpisode(context);
       case 'delete_copy':
         await _deleteLocalCopy(context);
       case 'block':
         await _block(context, ref);
+    }
+  }
+
+  Future<void> _matchEpisode(BuildContext context) async {
+    final newAnimeId = await showDialog<int>(
+      context: context,
+      builder: (_) => MatchCorrectionDialog(
+        episodeId: episode.id,
+        initialKeyword: episode.fileName,
+      ),
+    );
+    if (newAnimeId != null) onRematched(newAnimeId);
+  }
+
+  Future<void> _detachEpisode(BuildContext context) async {
+    try {
+      // The move is persisted (sidecar next to the media, or the app fallback
+      // config) inside detachEpisode, so it survives a rescan.
+      final miscId = await rust.detachEpisode(episodeId: episode.id);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('已移出此番剧（归入未分类，重新扫描也不会归回）'),
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+      onRematched(miscId.toInt());
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('移出失败: $e')),
+        );
+      }
     }
   }
 

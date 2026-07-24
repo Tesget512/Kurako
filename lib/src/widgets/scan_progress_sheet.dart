@@ -19,6 +19,7 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
   ScanProgress? _progress;
   bool _done = false;
   String? _error;
+  final List<String> _smbErrors = [];
 
   @override
   void initState() {
@@ -49,7 +50,19 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
         final source = f.sourceType == 'smb'
             ? SmbMediaSource()
             : SafMediaSource();
-        final files = await source.enumerate(f.path);
+        late final List<ScannedFile> files;
+        try {
+          files = await source.enumerate(f.path);
+        } catch (_) {
+          if (!mounted) return;
+          // SMB connect/auth failures are common when the device is off the
+          // local network. Record the folder-level error and continue scanning
+          // other folders — don't abort the whole session.
+          setState(() => _smbErrors.add(
+                'SMB 连接失败（${_smbHost(f.path)}），请确认已连接到对应的局域网',
+              ));
+          continue;
+        }
         final s2 = rust.scanFilesAndMatch(
           folderId: f.id,
           files: files,
@@ -65,6 +78,16 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
     } finally {
       if (mounted) setState(() => _done = true);
     }
+  }
+
+  /// Extract "host" from an `smb://host[:port]/share/...` path for display.
+  static String _smbHost(String path) {
+    final rest = path.replaceFirst('smb://', '');
+    final slash = rest.indexOf('/');
+    final hostPort = slash > 0 ? rest.substring(0, slash) : rest;
+    // Strip the :port suffix for brevity.
+    final colon = hostPort.lastIndexOf(':');
+    return colon > 0 ? hostPort.substring(0, colon) : hostPort;
   }
 
   @override
@@ -108,6 +131,28 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
           LinearProgressIndicator(value: _done ? 1 : value),
           const SizedBox(height: 12),
           Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
+          if (_smbErrors.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            for (final msg in _smbErrors)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.wifi_off_outlined,
+                        size: 16, color: theme.colorScheme.error),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        msg,
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: theme.colorScheme.error),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
           const SizedBox(height: 24),
           FilledButton(
             onPressed: _done ? () => Navigator.of(context).pop() : null,
