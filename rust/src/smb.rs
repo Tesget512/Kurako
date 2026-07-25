@@ -32,9 +32,8 @@ const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
 /// into a clean, recoverable failure instead of a deadlock.
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
-/// Cached SMB credentials. `smb2::Client` holds a live TCP connection that isn't
-/// convenient to keep across separate `block_on` calls, so we cache the login
-/// details and open a fresh connection per operation instead.
+/// Cached SMB credentials, used to establish the shared connection on startup
+/// and after a genuine network failure.
 #[derive(Clone)]
 pub struct SmbCreds {
     /// "host:port" (445 assumed if the user omits the port).
@@ -56,6 +55,31 @@ pub fn set_creds(c: Option<SmbCreds>) {
     // session so the next stream reconnects under the current creds instead of
     // reusing one tied to the old (possibly now-invalid) ones.
     invalidate_session();
+}
+
+/// A single authenticated connection is shared by library scans, sidecar I/O,
+/// downloads and the loopback player. `smb2` multiplexes requests safely on a
+/// connection; the async mutex is only needed for APIs such as directory walks
+/// that require mutable client/tree access.
+struct SmbSessionInner {
+    client: smb2::SmbClient,
+    tree: smb2::Tree,
+}
+
+struct SmbSession {
+    inner: tokio::sync::Mutex<SmbSessionInner>,
+}
+
+static SESSION: Mutex<Option<std::sync::Arc<SmbSession>>> = Mutex::new(None);
+/// Serializes session (re)establishment so concurrent first operations pay for
+/// one handshake rather than racing to create several Windows SMB sessions.
+static SESSION_INIT: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+fn cache_session(c: SmbCreds, client: smb2::SmbClient, tree: smb2::Tree) {
+    *CREDS.lock().unwrap() = Some(c);
+    *SESSION.lock().unwrap() = Some(std::sync::Arc::new(SmbSession {
+        inner: tokio::sync::Mutex::new(SmbSessionInner { client, tree }),
+    }));
 }
 
 /// The `smb://addr/share/subdir/` URI prefix that enumerated files under
@@ -110,7 +134,11 @@ async fn open(c: &SmbCreds) -> Result<(smb2::SmbClient, smb2::Tree)> {
     Ok((client, tree))
 }
 
-/// Test-connect with the given credentials and cache them on success.
+/// Test-connect with the given credentials and retain that exact connection.
+///
+/// Windows was rejecting playback immediately after a scan because validation,
+/// scanning and playback each created a separate authenticated session. Keeping
+/// the verified session makes all three phases use one server-side session.
 pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Result<()> {
     let c = SmbCreds {
         addr: normalize_addr(host),
@@ -126,13 +154,12 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
     for attempt in 0..2 {
         match open(&c).await {
             Ok((mut client, mut tree)) => {
-                // A root listing proves auth + share access work; unlike the
-                // old code, do not silently accept a failed list operation.
+                // A root listing proves auth + share access work. Keep the
+                // connected tree on success instead of TreeDisconnect-ing it.
                 let listed = client.list_directory(&mut tree, "").await;
-                let _ = client.disconnect_share(&tree).await;
                 match listed {
                     Ok(_) => {
-                        set_creds(Some(c));
+                        cache_session(c, client, tree);
                         return Ok(());
                     }
                     Err(e) => last_error = Some(e.into()),
@@ -153,12 +180,12 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
 /// `subdir`, so grouping matches the local/SAF behaviour.
 pub async fn enumerate(subdir: &str) -> Result<Vec<ScannedFile>> {
     let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
+    let session = session(&c).await?;
+    let mut session = session.inner.lock().await;
+    let SmbSessionInner { client, tree } = &mut *session;
     let mut out = Vec::new();
     let base = subdir.trim_matches('/').to_string();
-    let result = walk(&mut client, &mut tree, &c, &base, "", &mut out).await;
-    let _ = client.disconnect_share(&tree).await;
-    result?;
+    walk(client, tree, &c, &base, "", &mut out).await?;
     Ok(out)
 }
 
@@ -235,13 +262,14 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
         .unwrap_or(&video_name);
 
     let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    let entries_result = client
-        .list_directory(&mut tree, &dir)
+    let session = session(&c).await?;
+    let mut session = session.inner.lock().await;
+    let SmbSessionInner { client, tree } = &mut *session;
+    let entries = client
+        .list_directory(tree, &dir)
         .await
-        .with_context(|| format!("smb list {dir}"));
-    let _ = client.disconnect_share(&tree).await;
-    let entries = entries_result?;
+        .with_context(|| format!("smb list {dir}"))?;
+    drop(session);
 
     let mut out = Vec::new();
     for e in entries {
@@ -275,9 +303,10 @@ pub async fn read_sidecar(folder_uri: &str) -> Result<crate::sidecar::SidecarMap
         format!("{dir}/{}", crate::sidecar::SIDECAR_NAME)
     };
     let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    let bytes = client.read_file(&mut tree, &path).await;
-    let _ = client.disconnect_share(&tree).await;
+    let session = session(&c).await?;
+    let mut session = session.inner.lock().await;
+    let SmbSessionInner { client, tree } = &mut *session;
+    let bytes = client.read_file(tree, &path).await;
     // A read failure here is almost always "file not found" (no sidecar in this
     // folder), which is normal — treat it as an empty map, not an error.
     Ok(bytes.map(|b| crate::sidecar::parse(&b)).unwrap_or_default())
@@ -294,10 +323,11 @@ pub async fn write_sidecar(folder_uri: &str, map: &crate::sidecar::SidecarMap) -
         format!("{dir}/{}", crate::sidecar::SIDECAR_NAME)
     };
     let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
+    let session = session(&c).await?;
+    let mut session = session.inner.lock().await;
+    let SmbSessionInner { client, tree } = &mut *session;
     let data = crate::sidecar::serialize(map);
-    let res = client.write_file(&mut tree, &path, &data).await;
-    let _ = client.disconnect_share(&tree).await;
+    let res = client.write_file(tree, &path, &data).await;
     res.map(|_| ()).context("smb write sidecar")
 }
 
@@ -313,9 +343,10 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
         format!("{dir}/{}", crate::sidecar::SIDECAR_NAME)
     };
     let c = creds().context("smb not connected")?;
-    let (mut client, mut tree) = open(&c).await?;
-    let res = client.delete_file(&mut tree, &path).await;
-    let _ = client.disconnect_share(&tree).await;
+    let session = session(&c).await?;
+    let mut session = session.inner.lock().await;
+    let SmbSessionInner { client, tree } = &mut *session;
+    let res = client.delete_file(tree, &path).await;
     Ok(res.is_ok())
 }
 
@@ -354,31 +385,6 @@ static PROXY_RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
 /// while keeping a small SMB server's open-handle queue under control.
 static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaphore::new(2));
 
-/// One persistent, authenticated SMB2 connection + tree, reused across every
-/// proxy stream instead of connecting fresh per HTTP request. This mirrors how
-/// Windows' own SMB redirector serves a UNC path — one session per share for
-/// the whole app lifetime — and is the fix for the "切换次数多了会卡住几秒"
-/// symptom: previously `serve()` called `open()` (full TCP + negotiate +
-/// session-setup + tree-connect) for *every* proxy request, and libmpv issues
-/// several requests per single episode open (probe, moov/index read, each
-/// seek's Range) — so normal viewing, not just rapid switching, kept opening
-/// fresh SMB sessions against the NAS, which eventually hit its per-client
-/// session cap and stalled new connects for a few seconds until it reaped old
-/// ones. `SmbClient::open_file_reader`/`FileReader::read_at` only need `&self`
-/// (the crate's `Connection` is an actor-backed, cheaply-cloneable handle
-/// designed for concurrent multiplexed requests — see its `pipeline` module),
-/// so many concurrent reads through one shared session is a supported,
-/// intended usage, not a workaround.
-struct SmbSession {
-    client: smb2::SmbClient,
-    tree: smb2::Tree,
-}
-static SESSION: Mutex<Option<std::sync::Arc<SmbSession>>> = Mutex::new(None);
-/// Serializes session (re)establishment so a burst of concurrent proxy
-/// requests (e.g. mpv's initial multi-range probe) pays for one handshake, not
-/// N racing ones.
-static SESSION_INIT: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
-
 /// Get the persistent session, connecting on first use.
 async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
     if let Some(s) = SESSION.lock().unwrap().clone() {
@@ -390,7 +396,9 @@ async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
         return Ok(s);
     }
     let (client, tree) = open(c).await?;
-    let s = std::sync::Arc::new(SmbSession { client, tree });
+    let s = std::sync::Arc::new(SmbSession {
+        inner: tokio::sync::Mutex::new(SmbSessionInner { client, tree }),
+    });
     *SESSION.lock().unwrap() = Some(s.clone());
     Ok(s)
 }
@@ -410,12 +418,12 @@ async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReade
                 continue;
             }
         };
-        match tokio::time::timeout(
-            SETUP_TIMEOUT,
-            sess.client.open_file_reader(&sess.tree, path),
-        )
-        .await
-        {
+        let guard = sess.inner.lock().await;
+        let SmbSessionInner { client, tree } = &*guard;
+        let open_result =
+            tokio::time::timeout(SETUP_TIMEOUT, client.open_file_reader(tree, path)).await;
+        drop(guard);
+        match open_result {
             Ok(Ok(reader)) => return Ok(reader),
             Ok(Err(e)) => last_error = Some(e.into()),
             Err(_) => last_error = Some(anyhow::anyhow!("smb open file timed out")),
