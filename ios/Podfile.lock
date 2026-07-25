@@ -116,7 +116,7 @@ SPEC CHECKSUMS:
   media_kit_libs_ios_video: 5a18affdb97d1f5d466dc79988b13eff6c5e2854
   media_kit_video: 1746e198cb697d1ffb734b1d05ec429d1fcd1474
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
-  rust_lib_kurako: 970b5b17a67f442380aa1661230e3dc010c00709
+  rust_lib_kurako: d80eac72434b73a5d5b25ec38497c2fc0beb56fe
   screen_brightness_ios: 212d950bb99c915eee971c884f4a6c87c92cd13d
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
@@ -126,6 +126,6 @@ SPEC CHECKSUMS:
   volume_controller: 3657a1f65bedb98fa41ff7dc5793537919f31b12
   wakelock_plus: e29112ab3ef0b318e58cfa5c32326458be66b556
 
-PODFILE CHECKSUM: 8e7e955ef72aadc5759be51f3a8f9daf4cd1d27f
+PODFILE CHECKSUM: 8e669291e358cc1ea0e2610e458ca980fb215c4a
 
 COCOAPODS: 1.17.0

@@ -39,6 +39,12 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
+      # KURAKO itself supports iOS 13 and later. Raise legacy pods to the same
+      # floor so Xcode 26 no longer warns for their obsolete iOS 9 settings.
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      # No Flutter plugin uses App Intents. Suppress Xcode's empty metadata
+      # pass, which otherwise reports one warning for each CocoaPods target.
+      config.build_settings['EXTRACT_APPINTENTS_METADATA'] = 'NO'
       config.build_settings['PUB_HOSTED_URL'] = 'https:/$()/pub.flutter-io.cn'
       config.build_settings['FLUTTER_STORAGE_BASE_URL'] = 'https:/$()/storage.flutter-io.cn'
       config.build_settings['PATH'] = '$(inherited):/usr/local/opt/rustup/bin'
@@ -46,6 +52,14 @@ post_install do |installer|
       config.build_settings['RUSTC'] = '/usr/local/opt/rustup/bin/rustc'
       config.build_settings['RUSTUP_HOME'] = '/Users/developer/.rustup'
       config.build_settings['CARGO_HOME'] = '/Users/developer/.cargo'
+    end
+    if target.name == 'volume_controller'
+      # The upstream pod's source glob includes an unused template privacy
+      # manifest as a compile source rather than a resource.
+      target.source_build_phase.files.each do |file|
+        next unless file.file_ref&.path&.end_with?('PrivacyInfo.xcprivacy')
+        file.remove_from_project
+      end
     end
   end
 end

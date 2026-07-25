@@ -29,11 +29,6 @@
 	<!-- Make Documents/KURAKO Downloads available in the Files app. -->
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
-	<!-- Query the VLC-specific SMB hand-off route before opening it. -->
-	<key>LSApplicationQueriesSchemes</key>
-	<array>
-		<string>vlc-x-callback</string>
-	</array>
 	<!-- SMB playback is served only from KURAKO's own loopback HTTP proxy. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>

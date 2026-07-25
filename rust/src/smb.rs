@@ -156,8 +156,9 @@ pub async fn enumerate(subdir: &str) -> Result<Vec<ScannedFile>> {
     let (mut client, mut tree) = open(&c).await?;
     let mut out = Vec::new();
     let base = subdir.trim_matches('/').to_string();
-    walk(&mut client, &mut tree, &c, &base, "", &mut out).await?;
+    let result = walk(&mut client, &mut tree, &c, &base, "", &mut out).await;
     let _ = client.disconnect_share(&tree).await;
+    result?;
     Ok(out)
 }
 
@@ -235,11 +236,12 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
 
     let c = creds().context("smb not connected")?;
     let (mut client, mut tree) = open(&c).await?;
-    let entries = client
+    let entries_result = client
         .list_directory(&mut tree, &dir)
         .await
-        .with_context(|| format!("smb list {dir}"))?;
+        .with_context(|| format!("smb list {dir}"));
     let _ = client.disconnect_share(&tree).await;
+    let entries = entries_result?;
 
     let mut out = Vec::new();
     for e in entries {
@@ -347,11 +349,10 @@ static PROXY_RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
         .expect("smb proxy runtime")
 });
 
-/// Cap concurrent reads the proxy issues against the shared session at once —
-/// now a plain concurrency throttle (the connection itself is reused, see
-/// [SESSION]), not a connection-count limiter. Old streams are aborted on
-/// switch, releasing their permits promptly.
-static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaphore::new(6));
+/// Cap concurrent reads against the shared session. A player can issue several
+/// speculative range probes for one file; two are enough for smooth playback
+/// while keeping a small SMB server's open-handle queue under control.
+static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaphore::new(2));
 
 /// One persistent, authenticated SMB2 connection + tree, reused across every
 /// proxy stream instead of connecting fresh per HTTP request. This mirrors how
@@ -440,26 +441,22 @@ fn invalidate_session() {
 /// both bind a listener.
 static PROXY_INIT: Mutex<()> = Mutex::new(());
 static TOKEN_SEQ: AtomicU64 = AtomicU64::new(1);
-/// Abort handles for in-flight proxy stream tasks, keyed by a per-stream id.
-/// A folder/episode switch forcibly aborts these so the *previous* file's SMB
-/// connections close immediately instead of lingering — stale streams piling up
-/// against the NAS's per-client session limit is what freezes the next open
-/// (the cross-folder freeze). The map is drained on every switch, so the rare
-/// already-finished entry (task removed itself before we inserted) is harmless.
-static ACTIVE_STREAMS: Lazy<Mutex<HashMap<u64, tokio::task::AbortHandle>>> =
+/// Cancellation senders for in-flight proxy streams, keyed by a stream id.
+/// Do not abort a task directly: `FileReader` needs async `close()` to release
+/// its remote SMB handle, and forced task abort skips that cleanup.
+static ACTIVE_STREAMS: Lazy<Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static STREAM_SEQ: AtomicU64 = AtomicU64::new(1);
 
-/// Forcibly abort every in-flight proxy stream. Aborting a task drops its future,
-/// which drops the smb2 client and closes its TCP connection to the NAS, freeing
-/// the session right away. Called whenever a token is released (i.e. on switch).
+/// Ask every active stream to finish its async SMB close before it exits.
+/// Called whenever an episode token is released.
 pub fn abort_all_streams() {
-    let handles: Vec<tokio::task::AbortHandle> = {
+    let cancellations: Vec<tokio::sync::watch::Sender<bool>> = {
         let mut m = ACTIVE_STREAMS.lock().unwrap();
         m.drain().map(|(_, h)| h).collect()
     };
-    for h in handles {
-        h.abort();
+    for cancellation in cancellations {
+        let _ = cancellation.send(true);
     }
 }
 /// Total bytes streamed to clients since process start. Dart polls this and
@@ -522,12 +519,16 @@ fn ensure_proxy() -> Result<u16> {
             match listener.accept().await {
                 Ok((stream, _)) => {
                     let id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
+                    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
                     // serve() runs on PROXY_RT (current runtime), isolated from RT.
                     let jh = tokio::spawn(async move {
-                        let _ = serve(stream).await;
+                        let _ = serve(stream, cancel_rx).await;
                         ACTIVE_STREAMS.lock().unwrap().remove(&id);
                     });
-                    ACTIVE_STREAMS.lock().unwrap().insert(id, jh.abort_handle());
+                    // Keep the task detached: it must be allowed to close the
+                    // remote reader after receiving a cancellation signal.
+                    drop(jh);
+                    ACTIVE_STREAMS.lock().unwrap().insert(id, cancel_tx);
                 }
                 Err(_) => break,
             }
@@ -538,12 +539,18 @@ fn ensure_proxy() -> Result<u16> {
 }
 
 /// Handle one HTTP request: parse the token + optional Range, stream the file.
-async fn serve(mut stream: TcpStream) -> Result<()> {
+async fn serve(
+    mut stream: TcpStream,
+    mut cancelled: tokio::sync::watch::Receiver<bool>,
+) -> Result<()> {
     // Read headers (until CRLFCRLF). Video requests are tiny, 8KB is plenty.
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     loop {
-        let n = stream.read(&mut tmp).await?;
+        let n = tokio::select! {
+            _ = cancelled.changed() => return Ok(()),
+            n = stream.read(&mut tmp) => n?,
+        };
         if n == 0 {
             return Ok(());
         }
@@ -588,10 +595,13 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         return Ok(());
     };
 
-    // Bound concurrent reads against the shared session (see [SMB_CONN]). On a
-    // switch the old streams are aborted, which drops their permits, so the new
-    // file's streams get in promptly instead of a burst piling up.
-    let _permit = SMB_CONN.acquire().await;
+    // Bound concurrent reads against the shared session (see [SMB_CONN]). A
+    // cancelled stale request must not wait in this queue and later open a
+    // remote file after the user has already changed episodes.
+    let _permit = tokio::select! {
+        _ = cancelled.changed() => return Ok(()),
+        permit = SMB_CONN.acquire() => permit.expect("SMB semaphore closed"),
+    };
 
     // Reuse the persistent session (see [SESSION]) instead of connecting fresh
     // per request — this is the fix for the cumulative-switches freeze. Every
@@ -625,6 +635,7 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         None => (0, total.saturating_sub(1)),
     };
     if start >= total {
+        let _ = reader.close().await;
         let _ = stream
             .write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .await;
@@ -646,7 +657,13 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         header.push_str(&format!("Content-Range: bytes {start}-{end}/{total}\r\n"));
     }
     header.push_str("\r\n");
-    stream.write_all(header.as_bytes()).await?;
+    if tokio::select! {
+        _ = cancelled.changed() => true,
+        result = stream.write_all(header.as_bytes()) => result.is_err(),
+    } {
+        let _ = reader.close().await;
+        return Ok(());
+    }
     if method.eq_ignore_ascii_case("HEAD") {
         let _ = reader.close().await;
         return Ok(());
@@ -666,12 +683,16 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         }
         let want = CHUNK.min(end - off + 1);
         // Bound each read so a hung NAS can't pin a worker thread forever.
-        let data = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            reader.read_at(off, want),
-        )
-        .await
-        {
+        let data = match tokio::select! {
+            _ = cancelled.changed() => {
+                let _ = reader.close().await;
+                return Ok(());
+            }
+            result = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                reader.read_at(off, want),
+            ) => result,
+        } {
             Ok(Ok(d)) => d,
             _ => {
                 // Read failed/timed out on the shared session — assume the

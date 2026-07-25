@@ -224,9 +224,10 @@ final uiScaleProvider = StateNotifierProvider<_IntPrefNotifier, int>((ref) {
   );
 });
 
-/// Desktop-only: use the touch-gesture player controls (double-tap seek, swipe
-/// volume/brightness) instead of the mouse-hover desktop controls. For
-/// touchscreen Windows devices where mouse emulation is clumsy. Persisted.
+/// On desktop, use touch gestures instead of mouse-hover controls. On iPad,
+/// this is inverted at the presentation layer: false keeps the touch-first
+/// default and true opts into desktop controls for a mouse/keyboard setup.
+/// Persisted across launches.
 final touchModePlayerProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
   ref,
 ) {

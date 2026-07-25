@@ -15,7 +15,7 @@ import 'ios_platform.dart';
 ///   let Windows' own SMB client serve it — the default video player opens it
 ///   exactly like a local file (no loopback proxy, no forced program choice).
 ///   This is why external SMB playback now behaves identically to local.
-/// - **Android/iOS SMB (not downloaded):** hand a real
+/// - **Android SMB (not downloaded):** hand a real
 ///   `smb://user:pass@host/path`
 ///   URI (see [_smbUrlWithCreds]) so the external player's *own* bundled SMB
 ///   client (VLC/MX Player both ship one, same as our Rust smb2 client) connects
@@ -36,7 +36,13 @@ Future<String> externalPlayerLocator(Episode ep) async {
   if (Platform.isWindows) {
     return smbUncPath(ep.filePath);
   }
-  if (Platform.isAndroid || Platform.isIOS) {
+  if (Platform.isIOS) {
+    // iOS/iPadOS has no dependable way to hand an authenticated SMB URL to a
+    // third-party player.  Always require the verified local copy instead of
+    // sending a URL that Files/VLC may misinterpret or reject.
+    throw Exception('iOS/iPadOS 的 SMB 外置播放需要先下载到本地；下载完成后再点外置播放');
+  }
+  if (Platform.isAndroid) {
     return _smbUrlWithCreds(ep.filePath);
   }
   return rust.smbPlayableUrl(smbUri: ep.filePath);
@@ -119,19 +125,6 @@ Future<void> ensureUncAuth(String uncPath) async {
 ///   The desktop [playerPath] setting is ignored — Android picks the app itself.
 Future<void> launchExternalPlayer(String playerPath, String locator) async {
   if (Platform.isIOS) {
-    if (locator.startsWith('smb://')) {
-      // iOS has no generic ACTION_VIEW chooser. In particular, passing a raw
-      // smb:// address to UIApplication may route to Files, which treats the
-      // path as a new server name rather than opening VLC. VLC's own official
-      // x-callback endpoint accepts the complete SMB URI and opens it with
-      // VLC's SMB client instead.
-      if (!await IosPlatform.openVlcSmb(locator)) {
-        throw Exception(
-          'iOS 未检测到 VLC。未下载的 SMB 视频只能通过 VLC 串流；请安装 VLC，或先下载到本地后使用系统分享打开',
-        );
-      }
-      return;
-    }
     if (!await IosPlatform.shareVideo(locator)) {
       throw Exception('无法打开系统分享面板，请确认该视频仍可访问');
     }

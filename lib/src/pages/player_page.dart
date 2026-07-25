@@ -626,16 +626,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // MaterialVideoControls has the touch gestures (double-tap seek, swipe
     // volume/brightness, long-press speed). Touch-mode lets touchscreen
     // desktop devices opt into the touch controls too.
-    // iPad with Stage Manager commonly has a mouse/trackpad and keyboard. Use
-    // the same hover/keyboard controls as desktop on a real tablet, while the
-    // existing touch-mode setting remains available for gesture playback.
+    // iPad keeps touch controls by default.  The settings switch lets an iPad
+    // with Stage Manager, a trackpad or a keyboard opt into the desktop layout.
     final isDesktop =
         Platform.isWindows ||
         Platform.isLinux ||
-        Platform.isMacOS ||
-        (Platform.isIOS && MediaQuery.sizeOf(context).shortestSide >= 600);
+        Platform.isMacOS;
+    final ipadCanUseDesktopControls =
+        Platform.isIOS && MediaQuery.sizeOf(context).shortestSide >= 600;
     final touchMode = ref.watch(touchModePlayerProvider);
-    final useTouchControls = !isDesktop || touchMode;
+    final useDesktopControls = isDesktop
+        ? !touchMode
+        : ipadCanUseDesktopControls && touchMode;
+    final useTouchControls = !useDesktopControls;
 
     final video = Video(
       controller: _controller,

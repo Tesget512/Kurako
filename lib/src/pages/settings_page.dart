@@ -230,10 +230,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               (Platform.isIOS &&
                   MediaQuery.sizeOf(context).shortestSide >= 600))
             SwitchListTile(
-              title: const Text('播放器触屏控制模式'),
+              title: Text(
+                Platform.isIOS ? '使用桌面式播放器控件' : '播放器触屏控制模式',
+              ),
               subtitle: Text(
                 Platform.isIOS
-                    ? 'iPad 默认使用鼠标/键盘桌面控件；开启后改用触摸手势（双击快进、滑动调节音量/亮度）'
+                    ? '默认使用触摸手势；连接鼠标、触控板或键盘时，可开启桌面式悬停控件'
                     : '为触屏设备启用触摸手势控件（双击快进、滑动调节音量/亮度）',
               ),
               value: ref.watch(touchModePlayerProvider),

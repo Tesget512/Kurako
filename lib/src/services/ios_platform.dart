@@ -26,12 +26,4 @@ class IosPlatform {
         false;
   }
 
-  /// VLC for iOS exposes a documented x-callback URL for network streams.
-  /// iOS has no Android-like generic ACTION_VIEW route for smb://, so handing
-  /// a raw SMB URL to the OS may open Files and interpret the path as a server.
-  static Future<bool> openVlcSmb(String smbUrl) async {
-    if (!Platform.isIOS) return false;
-    return await _channel.invokeMethod<bool>('openVlcSmb', {'url': smbUrl}) ??
-        false;
-  }
 }
