@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:android_intent_plus/android_intent.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/api.dart' show OAuthResult;
@@ -82,7 +82,16 @@ class BangumiOAuth {
       final intent = AndroidIntent(action: 'action_view', data: url);
       await intent.launch();
     } else if (Platform.isIOS) {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      // Keep the nested redirect_uri exactly as Rust encoded it. Parsing it as
+      // a Dart Uri can alter its percent escapes before UIKit receives the
+      // string, making Bangumi reject the authorization request.
+      final launched = await launchUrlString(
+        url,
+        mode: LaunchMode.externalApplication,
+      );
+      if (!launched) {
+        throw const OAuthException('无法打开系统浏览器进行 Bangumi 授权');
+      }
     } else if (Platform.isWindows) {
       // Do NOT route through `cmd /c start` — cmd treats `&` as a command
       // separator, so a query string like `?a=1&b=2` gets truncated at the

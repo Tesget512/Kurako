@@ -1233,6 +1233,15 @@ mod match_tests {
         assert!(v.iter().any(|s| s.eq_ignore_ascii_case("Luck Logic")));
     }
 
+    #[test]
+    fn oauth_authorize_url_keeps_encoded_loopback_redirect() {
+        let url = authorize_url("client id", "http://localhost:6420/callback");
+        assert_eq!(
+            url,
+            "https://bgm.tv/oauth/authorize?client_id=client%20id&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A6420%2Fcallback"
+        );
+    }
+
     const V0: f64 = 0.55; // full-title v0 hit-0 prior
 
     #[test]
