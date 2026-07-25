@@ -226,10 +226,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ],
           // Touchscreen Windows devices: the desktop hover controls emulate a
           // mouse and are clumsy by touch — offer the mobile touch controls.
-          if (Platform.isWindows)
+          if (Platform.isWindows ||
+              (Platform.isIOS &&
+                  MediaQuery.sizeOf(context).shortestSide >= 600))
             SwitchListTile(
               title: const Text('播放器触屏控制模式'),
-              subtitle: const Text('为触屏设备启用触摸手势控件（双击快进、滑动调节音量/亮度）'),
+              subtitle: Text(
+                Platform.isIOS
+                    ? 'iPad 默认使用鼠标/键盘桌面控件；开启后改用触摸手势（双击快进、滑动调节音量/亮度）'
+                    : '为触屏设备启用触摸手势控件（双击快进、滑动调节音量/亮度）',
+              ),
               value: ref.watch(touchModePlayerProvider),
               onChanged: (v) =>
                   ref.read(touchModePlayerProvider.notifier).set(v),

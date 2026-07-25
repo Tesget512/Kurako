@@ -27,6 +27,9 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
       case "openExternalUrl":
         let args = call.arguments as? [String: Any]
         self.openExternalUrl(args?["url"] as? String, result: result)
+      case "openVlcSmb":
+        let args = call.arguments as? [String: Any]
+        self.openVlcSmb(args?["url"] as? String, result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -137,6 +140,33 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
       return
     }
     UIApplication.shared.open(url, options: [:]) { opened in
+      result(opened)
+    }
+  }
+
+  /// VLC for iOS registers `vlc-x-callback://x-callback-url/stream` and
+  /// decodes its `url` query value before handing it to VLC's own SMB client.
+  /// This is deliberately VLC-specific: iOS has no reliable generic handler
+  /// for an SMB stream, and Files may instead show its “connect to server” UI.
+  private func openVlcSmb(_ smbUrl: String?, result: @escaping FlutterResult) {
+    guard let smbUrl, smbUrl.lowercased().hasPrefix("smb://") else {
+      result(FlutterError(code: "invalid_smb_url", message: "无效的 SMB 地址", details: nil))
+      return
+    }
+    var components = URLComponents()
+    components.scheme = "vlc-x-callback"
+    components.host = "x-callback-url"
+    components.path = "/stream"
+    components.queryItems = [URLQueryItem(name: "url", value: smbUrl)]
+    guard let callbackUrl = components.url else {
+      result(FlutterError(code: "invalid_vlc_url", message: "无法构造 VLC 地址", details: nil))
+      return
+    }
+    guard UIApplication.shared.canOpenURL(callbackUrl) else {
+      result(false)
+      return
+    }
+    UIApplication.shared.open(callbackUrl, options: [:]) { opened in
       result(opened)
     }
   }

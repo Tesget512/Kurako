@@ -38,8 +38,15 @@ dependencies:
 
   # Video player (libmpv, hardware decoding + subtitles)
   media_kit: ^1.2.0
-  media_kit_video: ^1.3.0
+  # Local, pinned patch: a single tap shows controls, but a double-tap seek
+  # must remain immersive instead of first revealing the whole control layer.
+  media_kit_video:
+    path: third_party/media_kit_video
   media_kit_libs_video: ^1.0.6
+  # media_kit_video supplies gesture code but only depends on Android's
+  # brightness implementation. Add the federated package so iOS/iPadOS gets
+  # its UIScreen brightness plugin too.
+  screen_brightness: ^2.1.11
 
   # State management
   flutter_riverpod: ^2.6.1

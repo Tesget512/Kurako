@@ -118,11 +118,33 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
         user: user.to_string(),
         password: password.to_string(),
     };
-    let (mut client, mut tree) = open(&c).await?;
-    // A root listing proves auth + share access work.
-    let _ = client.list_directory(&mut tree, "").await;
-    set_creds(Some(c));
-    Ok(())
+    // A busy SMB server can briefly reject a second session while it reaps an
+    // old one. Retrying this *initial* connection once avoids presenting the
+    // cryptic bare "smb connect" error after a player/download was just
+    // stopped, without leaving the UI blocked indefinitely.
+    let mut last_error = None;
+    for attempt in 0..2 {
+        match open(&c).await {
+            Ok((mut client, mut tree)) => {
+                // A root listing proves auth + share access work; unlike the
+                // old code, do not silently accept a failed list operation.
+                let listed = client.list_directory(&mut tree, "").await;
+                let _ = client.disconnect_share(&tree).await;
+                match listed {
+                    Ok(_) => {
+                        set_creds(Some(c));
+                        return Ok(());
+                    }
+                    Err(e) => last_error = Some(e.into()),
+                }
+            }
+            Err(e) => last_error = Some(e),
+        }
+        if attempt == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("smb connect failed")))
 }
 
 /// Recursively enumerate video files under `subdir` (relative to the share
@@ -749,9 +771,11 @@ pub async fn download(
     let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
     let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
     let c = creds().context("smb not connected")?;
-    let mut client = smb2::connect(&c.addr, &c.user, &c.password).await?;
-    let tree = client.connect_share(&c.share).await?;
-    let reader = client.open_file_reader(&tree, &path).await?;
+    // Downloads used to establish a second TCP/authenticated SMB session even
+    // while the proxy was playing. Many NASes limit sessions or open handles
+    // per client; reuse the same multiplexed session as the proxy instead.
+    let _permit = SMB_CONN.acquire().await;
+    let reader = open_session_reader(&c, &path).await?;
     let total = reader.size();
 
     // A zero-length video is never a valid completed download. Previously the
@@ -759,7 +783,6 @@ pub async fn download(
     // which is exactly the "instant completion but no file" symptom on iOS.
     if total == 0 {
         let _ = reader.close().await;
-        let _ = client.disconnect_share(&tree).await;
         anyhow::bail!("SMB reported this video as 0 bytes; download was not saved");
     }
 
@@ -800,7 +823,6 @@ pub async fn download(
     .await;
     drop(out);
     let _ = reader.close().await;
-    let _ = client.disconnect_share(&tree).await;
 
     if let Err(e) = transfer_result {
         let _ = tokio::fs::remove_file(&part_path).await;

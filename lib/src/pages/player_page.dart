@@ -68,10 +68,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     switch (decodeModeStartupValue) {
       case 'hw':
         return const VideoControllerConfiguration(
-            enableHardwareAcceleration: true, hwdec: 'auto');
+          enableHardwareAcceleration: true,
+          hwdec: 'auto',
+        );
       case 'sw':
         return const VideoControllerConfiguration(
-            enableHardwareAcceleration: false, hwdec: 'no');
+          enableHardwareAcceleration: false,
+          hwdec: 'no',
+        );
       default:
         return const VideoControllerConfiguration();
     }
@@ -98,7 +102,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // Active dark color scheme for the player UI (seeded from the app theme).
   // Set at the top of build(); all controls/sheets read from it for MD3 color.
   late ColorScheme _cs = ColorScheme.fromSeed(
-      seedColor: const Color(0xFF6750A4), brightness: Brightness.dark);
+    seedColor: const Color(0xFF6750A4),
+    brightness: Brightness.dark,
+  );
   // Open SAF file descriptor for the current episode (Android); released when
   // switching episodes or closing so the fd doesn't leak.
   PlayableHandle? _handle;
@@ -259,9 +265,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       } catch (e) {
         if (attempt == _maxOpenAttempts) {
           if (mounted && seq == _openSeq) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('无法打开视频: $e')),
-            );
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('无法打开视频: $e')));
           }
           break;
         }
@@ -320,8 +326,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     }
     if (seq != _openSeq) return;
     try {
-      final raw = await (_player.platform as dynamic)
-          ?.getProperty('chapter-list') as String?;
+      final raw =
+          await (_player.platform as dynamic)?.getProperty('chapter-list')
+              as String?;
       if (raw == null || raw.isEmpty || !mounted || seq != _openSeq) return;
       final list = jsonDecode(raw) as List<dynamic>;
       final chapters = <_Chapter>[];
@@ -374,8 +381,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final savedSub = prefs.getString(_subPrefKey);
     final savedAudio = prefs.getString(_audioPrefKey);
 
-    final subs =
-        tracks.subtitle.where((t) => t.id != 'auto' && t.id != 'no').toList();
+    final subs = tracks.subtitle
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
     // Skip embedded-subtitle auto-pick when an external sidecar file already
     // loaded — external subs usually exist because the embedded ones don't fit.
     if (subs.isNotEmpty && _activeExtSub == null) {
@@ -389,13 +397,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           }
         }
       }
-      pick ??= (subs..sort((a, b) => _langScore(b.language, b.title)
-          .compareTo(_langScore(a.language, a.title)))).first;
+      pick ??=
+          (subs..sort(
+                (a, b) => _langScore(
+                  b.language,
+                  b.title,
+                ).compareTo(_langScore(a.language, a.title)),
+              ))
+              .first;
       _player.setSubtitleTrack(pick);
     }
 
-    final audios =
-        tracks.audio.where((t) => t.id != 'auto' && t.id != 'no').toList();
+    final audios = tracks.audio
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
     if (audios.isNotEmpty) {
       AudioTrack? pick;
       if (savedAudio != null) {
@@ -406,8 +421,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           }
         }
       }
-      pick ??= (audios..sort((a, b) => _langScore(b.language, b.title)
-          .compareTo(_langScore(a.language, a.title)))).first;
+      pick ??=
+          (audios..sort(
+                (a, b) => _langScore(
+                  b.language,
+                  b.title,
+                ).compareTo(_langScore(a.language, a.title)),
+              ))
+              .first;
       _player.setAudioTrack(pick);
     }
   }
@@ -424,7 +445,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   int _langScore(String? language, String? title) {
     final meta = '${language ?? ''} ${title ?? ''}'.toLowerCase();
-    final isChinese = meta.contains('zh') ||
+    final isChinese =
+        meta.contains('zh') ||
         meta.contains('chi') ||
         meta.contains('中') ||
         meta.contains('汉') ||
@@ -442,10 +464,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // out is how mpv/libass often labels a track derived from an ISO language tag
   // (e.g. "Chinese (Simplified) · chi") — neither word contains "sc"/"tc".
   static const _kSimplifiedMarkers = [
-    'sc', 'chs', 'gb', 'hans', 'simplified', '简体', '简中', '简',
+    'sc',
+    'chs',
+    'gb',
+    'hans',
+    'simplified',
+    '简体',
+    '简中',
+    '简',
   ];
   static const _kTraditionalMarkers = [
-    'tc', 'cht', 'big5', 'hant', 'traditional', '繁体', '繁中', '繁',
+    'tc',
+    'cht',
+    'big5',
+    'hant',
+    'traditional',
+    '繁体',
+    '繁中',
+    '繁',
   ];
 
   /// Whether the OS is set to a Traditional-Chinese locale (script tag, or
@@ -471,8 +507,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final matchesSimplified = _kSimplifiedMarkers.any(textLower.contains);
     final matchesTraditional = _kTraditionalMarkers.any(textLower.contains);
     final preferTraditional = _systemPrefersTraditional;
-    final preferredMatch = preferTraditional ? matchesTraditional : matchesSimplified;
-    final otherMatch = preferTraditional ? matchesSimplified : matchesTraditional;
+    final preferredMatch = preferTraditional
+        ? matchesTraditional
+        : matchesSimplified;
+    final otherMatch = preferTraditional
+        ? matchesSimplified
+        : matchesTraditional;
     if (preferredMatch) return 2;
     if (otherMatch) return 1;
     return 0;
@@ -519,9 +559,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Future<void> _playNext({bool auto = false}) async {
     if (!_hasNext) {
       if (auto && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已经是最后一集了')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已经是最后一集了')));
       }
       return;
     }
@@ -537,8 +577,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   // Jump forward by the configured quick-seek duration.
   Future<void> _quickSeekForward() async {
-    final target = Duration(milliseconds: _positionMs) +
-        Duration(seconds: _seekSec);
+    final target =
+        Duration(milliseconds: _positionMs) + Duration(seconds: _seekSec);
     final max = Duration(milliseconds: _durationMs);
     await _player.seek(_durationMs > 0 && target > max ? max : target);
   }
@@ -586,15 +626,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // MaterialVideoControls has the touch gestures (double-tap seek, swipe
     // volume/brightness, long-press speed). Touch-mode lets touchscreen
     // desktop devices opt into the touch controls too.
+    // iPad with Stage Manager commonly has a mouse/trackpad and keyboard. Use
+    // the same hover/keyboard controls as desktop on a real tablet, while the
+    // existing touch-mode setting remains available for gesture playback.
     final isDesktop =
-        Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+        Platform.isWindows ||
+        Platform.isLinux ||
+        Platform.isMacOS ||
+        (Platform.isIOS && MediaQuery.sizeOf(context).shortestSide >= 600);
     final touchMode = ref.watch(touchModePlayerProvider);
     final useTouchControls = !isDesktop || touchMode;
 
     final video = Video(
       controller: _controller,
-      controls:
-          useTouchControls ? MaterialVideoControls : MaterialDesktopVideoControls,
+      controls: useTouchControls
+          ? MaterialVideoControls
+          : MaterialDesktopVideoControls,
       subtitleViewConfiguration: const SubtitleViewConfiguration(
         // libass draws subtitles onto the video texture; hide the Flutter
         // overlay to avoid double text.
@@ -698,11 +745,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                     Icon(icon, color: cs.onSurface),
                     const SizedBox(width: 8),
                     Expanded(
-                      child: Text(title,
-                          style: TextStyle(
-                              color: cs.onSurface,
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold)),
+                      child: Text(
+                        title,
+                        style: TextStyle(
+                          color: cs.onSurface,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                     IconButton(
                       icon: Icon(Icons.close, color: cs.onSurfaceVariant),
@@ -714,7 +764,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             ),
             const Divider(height: 1),
             // Body on its own Material so it clips under the title bar.
-            Expanded(child: Material(color: cs.surface, child: body)),
+            Expanded(
+              child: Material(color: cs.surface, child: body),
+            ),
           ],
         ),
       ),
@@ -726,10 +778,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Widget _menuPanel() {
     final cs = _cs;
     Widget tile(IconData icon, String label, _Panel panel) => ListTile(
-          leading: Icon(icon, color: cs.onSurfaceVariant),
-          title: Text(label, style: TextStyle(color: cs.onSurface)),
-          onTap: () => setState(() => _drawerPanel = panel),
-        );
+      leading: Icon(icon, color: cs.onSurfaceVariant),
+      title: Text(label, style: TextStyle(color: cs.onSurface)),
+      onTap: () => setState(() => _drawerPanel = panel),
+    );
     return ListView(
       children: [
         tile(Icons.subtitles_outlined, '字幕 / 音轨', _Panel.tracks),
@@ -758,13 +810,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               : CircleAvatar(
                   radius: 12,
                   backgroundColor: cs.surfaceContainerHighest,
-                  child: Text('${ep.episodeNo?.toInt() ?? i + 1}',
-                      style: TextStyle(fontSize: 11, color: cs.onSurface)),
+                  child: Text(
+                    '${ep.episodeNo?.toInt() ?? i + 1}',
+                    style: TextStyle(fontSize: 11, color: cs.onSurface),
+                  ),
                 ),
-          title: Text(ep.fileName,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: cs.onSurface)),
+          title: Text(
+            ep.fileName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: cs.onSurface),
+          ),
           selected: selected,
           selectedTileColor: cs.secondaryContainer,
           onTap: () async {
@@ -811,13 +867,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         const SingleActivator(LogicalKeyboardKey.mediaPlayPause): () =>
             _player.playOrPause(),
         const SingleActivator(LogicalKeyboardKey.arrowLeft): () => _player.seek(
-            Duration(milliseconds: _positionMs) - const Duration(seconds: 10)),
-        const SingleActivator(LogicalKeyboardKey.arrowRight): () => _player.seek(
-            Duration(milliseconds: _positionMs) + const Duration(seconds: 10)),
-        const SingleActivator(LogicalKeyboardKey.arrowUp): () => _player
-            .setVolume((_player.state.volume + 5).clamp(0.0, 100.0)),
-        const SingleActivator(LogicalKeyboardKey.arrowDown): () => _player
-            .setVolume((_player.state.volume - 5).clamp(0.0, 100.0)),
+          Duration(milliseconds: _positionMs) - const Duration(seconds: 10),
+        ),
+        const SingleActivator(LogicalKeyboardKey.arrowRight): () =>
+            _player.seek(
+              Duration(milliseconds: _positionMs) + const Duration(seconds: 10),
+            ),
+        const SingleActivator(LogicalKeyboardKey.arrowUp): () =>
+            _player.setVolume((_player.state.volume + 5).clamp(0.0, 100.0)),
+        const SingleActivator(LogicalKeyboardKey.arrowDown): () =>
+            _player.setVolume((_player.state.volume - 5).clamp(0.0, 100.0)),
         const SingleActivator(LogicalKeyboardKey.keyM): () =>
             _player.setVolume(_player.state.volume > 0 ? 0 : 100),
         const SingleActivator(LogicalKeyboardKey.keyF): _toggleFullscreen,
@@ -874,14 +933,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // quick-seek, volume, position, fullscreen.
       bottomButtonBar: [
         MaterialDesktopCustomButton(
-          icon: Icon(Icons.skip_previous,
-              color: _hasPrev ? Colors.white : Colors.white30),
+          icon: Icon(
+            Icons.skip_previous,
+            color: _hasPrev ? Colors.white : Colors.white30,
+          ),
           onPressed: _hasPrev ? _playPrev : () {},
         ),
         const MaterialDesktopPlayOrPauseButton(),
         MaterialDesktopCustomButton(
-          icon: Icon(Icons.skip_next,
-              color: _hasNext ? Colors.white : Colors.white30),
+          icon: Icon(
+            Icons.skip_next,
+            color: _hasNext ? Colors.white : Colors.white30,
+          ),
           onPressed: _hasNext ? () => _playNext() : () {},
         ),
         _desktopRateButton(),
@@ -903,9 +966,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                   Consumer(
                     builder: (context, ref, _) {
                       final s = ref.watch(seekDurationProvider);
-                      return Text('${s}s',
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 11));
+                      return Text(
+                        '${s}s',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                        ),
+                      );
                     },
                   ),
                 ],
@@ -925,23 +992,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// ValueListenableBuilder since the keyed controls subtree won't rebuild on a
   /// plain setState when fullscreen flips.
   Widget _desktopFullscreenButton() => ValueListenableBuilder<bool>(
-        valueListenable: _fullscreen,
-        builder: (context, fs, _) => MaterialDesktopCustomButton(
-          icon: Icon(fs ? Icons.fullscreen_exit : Icons.fullscreen),
-          onPressed: _toggleFullscreen,
-        ),
-      );
+    valueListenable: _fullscreen,
+    builder: (context, fs, _) => MaterialDesktopCustomButton(
+      icon: Icon(fs ? Icons.fullscreen_exit : Icons.fullscreen),
+      onPressed: _toggleFullscreen,
+    ),
+  );
 
   Widget _desktopRateButton() => MaterialDesktopCustomButton(
-        icon: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.speed, size: 20),
-            Text('${_rate}x', style: const TextStyle(fontSize: 11)),
-          ],
-        ),
-        onPressed: () => _openPanel(_Panel.rate),
-      );
+    icon: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.speed, size: 20),
+        Text('${_rate}x', style: const TextStyle(fontSize: 11)),
+      ],
+    ),
+    onPressed: () => _openPanel(_Panel.rate),
+  );
 
   // ---- Mobile controls (touch gestures) ----
 
@@ -974,8 +1041,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       seekBarHeight: 4.2,
       seekBarThumbSize: 13,
       seekBarMargin: const EdgeInsets.only(left: 16, right: 16, bottom: 56),
-      bottomButtonBarMargin:
-          const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+      bottomButtonBarMargin: const EdgeInsets.only(
+        left: 16,
+        right: 16,
+        bottom: 8,
+      ),
       // Top bar: back + title + quick-seek + rate + episode drawer + overflow.
       topButtonBar: [
         MaterialCustomButton(
@@ -1018,16 +1088,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Bottom primary bar: prev / play-pause / next around the seek bar.
       primaryButtonBar: [
         MaterialCustomButton(
-          icon: Icon(Icons.skip_previous,
-              color: _hasPrev ? Colors.white : Colors.white30),
+          icon: Icon(
+            Icons.skip_previous,
+            color: _hasPrev ? Colors.white : Colors.white30,
+          ),
           onPressed: _hasPrev ? _playPrev : () {},
         ),
         const SizedBox(width: 8),
         const MaterialPlayOrPauseButton(iconSize: 48),
         const SizedBox(width: 8),
         MaterialCustomButton(
-          icon: Icon(Icons.skip_next,
-              color: _hasNext ? Colors.white : Colors.white30),
+          icon: Icon(
+            Icons.skip_next,
+            color: _hasNext ? Colors.white : Colors.white30,
+          ),
           onPressed: _hasNext ? () => _playNext() : () {},
         ),
       ],
@@ -1044,13 +1118,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   /// Windows-touch fullscreen toggle; icon tracks [_fullscreen] live.
   Widget _touchFullscreenButton() => ValueListenableBuilder<bool>(
-        valueListenable: _fullscreen,
-        builder: (context, fs, _) => MaterialCustomButton(
-          icon: Icon(fs ? Icons.fullscreen_exit : Icons.fullscreen,
-              color: Colors.white),
-          onPressed: _toggleFullscreen,
-        ),
-      );
+    valueListenable: _fullscreen,
+    builder: (context, fs, _) => MaterialCustomButton(
+      icon: Icon(
+        fs ? Icons.fullscreen_exit : Icons.fullscreen,
+        color: Colors.white,
+      ),
+      onPressed: _toggleFullscreen,
+    ),
+  );
 
   void _popSelf() {
     if (mounted) Navigator.of(context).maybePop();
@@ -1062,8 +1138,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(Icons.speed, color: Colors.white, size: 20),
-          Text('${_rate}x',
-              style: const TextStyle(color: Colors.white, fontSize: 11)),
+          Text(
+            '${_rate}x',
+            style: const TextStyle(color: Colors.white, fontSize: 11),
+          ),
         ],
       ),
       onPressed: () => _openPanel(_Panel.rate),
@@ -1090,8 +1168,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             Consumer(
               builder: (context, ref, _) {
                 final s = ref.watch(seekDurationProvider);
-                return Text('${s}s',
-                    style: const TextStyle(color: Colors.white, fontSize: 11));
+                return Text(
+                  '${s}s',
+                  style: const TextStyle(color: Colors.white, fontSize: 11),
+                );
               },
             ),
           ],
@@ -1109,11 +1189,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('快进 / 快退时长：$local 秒',
-                style: TextStyle(color: cs.onSurface, fontSize: 16)),
+            Text(
+              '快进 / 快退时长：$local 秒',
+              style: TextStyle(color: cs.onSurface, fontSize: 16),
+            ),
             const SizedBox(height: 4),
-            Text('点击顶部快进按钮时跳转的时长（双击画面固定 10 秒）',
-                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+            Text(
+              '点击顶部快进按钮时跳转的时长（双击画面固定 10 秒）',
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+            ),
             Slider(
               value: local.toDouble(),
               min: 5,
@@ -1163,11 +1247,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('字幕延迟：${_subDelay.toStringAsFixed(1)} 秒',
-                style: TextStyle(color: cs.onSurface, fontSize: 16)),
+            Text(
+              '字幕延迟：${_subDelay.toStringAsFixed(1)} 秒',
+              style: TextStyle(color: cs.onSurface, fontSize: 16),
+            ),
             const SizedBox(height: 4),
-            Text('正值让字幕更晚出现，负值更早',
-                style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+            Text(
+              '正值让字幕更晚出现，负值更早',
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+            ),
             const SizedBox(height: 12),
             Wrap(
               alignment: WrapAlignment.spaceEvenly,
@@ -1214,15 +1302,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // embedded list so each file shows once (in the 外部字幕 section below).
     final extNames = _extSubs.map((s) => s.fileName).toSet();
     final embeddedSubs = tracks.subtitle
-        .where((t) =>
-            t.id != 'auto' &&
-            t.id != 'no' &&
-            !(t.title != null && extNames.contains(t.title)))
+        .where(
+          (t) =>
+              t.id != 'auto' &&
+              t.id != 'no' &&
+              !(t.title != null && extNames.contains(t.title)),
+        )
         .toList();
     // Audio can arrive with duplicate entries over the SMB proxy — dedup by a
     // composite key, and add an index when several share one label.
-    final audios =
-        tracks.audio.where((t) => t.id != 'auto' && t.id != 'no').toList();
+    final audios = tracks.audio
+        .where((t) => t.id != 'auto' && t.id != 'no')
+        .toList();
     final seenAudio = <String>{};
     final uniqueAudio = <AudioTrack>[];
     for (final t in audios) {
@@ -1288,11 +1379,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   String _audioLabel(List<AudioTrack> audios, int i) {
     final t = audios[i];
     final base = _trackLabel(t.title, t.language, t.id);
-    final sameLabel =
-        audios.where((o) => _trackLabel(o.title, o.language, o.id) == base);
+    final sameLabel = audios.where(
+      (o) => _trackLabel(o.title, o.language, o.id) == base,
+    );
     if (sameLabel.length <= 1) return base;
-    final ordinal = audios.take(i + 1).where((o) =>
-        _trackLabel(o.title, o.language, o.id) == base).length;
+    final ordinal = audios
+        .take(i + 1)
+        .where((o) => _trackLabel(o.title, o.language, o.id) == base)
+        .length;
     return '$base · $ordinal';
   }
 
@@ -1339,17 +1433,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         leading: i == currentIdx
             ? Icon(Icons.play_arrow, color: cs.primary)
             : const SizedBox(width: 24),
-        title: Text(_chapters[i].title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(color: cs.onSurface)),
-        trailing: Text(_fmtTime(_chapters[i].timeSec),
-            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12)),
+        title: Text(
+          _chapters[i].title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: cs.onSurface),
+        ),
+        trailing: Text(
+          _fmtTime(_chapters[i].timeSec),
+          style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+        ),
         selected: i == currentIdx,
         selectedTileColor: cs.secondaryContainer,
         onTap: () {
           _player.seek(
-              Duration(milliseconds: (_chapters[i].timeSec * 1000).round()));
+            Duration(milliseconds: (_chapters[i].timeSec * 1000).round()),
+          );
           Navigator.pop(context);
         },
       ),
@@ -1378,9 +1477,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         children: [
           Icon(icon, size: 18, color: cs.onSurfaceVariant),
           const SizedBox(width: 8),
-          Text(label,
-              style: TextStyle(
-                  color: cs.onSurfaceVariant, fontWeight: FontWeight.bold)),
+          Text(
+            label,
+            style: TextStyle(
+              color: cs.onSurfaceVariant,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ],
       ),
     );
@@ -1448,14 +1551,20 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
 
   Future<void> _refresh() async {
     try {
-      final hw = await (widget.player.platform as dynamic)
-          ?.getProperty('hwdec-current') as String?;
+      final hw =
+          await (widget.player.platform as dynamic)?.getProperty(
+                'hwdec-current',
+              )
+              as String?;
       if (hw != null && hw.isNotEmpty) _hwdec = hw;
     } catch (_) {}
     // Fallback bitrate when state.audioBitrate is unset for the container.
     try {
-      final raw = await (widget.player.platform as dynamic)
-          ?.getProperty('audio-bitrate') as String?;
+      final raw =
+          await (widget.player.platform as dynamic)?.getProperty(
+                'audio-bitrate',
+              )
+              as String?;
       final v = raw == null ? null : double.tryParse(raw);
       if (v != null && v > 0) _audioBitrateProp = v;
     } catch (_) {}
@@ -1508,9 +1617,7 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
     final rows = <(String, String)>[
       if (vp.w != null && vp.h != null) ('分辨率', '${vp.w} × ${vp.h}'),
       if (videoCodec != null && videoCodec.isNotEmpty) ('视频编码', videoCodec),
-      ('解码方式', _hwdec == 'no' || _hwdec == ''
-          ? '软件解码'
-          : '硬件解码（$_hwdec）'),
+      ('解码方式', _hwdec == 'no' || _hwdec == '' ? '软件解码' : '硬件解码（$_hwdec）'),
       if (vp.pixelformat != null) ('像素格式', vp.pixelformat!),
       if (hwActive) ('硬解像素格式', vp.hwPixelformat!),
       if (vp.aspect != null) ('宽高比', vp.aspect!.toStringAsFixed(3)),
@@ -1537,12 +1644,19 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
             children: [
               Row(
                 children: [
-                  Icon(Icons.info_outline, size: 18, color: cs.onSurfaceVariant),
+                  Icon(
+                    Icons.info_outline,
+                    size: 18,
+                    color: cs.onSurfaceVariant,
+                  ),
                   const SizedBox(width: 8),
-                  Text('播放信息',
-                      style: TextStyle(
-                          color: cs.onSurfaceVariant,
-                          fontWeight: FontWeight.bold)),
+                  Text(
+                    '播放信息',
+                    style: TextStyle(
+                      color: cs.onSurfaceVariant,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -1554,14 +1668,19 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
                     children: [
                       SizedBox(
                         width: 110,
-                        child: Text(label,
-                            style: TextStyle(
-                                color: cs.onSurfaceVariant, fontSize: 13)),
+                        child: Text(
+                          label,
+                          style: TextStyle(
+                            color: cs.onSurfaceVariant,
+                            fontSize: 13,
+                          ),
+                        ),
                       ),
                       Expanded(
-                        child: Text(value,
-                            style:
-                                TextStyle(color: cs.onSurface, fontSize: 13)),
+                        child: Text(
+                          value,
+                          style: TextStyle(color: cs.onSurface, fontSize: 13),
+                        ),
                       ),
                     ],
                   ),

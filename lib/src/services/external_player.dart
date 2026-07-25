@@ -120,12 +120,14 @@ Future<void> ensureUncAuth(String uncPath) async {
 Future<void> launchExternalPlayer(String playerPath, String locator) async {
   if (Platform.isIOS) {
     if (locator.startsWith('smb://')) {
-      // iOS has no generic ACTION_VIEW chooser. Ask the OS to dispatch the
-      // native SMB URI; Files, VLC and other installed players may register a
-      // compatible handler and can then stream independently of KURAKO.
-      if (!await IosPlatform.openExternalUrl(locator)) {
+      // iOS has no generic ACTION_VIEW chooser. In particular, passing a raw
+      // smb:// address to UIApplication may route to Files, which treats the
+      // path as a new server name rather than opening VLC. VLC's own official
+      // x-callback endpoint accepts the complete SMB URI and opens it with
+      // VLC's SMB client instead.
+      if (!await IosPlatform.openVlcSmb(locator)) {
         throw Exception(
-          '系统没有可处理 SMB 地址的播放器。请在文件 App 或 VLC 中确认该 SMB 地址可打开，或先下载到本地',
+          'iOS 未检测到 VLC。未下载的 SMB 视频只能通过 VLC 串流；请安装 VLC，或先下载到本地后使用系统分享打开',
         );
       }
       return;
