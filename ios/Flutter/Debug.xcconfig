@@ -1,0 +1,4 @@
+#include? "Pods/Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"
+#include "Generated.xcconfig"
+PUB_HOSTED_URL=https:/$()/pub.flutter-io.cn
+FLUTTER_STORAGE_BASE_URL=https:/$()/storage.flutter-io.cn

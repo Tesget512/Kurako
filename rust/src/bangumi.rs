@@ -123,7 +123,14 @@ fn client() -> Result<reqwest::Client> {
 /// Detect a system HTTP proxy: env vars first, then (on Windows) the per-user
 /// Internet Settings registry key that clash/v2rayN/etc. configure.
 pub fn detect_system_proxy() -> Option<String> {
-    for var in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+    for var in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ] {
         if let Ok(val) = std::env::var(var) {
             let v = val.trim();
             if !v.is_empty() {
@@ -251,7 +258,13 @@ impl RawRating {
         if counts.iter().all(|c| *c == 0) {
             return None;
         }
-        Some(counts.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(","))
+        Some(
+            counts
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(","),
+        )
     }
 }
 
@@ -330,7 +343,10 @@ async fn send_with_backoff(
     what: &str,
 ) -> Result<reqwest::Response> {
     for attempt in 0..4 {
-        let resp = mk().send().await.with_context(|| format!("{what} request"))?;
+        let resp = mk()
+            .send()
+            .await
+            .with_context(|| format!("{what} request"))?;
         if resp.status().as_u16() != 429 {
             return Ok(resp);
         }
@@ -380,7 +396,10 @@ struct LegacySubject {
 
 pub async fn search_legacy(keyword: &str, limit: u32) -> Result<Vec<BangumiSubject>> {
     let encoded = urlencode(keyword);
-    let url = format!("{}/search/subject/{encoded}?type=2&max_results={limit}&responseGroup=small", api_base());
+    let url = format!(
+        "{}/search/subject/{encoded}?type=2&max_results={limit}&responseGroup=small",
+        api_base()
+    );
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi legacy search").await?;
     if !resp.status().is_success() {
@@ -448,7 +467,13 @@ fn keyword_variants(title: &str) -> Vec<String> {
     // Drop punctuation (& , : ~ -) -> spaces.
     let depunct: String = title
         .chars()
-        .map(|c| if "&,:~-_!！？?・/".contains(c) { ' ' } else { c })
+        .map(|c| {
+            if "&,:~-_!！？?・/".contains(c) {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect();
     let depunct = depunct.split_whitespace().collect::<Vec<_>>().join(" ");
     push(depunct.clone(), &mut out);
@@ -523,8 +548,7 @@ pub async fn best_match(title: &str) -> Result<Option<BangumiSubject>> {
     let mut seen_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     for kw in variants.iter() {
-        let coverage =
-            (normalize_for_match(kw).chars().count() as f64 / t_len as f64).min(1.0);
+        let coverage = (normalize_for_match(kw).chars().count() as f64 / t_len as f64).min(1.0);
         // v0 search first. IMPORTANT: only fall back to the legacy fuzzy
         // endpoint when v0 *successfully* returned nothing — a transient v0
         // error (rate limit) must NOT reroute to the much looser legacy
@@ -659,11 +683,16 @@ fn score_candidate(
     // Penalise candidates carrying extra distinctive Latin tokens the title does
     // NOT have — these are usually spin-offs/compilations (e.g. "Spin-off",
     // "8th anniversary") or plain different shows sharing one word.
-    let title_toks: std::collections::HashSet<String> =
-        latin_tokens(raw_title).into_iter().map(|t| t.to_lowercase()).collect();
+    let title_toks: std::collections::HashSet<String> = latin_tokens(raw_title)
+        .into_iter()
+        .map(|t| t.to_lowercase())
+        .collect();
     let mut extra: f64 = 0.0;
     let mut cand_distinctive: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for t in latin_tokens(&cand.name).into_iter().chain(latin_tokens(&cand.name_cn)) {
+    for t in latin_tokens(&cand.name)
+        .into_iter()
+        .chain(latin_tokens(&cand.name_cn))
+    {
         let t = t.to_lowercase();
         if t.len() >= 3 && !GENERIC_TOKENS.contains(&t.as_str()) {
             if !title_toks.contains(&t) && !cand_distinctive.contains(&t) {
@@ -708,8 +737,10 @@ fn score_candidate(
     // word (e.g. "宝石宠物 Sunshine" matching "…Watanare Next Sunshine") —
     // penalise by the fraction of missing CJK chars, using the better of
     // name/name_cn.
-    let title_cjk: std::collections::HashSet<char> =
-        norm_title.chars().filter(|c| (*c as u32) > 0x2E7F).collect();
+    let title_cjk: std::collections::HashSet<char> = norm_title
+        .chars()
+        .filter(|c| (*c as u32) > 0x2E7F)
+        .collect();
     if !title_cjk.is_empty() {
         let miss_frac = |n: &str| {
             let chars: Vec<char> = n.chars().filter(|c| (*c as u32) > 0x2E7F).collect();
@@ -788,8 +819,10 @@ const GENERIC_TOKENS: &[&str] = &[
 /// "4th season", "S04", "第四季", "第4季". Returns None when no marker.
 fn season_marker(s: &str) -> Option<u32> {
     static RE_EN: Lazy<regex::Regex> = Lazy::new(|| {
-        regex::Regex::new(r"(?i)(?:season\s*(\d{1,2})|(\d{1,2})(?:st|nd|rd|th)\s*season|\bS(\d{2})\b)")
-            .unwrap()
+        regex::Regex::new(
+            r"(?i)(?:season\s*(\d{1,2})|(\d{1,2})(?:st|nd|rd|th)\s*season|\bS(\d{2})\b)",
+        )
+        .unwrap()
     });
     static RE_CJK: Lazy<regex::Regex> =
         Lazy::new(|| regex::Regex::new(r"第\s*([0-9一二三四五六七八九十]{1,3})\s*[季期]").unwrap());
@@ -854,7 +887,11 @@ fn overlap(a: &str, b: &str) -> f64 {
     // Fraction of the shorter string's UNIQUE bigrams found in the longer one.
     // (Counting the longer side's duplicate bigrams against the shorter length
     // once scored "This Way Up" a perfect 1.0 against a 50-char title.)
-    let (short, long) = if ab.len() <= bb.len() { (&ab, &bb) } else { (&bb, &ab) };
+    let (short, long) = if ab.len() <= bb.len() {
+        (&ab, &bb)
+    } else {
+        (&bb, &ab)
+    };
     let uniq: std::collections::HashSet<&String> = short.iter().collect();
     let common = uniq.iter().filter(|g| long.contains(**g)).count();
     common as f64 / uniq.len() as f64
@@ -867,8 +904,6 @@ fn bigrams(s: &str) -> Vec<String> {
     }
     chars.windows(2).map(|w| w.iter().collect()).collect()
 }
-
-
 
 /// Fetch full subject detail by id.
 pub async fn subject(id: i64) -> Result<BangumiSubject> {
@@ -1070,7 +1105,10 @@ pub async fn collection_status(subject_id: i64) -> Result<Option<i64>> {
     }
     // Read endpoint needs the real username; `-` only works for writes.
     let username = current_username().await?;
-    let url = format!("{}/v0/users/{username}/collections/{subject_id}", api_base());
+    let url = format!(
+        "{}/v0/users/{username}/collections/{subject_id}",
+        api_base()
+    );
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi collection").await?;
     match resp.status().as_u16() {
@@ -1138,7 +1176,10 @@ pub struct EpisodeTitle {
 
 /// Fetch episode titles for a subject's main episodes (type=0).
 pub async fn subject_episode_titles(subject_id: i64, limit: u32) -> Result<Vec<EpisodeTitle>> {
-    let url = format!("{}/v0/subjects/{subject_id}/episodes?type=0&limit={limit}", api_base());
+    let url = format!(
+        "{}/v0/subjects/{subject_id}/episodes?type=0&limit={limit}",
+        api_base()
+    );
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi episode titles").await?;
     if !resp.status().is_success() {
@@ -1168,7 +1209,20 @@ mod match_tests {
     use super::*;
 
     fn subj(id: i64, name: &str, cn: &str) -> BangumiSubject {
-        BangumiSubject { id, name: name.into(), name_cn: cn.into(), summary: String::new(), cover_url: None, air_date: None, eps: None, rating: None, rating_total: None, rating_rank: None, rating_counts: None, tags: Vec::new() }
+        BangumiSubject {
+            id,
+            name: name.into(),
+            name_cn: cn.into(),
+            summary: String::new(),
+            cover_url: None,
+            air_date: None,
+            eps: None,
+            rating: None,
+            rating_total: None,
+            rating_rank: None,
+            rating_counts: None,
+            tags: Vec::new(),
+        }
     }
 
     #[test]
@@ -1185,7 +1239,11 @@ mod match_tests {
     fn scores_correct_candidate_higher() {
         let raw = "Hina Logi from Luck & Logic";
         let title = normalize_for_match(raw);
-        let correct = subj(175362, "ひなろじ 〜from Luck & Logic〜", "雏逻辑 〜from Luck & Logic〜");
+        let correct = subj(
+            175362,
+            "ひなろじ 〜from Luck & Logic〜",
+            "雏逻辑 〜from Luck & Logic〜",
+        );
         let wrong = subj(2121, "ラブひな", "爱情房东俏房客");
         // correct found at rank 3 of the full-title query, wrong at rank 0
         let sc = score_candidate(&title, raw, &correct, 1.0, V0, 3);
@@ -1198,7 +1256,11 @@ mod match_tests {
     fn u149_exact() {
         let raw = "THE IDOLM@STER CINDERELLA GIRLS U149";
         let title = normalize_for_match(raw);
-        let correct = subj(376703, "アイドルマスター シンデレラガールズ U149", "偶像大师 灰姑娘 U149");
+        let correct = subj(
+            376703,
+            "アイドルマスター シンデレラガールズ U149",
+            "偶像大师 灰姑娘 U149",
+        );
         let s = score_candidate(&title, raw, &correct, 1.0, V0, 0);
         assert!(s > 0.4, "got {s}");
     }
@@ -1248,7 +1310,11 @@ mod match_tests {
         assert!(s < 0.38, "junk must be gated, got {s}");
 
         // The Isekai Quartet movie also carries "Another World" in its name.
-        let junk1b = subj(303126, "劇場版 異世界かるてっと ～あなざーわーるど～", "剧场版 异世界四重奏 ～Another World～");
+        let junk1b = subj(
+            303126,
+            "劇場版 異世界かるてっと ～あなざーわーるど～",
+            "剧场版 异世界四重奏 ～Another World～",
+        );
         let s1b = score_candidate(&title, raw, &junk1b, 0.38, V0, 0);
         assert!(s1b < 0.38, "quartet movie must be gated, got {s1b}");
 
@@ -1280,7 +1346,11 @@ mod match_tests {
         // digit-bearing token is a near-unique identifier.
         let raw = "THE IDOLM@STER CINDERELLA GIRLS U149";
         let title = normalize_for_match(raw);
-        let correct = subj(376703, "アイドルマスター シンデレラガールズ U149", "偶像大师 灰姑娘 U149");
+        let correct = subj(
+            376703,
+            "アイドルマスター シンデレラガールズ U149",
+            "偶像大师 灰姑娘 U149",
+        );
         let s = score_candidate(&title, raw, &correct, 0.13, V0, 0);
         assert!(s >= 0.38, "got {s}");
     }
@@ -1292,23 +1362,47 @@ mod match_tests {
         // disagrees, so it must fall below the accept floor.
         let raw = "ReZERO Starting Life in Another World Season 4";
         let title = normalize_for_match(raw);
-        let s3 = subj(425998, "Re:ゼロから始める異世界生活 3rd season 襲擊編", "Re：从零开始的异世界生活 第三季 袭击篇");
-        let base = subj(140001, "Re:ゼロから始める異世界生活", "Re：从零开始的异世界生活");
-        let s4 = subj(547888, "Re:ゼロから始める異世界生活 4th season", "Re：从零开始的异世界生活 第四季 丧失篇");
+        let s3 = subj(
+            425998,
+            "Re:ゼロから始める異世界生活 3rd season 襲擊編",
+            "Re：从零开始的异世界生活 第三季 袭击篇",
+        );
+        let base = subj(
+            140001,
+            "Re:ゼロから始める異世界生活",
+            "Re：从零开始的异世界生活",
+        );
+        let s4 = subj(
+            547888,
+            "Re:ゼロから始める異世界生活 4th season",
+            "Re：从零开始的异世界生活 第四季 丧失篇",
+        );
         let sc3 = score_candidate(&title, raw, &s3, 1.0, V0, 0);
         let scb = score_candidate(&title, raw, &base, 1.0, V0, 3);
         let sc4 = score_candidate(&title, raw, &s4, 1.0, V0, 4);
         assert!(sc3 < 0.38, "wrong season must be rejected, got {sc3}");
-        assert!(scb < 0.38, "base entry must not absorb explicit S4, got {scb}");
-        assert!(sc4 > sc3 && sc4 > scb, "matching season must win: s4={sc4} s3={sc3} base={scb}");
+        assert!(
+            scb < 0.38,
+            "base entry must not absorb explicit S4, got {scb}"
+        );
+        assert!(
+            sc4 > sc3 && sc4 > scb,
+            "matching season must win: s4={sc4} s3={sc3} base={scb}"
+        );
     }
 
     #[test]
     fn season_markers_parsed() {
         assert_eq!(season_marker("Foo Season 4"), Some(4));
         assert_eq!(season_marker("Foo 3rd season Bar"), Some(3));
-        assert_eq!(season_marker("Re：从零开始的异世界生活 第三季 袭击篇"), Some(3));
-        assert_eq!(season_marker("Re：从零开始的异世界生活 第四季 丧失篇"), Some(4));
+        assert_eq!(
+            season_marker("Re：从零开始的异世界生活 第三季 袭击篇"),
+            Some(3)
+        );
+        assert_eq!(
+            season_marker("Re：从零开始的异世界生活 第四季 丧失篇"),
+            Some(4)
+        );
         assert_eq!(season_marker("Mob Psycho 100"), None);
         assert_eq!(season_marker("THE IDOLM@STER CINDERELLA GIRLS U149"), None);
     }

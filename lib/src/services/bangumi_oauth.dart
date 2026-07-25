@@ -28,7 +28,10 @@ class BangumiOAuth {
   }) async {
     HttpServer server;
     try {
-      server = await HttpServer.bind(InternetAddress.loopbackIPv4, _kCallbackPort);
+      server = await HttpServer.bind(
+        InternetAddress.loopbackIPv4,
+        _kCallbackPort,
+      );
     } on SocketException catch (e) {
       throw OAuthException('无法监听回调端口 $_kCallbackPort：${e.message}');
     }
@@ -45,7 +48,9 @@ class BangumiOAuth {
       } else {
         req.response.write(_html('授权失败', error ?? '未收到授权码，请重试。'));
         if (!codeCompleter.isCompleted) {
-          codeCompleter.completeError(OAuthException('授权被拒绝或失败：${error ?? '未知错误'}'));
+          codeCompleter.completeError(
+            OAuthException('授权被拒绝或失败：${error ?? '未知错误'}'),
+          );
         }
       }
       await req.response.close();
@@ -74,10 +79,7 @@ class BangumiOAuth {
       // reliable path the external player uses; it avoids url_launcher's
       // Uri round-trip, which could re-encode the already-percent-encoded
       // redirect_uri and make Bangumi report "No redirect URI was supplied".
-      final intent = AndroidIntent(
-        action: 'action_view',
-        data: url,
-      );
+      final intent = AndroidIntent(action: 'action_view', data: url);
       await intent.launch();
     } else if (Platform.isIOS) {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);

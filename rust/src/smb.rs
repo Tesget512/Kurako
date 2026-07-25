@@ -98,10 +98,11 @@ fn normalize_addr(host: &str) -> String {
 
 /// Open a client + connect the share using the given credentials.
 async fn open(c: &SmbCreds) -> Result<(smb2::SmbClient, smb2::Tree)> {
-    let mut client = tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&c.addr, &c.user, &c.password))
-        .await
-        .context("smb connect timed out")?
-        .context("smb connect")?;
+    let mut client =
+        tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&c.addr, &c.user, &c.password))
+            .await
+            .context("smb connect timed out")?
+            .context("smb connect")?;
     let tree = tokio::time::timeout(SETUP_TIMEOUT, client.connect_share(&c.share))
         .await
         .context("smb connect_share timed out")?
@@ -499,28 +500,38 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     let head = String::from_utf8_lossy(&buf);
     let mut lines = head.lines();
     let request_line = lines.next().unwrap_or("");
-    // "GET /<token> HTTP/1.1"
-    let token = request_line
-        .split_whitespace()
-        .nth(1)
+    // "GET /<token> HTTP/1.1". mpv on iOS probes HTTP sources with HEAD
+    // before opening a GET stream; treating that as a normal GET sends an
+    // unexpected media body and can leave its URL loader stuck in loading.
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap_or("GET");
+    let token = request_parts
+        .next()
         .unwrap_or("/")
         .trim_start_matches('/')
         .to_string();
     let mut range: Option<(u64, Option<u64>)> = None;
     for line in lines {
-        if let Some(v) = line.strip_prefix("Range:").or_else(|| line.strip_prefix("range:")) {
+        if let Some(v) = line
+            .strip_prefix("Range:")
+            .or_else(|| line.strip_prefix("range:"))
+        {
             range = parse_range(v.trim());
         }
     }
 
     let path = PLAYABLE.lock().unwrap().get(&token).cloned();
     let Some(path) = path else {
-        let _ = stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await;
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+            .await;
         return Ok(());
     };
 
     let Some(c) = creds() else {
-        let _ = stream.write_all(b"HTTP/1.1 500 No SMB\r\nContent-Length: 0\r\n\r\n").await;
+        let _ = stream
+            .write_all(b"HTTP/1.1 500 No SMB\r\nContent-Length: 0\r\n\r\n")
+            .await;
         return Ok(());
     };
 
@@ -562,11 +573,24 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     };
     let total = reader.size();
 
+    if total == 0 {
+        let _ = stream
+            .write_all(b"HTTP/1.1 404 Empty File\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await;
+        return Ok(());
+    }
+
     let (start, end) = match range {
         Some((s, Some(e))) => (s, e.min(total.saturating_sub(1))),
         Some((s, None)) => (s, total.saturating_sub(1)),
         None => (0, total.saturating_sub(1)),
     };
+    if start >= total {
+        let _ = stream
+            .write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .await;
+        return Ok(());
+    }
     let len = end.saturating_sub(start) + 1;
 
     // Response headers.
@@ -575,14 +599,18 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     } else {
         "HTTP/1.1 200 OK"
     };
+    let content_type = mime_for_path(&path);
     let mut header = format!(
-        "{status}\r\nContent-Type: video/x-matroska\r\nAccept-Ranges: bytes\r\nContent-Length: {len}\r\n"
+        "{status}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nContent-Length: {len}\r\nConnection: close\r\n"
     );
     if range.is_some() {
         header.push_str(&format!("Content-Range: bytes {start}-{end}/{total}\r\n"));
     }
     header.push_str("\r\n");
     stream.write_all(header.as_bytes()).await?;
+    if method.eq_ignore_ascii_case("HEAD") {
+        return Ok(());
+    }
 
     // Stream in chunks from the share.
     const CHUNK: u64 = 256 * 1024;
@@ -628,6 +656,23 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     Ok(())
 }
 
+/// A conservative content type lets iOS' URL loader identify MP4/MOV streams
+/// before handing them to libmpv. Unknown formats remain generic video.
+fn mime_for_path(path: &str) -> &'static str {
+    match path
+        .rsplit_once('.')
+        .map(|(_, ext)| ext.to_ascii_lowercase())
+    {
+        Some(ext) if ext == "mkv" => "video/x-matroska",
+        Some(ext) if ext == "mp4" || ext == "m4v" => "video/mp4",
+        Some(ext) if ext == "mov" => "video/quicktime",
+        Some(ext) if ext == "webm" => "video/webm",
+        Some(ext) if ext == "avi" => "video/x-msvideo",
+        Some(ext) if ext == "ts" || ext == "m2ts" => "video/mp2t",
+        _ => "video/*",
+    }
+}
+
 /// Parse a `bytes=start-end` Range header value into (start, Option<end>).
 fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
     let v = v.strip_prefix("bytes=")?;
@@ -650,7 +695,10 @@ static DOWNLOAD_CANCELLED: Lazy<Mutex<std::collections::HashSet<String>>> =
     Lazy::new(|| Mutex::new(std::collections::HashSet::new()));
 
 pub fn cancel_download(smb_uri: &str) {
-    DOWNLOAD_CANCELLED.lock().unwrap().insert(smb_uri.to_string());
+    DOWNLOAD_CANCELLED
+        .lock()
+        .unwrap()
+        .insert(smb_uri.to_string());
 }
 
 fn is_cancelled(smb_uri: &str) -> bool {
@@ -674,13 +722,20 @@ pub async fn download(
     let reader = client.open_file_reader(&tree, &path).await?;
     let total = reader.size();
 
-    tokio::fs::create_dir_all(dest_dir).await.context("create download dir")?;
+    tokio::fs::create_dir_all(dest_dir)
+        .await
+        .context("create download dir")?;
     let final_path = std::path::Path::new(dest_dir).join(&file_name);
     let part_path = final_path.with_extension(format!(
         "{}.part",
-        final_path.extension().and_then(|e| e.to_str()).unwrap_or("bin")
+        final_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin")
     ));
-    let mut out = tokio::fs::File::create(&part_path).await.context("create .part file")?;
+    let mut out = tokio::fs::File::create(&part_path)
+        .await
+        .context("create .part file")?;
 
     const CHUNK: u64 = 1024 * 1024;
     let mut off: u64 = 0;
@@ -708,6 +763,8 @@ pub async fn download(
         let _ = tokio::fs::remove_file(&part_path).await;
         anyhow::bail!("下载不完整（{}/{} 字节）", off, total);
     }
-    tokio::fs::rename(&part_path, &final_path).await.context("rename .part")?;
+    tokio::fs::rename(&part_path, &final_path)
+        .await
+        .context("rename .part")?;
     Ok(final_path.to_string_lossy().to_string())
 }

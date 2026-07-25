@@ -1,9 +1,9 @@
+use crate::frb_generated::StreamSink;
 use crate::models::{
-    Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode,
-    LibraryFolder, ScanProgress, SubtitleCandidate,
+    Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode, LibraryFolder,
+    ScanProgress, SubtitleCandidate,
 };
 use crate::{bangumi, db, scan, sidecar, smb};
-use crate::frb_generated::StreamSink;
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -177,14 +177,15 @@ pub fn set_watched(episode_id: i64, watched: bool) -> Result<(), String> {
 pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Result<(), String> {
     let folders = db::list_folders().map_err(|e| e.to_string())?;
 
-    let emit = |stage: &str, current: i64, total: i64, message: &str, sink: &StreamSink<ScanProgress>| {
-        let _ = sink.add(ScanProgress {
-            stage: stage.to_string(),
-            current,
-            total,
-            message: message.to_string(),
-        });
-    };
+    let emit =
+        |stage: &str, current: i64, total: i64, message: &str, sink: &StreamSink<ScanProgress>| {
+            let _ = sink.add(ScanProgress {
+                stage: stage.to_string(),
+                current,
+                total,
+                message: message.to_string(),
+            });
+        };
 
     // 1. Group video files by folder into anime, then upsert. Skip unchanged
     //    folders when doing an incremental scan. `scanned_prefixes` records the
@@ -295,7 +296,11 @@ pub fn smb_connect(
 /// without a network round-trip. Connection is opened lazily per operation.
 pub fn smb_set_credentials(host: String, share: String, user: String, password: String) {
     smb::set_creds(Some(smb::SmbCreds {
-        addr: if host.contains(':') { host } else { format!("{host}:445") },
+        addr: if host.contains(':') {
+            host
+        } else {
+            format!("{host}:445")
+        },
         share: share.trim_matches('/').to_string(),
         user,
         password,
@@ -353,7 +358,9 @@ pub fn smb_download(
             .await
         })
         .map_err(|e| e.to_string())?;
-    let size = std::fs::metadata(&local).map(|m| m.len() as i64).unwrap_or(0);
+    let size = std::fs::metadata(&local)
+        .map(|m| m.len() as i64)
+        .unwrap_or(0);
     db::add_download(&smb_uri, &local, size, now_secs()).map_err(|e| e.to_string())?;
     Ok(local)
 }
@@ -470,7 +477,12 @@ fn finish_scan(
         if let Ok(removed) = db::prune_missing(source_type, &prune_prefixes, &kept) {
             if removed > 0 {
                 let _ = db::delete_empty_anime();
-                emit("scanning", total, total, &format!("清理 {removed} 个失效文件"));
+                emit(
+                    "scanning",
+                    total,
+                    total,
+                    &format!("清理 {removed} 个失效文件"),
+                );
             }
         }
     }
@@ -639,10 +651,8 @@ pub fn set_collection(anime_id: i64, collection_type: i64) -> Result<(), String>
         .ok_or("anime not found")?;
     let subject_id = anime.bangumi_id.ok_or("not yet matched to Bangumi")?;
     if bangumi::has_token() {
-        RT.block_on(async {
-            bangumi::update_collection(subject_id, collection_type).await
-        })
-        .map_err(|e| e.to_string())?;
+        RT.block_on(async { bangumi::update_collection(subject_id, collection_type).await })
+            .map_err(|e| e.to_string())?;
     }
     db::set_collection(anime_id, collection_type).map_err(|e| e.to_string())
 }
@@ -672,7 +682,11 @@ pub fn refresh_metadata(anime_id: i64) -> Result<(), String> {
 /// single-anime [refresh_metadata] and the startup bulk [refresh_all_metadata].
 async fn refresh_one(anime_id: i64, subject_id: i64, corrected: bool) -> anyhow::Result<()> {
     let s = bangumi::subject(subject_id).await?;
-    let tags = if s.tags.is_empty() { None } else { Some(s.tags.join(",")) };
+    let tags = if s.tags.is_empty() {
+        None
+    } else {
+        Some(s.tags.join(","))
+    };
     let weekday = s.air_date.as_deref().and_then(bangumi::weekday_of);
     db::bind_bangumi(
         anime_id,
@@ -696,7 +710,11 @@ async fn refresh_one(anime_id: i64, subject_id: i64, corrected: bool) -> anyhow:
     // titles; never overwrites user-visible data).
     if let Ok(titles) = bangumi::subject_episode_titles(subject_id, 500).await {
         for t in titles {
-            let title = if !t.name_cn.is_empty() { &t.name_cn } else { &t.name };
+            let title = if !t.name_cn.is_empty() {
+                &t.name_cn
+            } else {
+                &t.name
+            };
             if !title.is_empty() {
                 db::set_episode_title(anime_id, t.ep, title)?;
             }

@@ -6,10 +6,28 @@ BASEDIR=$(dirname "$0")
 # Workaround for https://github.com/dart-lang/pub/issues/4010
 BASEDIR=$(cd "$BASEDIR" ; pwd -P)
 
-# Remove XCode SDK from path. Otherwise this breaks tool compilation when building iOS project
+# Remove XCode SDK from path. Otherwise this breaks tool compilation when building iOS project.
+# Xcode GUI builds do not load the user's shell profile, so recover the rustup
+# directory from RUSTC when CocoaPods supplies it as a build setting.
 NEW_PATH=`echo $PATH | tr ":" "\n" | grep -v "Contents/Developer/" | tr "\n" ":"`
+RUSTUP_BIN=""
+if [ -n "$RUSTC" ]; then
+  RUSTUP_BIN=$(dirname "$RUSTC")
+fi
+if [ -z "$RUSTUP_BIN" ] && [ -x "/usr/local/opt/rustup/bin/rustup" ]; then
+  RUSTUP_BIN="/usr/local/opt/rustup/bin"
+fi
 
-export PATH=${NEW_PATH%?} # remove trailing :
+export RUSTUP_HOME=${RUSTUP_HOME:-"$HOME/.rustup"}
+export CARGO_HOME=${CARGO_HOME:-"$HOME/.cargo"}
+
+if [ -n "$RUSTUP_BIN" ] && [ -x "$RUSTUP_BIN/rustup" ]; then
+  export PATH="$RUSTUP_BIN:${NEW_PATH%?}"
+  export RUSTC="$RUSTUP_BIN/rustc"
+  export CARGO="$RUSTUP_BIN/cargo"
+else
+  export PATH=${NEW_PATH%?} # remove trailing :
+fi
 
 env
 

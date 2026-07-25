@@ -1,0 +1,21 @@
+# Keep a single repository representation on macOS and Windows.  Windows
+# tooling accepts LF, which prevents an entire checkout from appearing changed
+# merely because it is opened on another operating system.
+* text=auto eol=lf
+
+# These scripts are normally executed by cmd.exe and retain the Windows line
+# ending expected by that shell.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Never ask Git to inspect or convert binary assets and release archives.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.ttf binary
+*.ipa binary
+*.apk binary
+*.exe binary
+*.zip binary

@@ -39,8 +39,9 @@ enum LibrarySort { normal, year, rating, weekday, yearWeekday, yearQuarter }
 
 /// The active library sort, persisted so the choice carries over across
 /// launches.
-final librarySortProvider =
-    StateNotifierProvider<_SortNotifier, LibrarySort>((ref) {
+final librarySortProvider = StateNotifierProvider<_SortNotifier, LibrarySort>((
+  ref,
+) {
   return _SortNotifier();
 });
 
@@ -65,15 +66,17 @@ class _SortNotifier extends StateNotifier<LibrarySort> {
 
 /// Whether collected entries (在看/想看/…) are pinned above the rest. When off,
 /// they sort purely by the chosen order like everything else. Persisted.
-final pinCollectedProvider =
-    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+final pinCollectedProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
+  ref,
+) {
   return _BoolPrefNotifier('pin_collected', defaultValue: true);
 });
 
 /// Whether the grid is split into labelled sections by the sort dimension.
 /// Persisted.
-final groupingEnabledProvider =
-    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+final groupingEnabledProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
+  ref,
+) {
   return _BoolPrefNotifier('grouping_enabled', defaultValue: false);
 });
 
@@ -81,7 +84,7 @@ final groupingEnabledProvider =
 class _BoolPrefNotifier extends StateNotifier<bool> {
   final String key;
   _BoolPrefNotifier(this.key, {required bool defaultValue})
-      : super(defaultValue) {
+    : super(defaultValue) {
     _load(defaultValue);
   }
   Future<void> _load(bool def) async {
@@ -103,9 +106,12 @@ class _IntPrefNotifier extends StateNotifier<int> {
   final String key;
   final int min;
   final int max;
-  _IntPrefNotifier(this.key,
-      {required int defaultValue, required this.min, required this.max})
-      : super(defaultValue) {
+  _IntPrefNotifier(
+    this.key, {
+    required int defaultValue,
+    required this.min,
+    required this.max,
+  }) : super(defaultValue) {
     _load(defaultValue);
   }
   Future<void> _load(int def) async {
@@ -151,13 +157,14 @@ class ThemeSettings {
       kSeedPalette[seedIndex.clamp(0, kSeedPalette.length - 1)].color;
 
   ThemeSettings copyWith({int? seedIndex, bool? followSystem}) => ThemeSettings(
-        seedIndex: seedIndex ?? this.seedIndex,
-        followSystem: followSystem ?? this.followSystem,
-      );
+    seedIndex: seedIndex ?? this.seedIndex,
+    followSystem: followSystem ?? this.followSystem,
+  );
 }
 
-final themeProvider =
-    StateNotifierProvider<ThemeNotifier, ThemeSettings>((ref) {
+final themeProvider = StateNotifierProvider<ThemeNotifier, ThemeSettings>((
+  ref,
+) {
   return ThemeNotifier();
 });
 
@@ -168,8 +175,10 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     state = ThemeSettings(
-      seedIndex: (prefs.getInt('theme_seed_index') ?? 0)
-          .clamp(0, kSeedPalette.length - 1),
+      seedIndex: (prefs.getInt('theme_seed_index') ?? 0).clamp(
+        0,
+        kSeedPalette.length - 1,
+      ),
       followSystem: prefs.getBool('theme_follow_system') ?? true,
     );
   }
@@ -191,10 +200,15 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
 
 /// Seconds jumped by the player's quick-seek (double-tap and the forward
 /// button). Adjustable via long-press. Clamped to 5..90.
-final seekDurationProvider =
-    StateNotifierProvider<_IntPrefNotifier, int>((ref) {
-  return _IntPrefNotifier('seek_duration_sec',
-      defaultValue: 10, min: 5, max: 90);
+final seekDurationProvider = StateNotifierProvider<_IntPrefNotifier, int>((
+  ref,
+) {
+  return _IntPrefNotifier(
+    'seek_duration_sec',
+    defaultValue: 10,
+    min: 5,
+    max: 90,
+  );
 });
 
 // ---- UI scale (percent of the adaptive default size), persisted ----
@@ -202,22 +216,28 @@ final seekDurationProvider =
 /// Interface scale percentage. 100 = adaptive default; scaled via
 /// MaterialApp.builder so vector rendering stays crisp. Clamped to 75..150.
 final uiScaleProvider = StateNotifierProvider<_IntPrefNotifier, int>((ref) {
-  return _IntPrefNotifier('ui_scale_percent',
-      defaultValue: 100, min: 75, max: 150);
+  return _IntPrefNotifier(
+    'ui_scale_percent',
+    defaultValue: 100,
+    min: 75,
+    max: 150,
+  );
 });
 
 /// Desktop-only: use the touch-gesture player controls (double-tap seek, swipe
 /// volume/brightness) instead of the mouse-hover desktop controls. For
 /// touchscreen Windows devices where mouse emulation is clumsy. Persisted.
-final touchModePlayerProvider =
-    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+final touchModePlayerProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
+  ref,
+) {
   return _BoolPrefNotifier('touch_mode_player', defaultValue: false);
 });
 
 /// Use the operating-system default font instead of the bundled LXGW WenKai.
 /// Off by default (the app ships its own screen-tuned CJK font). Persisted.
-final useSystemFontProvider =
-    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+final useSystemFontProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
+  ref,
+) {
   return _BoolPrefNotifier('use_system_font', defaultValue: false);
 });
 
@@ -230,8 +250,9 @@ String decodeModeStartupValue = 'auto';
 
 /// Decode mode: 'auto' (platform default), 'hw' (force hardware), 'sw' (force
 /// software). Takes effect when next entering the player. Persisted.
-final decodeModeProvider =
-    StateNotifierProvider<_StringPrefNotifier, String>((ref) {
+final decodeModeProvider = StateNotifierProvider<_StringPrefNotifier, String>((
+  ref,
+) {
   return _StringPrefNotifier('decode_mode', defaultValue: 'auto');
 });
 
@@ -239,7 +260,7 @@ final decodeModeProvider =
 class _StringPrefNotifier extends StateNotifier<String> {
   final String key;
   _StringPrefNotifier(this.key, {required String defaultValue})
-      : super(defaultValue) {
+    : super(defaultValue) {
     _load(defaultValue);
   }
   Future<void> _load(String def) async {
@@ -261,14 +282,22 @@ class _StringPrefNotifier extends StateNotifier<String> {
 /// App data directory path, cached at startup (for the default download dir).
 String appDataDirPath = '';
 
+/// Default SMB download location, initialized by main. On iOS this is the
+/// Files-visible Documents/KURAKO Downloads folder.
+String defaultDownloadDirPath = '';
+
 /// The effective downloads directory: the user-chosen one, or
 /// `<data dir>/downloads` when unset.
-String effectiveDownloadDir(String pref) =>
-    pref.isNotEmpty ? pref : '$appDataDirPath/downloads';
+String effectiveDownloadDir(String pref) => pref.isNotEmpty
+    ? pref
+    : (defaultDownloadDirPath.isNotEmpty
+          ? defaultDownloadDirPath
+          : '$appDataDirPath/downloads');
 
 /// Absolute path of the downloads directory. Null = app data dir / downloads.
-final downloadDirProvider =
-    StateNotifierProvider<_StringPrefNotifier, String>((ref) {
+final downloadDirProvider = StateNotifierProvider<_StringPrefNotifier, String>((
+  ref,
+) {
   return _StringPrefNotifier('download_dir', defaultValue: '');
 });
 
@@ -303,16 +332,15 @@ class DownloadTask {
     int? bytesTotal,
     String? error,
     bool? done,
-  }) =>
-      DownloadTask(
-        smbUri: smbUri,
-        fileName: fileName,
-        animeId: animeId,
-        bytesDone: bytesDone ?? this.bytesDone,
-        bytesTotal: bytesTotal ?? this.bytesTotal,
-        error: error ?? this.error,
-        done: done ?? this.done,
-      );
+  }) => DownloadTask(
+    smbUri: smbUri,
+    fileName: fileName,
+    animeId: animeId,
+    bytesDone: bytesDone ?? this.bytesDone,
+    bytesTotal: bytesTotal ?? this.bytesTotal,
+    error: error ?? this.error,
+    done: done ?? this.done,
+  );
 }
 
 /// Runs SMB downloads in the background and exposes their live progress, so the
@@ -344,8 +372,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
         animeId: animeId,
       ),
     ];
-    final stream =
-        rust.smbDownload(smbUri: ep.filePath, destDir: destDir);
+    final stream = rust.smbDownload(smbUri: ep.filePath, destDir: destDir);
     _subs[ep.filePath] = stream.listen(
       (p) => _update(
         ep.filePath,
@@ -375,9 +402,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   /// Clear lingering completed/failed tasks for an anime once the user has seen
   /// them. Active downloads are kept.
   void dismissAnime(int animeId) {
-    state = state
-        .where((t) => !(t.animeId == animeId && !t.active))
-        .toList();
+    state = state.where((t) => !(t.animeId == animeId && !t.active)).toList();
   }
 
   void _update(String smbUri, DownloadTask Function(DownloadTask) f) {
@@ -390,8 +415,8 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
 
 final downloadManagerProvider =
     StateNotifierProvider<DownloadManager, List<DownloadTask>>((ref) {
-  return DownloadManager(ref);
-});
+      return DownloadManager(ref);
+    });
 
 /// Whether an SMB source is configured — gates the detail-page download UI.
 final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
@@ -403,7 +428,9 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
 /// episode list show a "downloaded" badge without an async round-trip per
 /// tile. Re-fetches whenever a download task changes (starts/finishes/is
 /// removed) so a just-finished download's badge appears without a restart.
-final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((ref) async {
+final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((
+  ref,
+) async {
   ref.watch(downloadManagerProvider);
   final list = await rust.listDownloads();
   return list.map((d) => d.smbUri).toSet();
@@ -415,8 +442,9 @@ final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((ref) 
 /// (bgmapi.anibt.net) and cover images through bgmimg.anibt.net. Persisted;
 /// pushed into the Rust core on change. Thanks to Soyorin (github.com/
 /// Yuri-NagaSaki/bangumi-proxy) for the public proxy.
-final bangumiMirrorProvider =
-    StateNotifierProvider<_MirrorNotifier, bool>((ref) {
+final bangumiMirrorProvider = StateNotifierProvider<_MirrorNotifier, bool>((
+  ref,
+) {
   return _MirrorNotifier();
 });
 
@@ -602,8 +630,9 @@ class SettingsNotifier extends StateNotifier<Settings> {
     // Refresh proactively within 24h of expiry (tokens live ~7 days).
     if (s.bangumiTokenExpiresAt - now > 86400) return;
     try {
-      final result =
-          await rust.oauthRefresh(refreshToken: s.bangumiRefreshToken);
+      final result = await rust.oauthRefresh(
+        refreshToken: s.bangumiRefreshToken,
+      );
       await setOAuthSession(
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,

@@ -14,8 +14,7 @@ const MISC_KEY: &str = "__misc__";
 fn title_strength(s: &str) -> usize {
     s.chars()
         .filter(|c| {
-            c.is_alphanumeric()
-                && !c.is_ascii_digit() // digits alone (episode/res) don't count
+            c.is_alphanumeric() && !c.is_ascii_digit() // digits alone (episode/res) don't count
         })
         .count()
 }
@@ -106,11 +105,52 @@ fn is_generic_dir(name: &str) -> bool {
         return true;
     }
     let generic = [
-        "specials", "special", "extras", "extra", "sp", "sps", "cd", "cds", "scan", "scans",
-        "ova", "ovas", "oad", "oav", "menu", "menus", "movie", "movies", "bonus", "nc", "ncop",
-        "nced", "pv", "cm", "bd", "bdrip", "bdmv", "disc", "vol", "特典", "特典映像", "映像特典",
-        "映像", "花絮", "菜单", "预告", "宣传", "无字幕", "字幕", "音乐", "ost", "sound", "soundtrack",
-        "cds&scans", "cd&scan", "extra&scan",
+        "specials",
+        "special",
+        "extras",
+        "extra",
+        "sp",
+        "sps",
+        "cd",
+        "cds",
+        "scan",
+        "scans",
+        "ova",
+        "ovas",
+        "oad",
+        "oav",
+        "menu",
+        "menus",
+        "movie",
+        "movies",
+        "bonus",
+        "nc",
+        "ncop",
+        "nced",
+        "pv",
+        "cm",
+        "bd",
+        "bdrip",
+        "bdmv",
+        "disc",
+        "vol",
+        "特典",
+        "特典映像",
+        "映像特典",
+        "映像",
+        "花絮",
+        "菜单",
+        "预告",
+        "宣传",
+        "无字幕",
+        "字幕",
+        "音乐",
+        "ost",
+        "sound",
+        "soundtrack",
+        "cds&scans",
+        "cd&scan",
+        "extra&scan",
     ];
     if generic.contains(&n.as_str()) {
         return true;
@@ -119,14 +159,19 @@ fn is_generic_dir(name: &str) -> bool {
         return true;
     }
     // Chinese "第N卷", "Disc N", "Vol.N", "特典xxx", "全集xxx" etc.
-    if n.contains("特典") || n.contains("映像特典") || n.contains("scans") || n.contains("menu") {
+    if n.contains("特典") || n.contains("映像特典") || n.contains("scans") || n.contains("menu")
+    {
         return true;
     }
     let re_season = regex::Regex::new(r"^(s|season)\s*\d{1,2}$").unwrap();
     let re_cn_season = regex::Regex::new(r"^第[一二三四五六七八九十\d]+[季卷部]$").unwrap();
     let re_disc = regex::Regex::new(r"(?i)^(disc|disk|vol|volume|cd)\s*\.?\s*\d{1,2}$").unwrap();
-    let re_res = regex::Regex::new(r"(?i)^\d{3,4}[pi]$|^(bd|bdrip|bdbox|bluray|web|webrip)$").unwrap();
-    re_season.is_match(&n) || re_cn_season.is_match(&n) || re_disc.is_match(&n) || re_res.is_match(&n)
+    let re_res =
+        regex::Regex::new(r"(?i)^\d{3,4}[pi]$|^(bd|bdrip|bdbox|bluray|web|webrip)$").unwrap();
+    re_season.is_match(&n)
+        || re_cn_season.is_match(&n)
+        || re_disc.is_match(&n)
+        || re_res.is_match(&n)
 }
 
 /// Derive an anime title for a folder given its path relative to the library
@@ -314,10 +359,22 @@ mod tests {
 
     #[test]
     fn special_suffix_stripped() {
-        assert_eq!(strip_special_suffix("World Dai Star 特典").as_deref(), Some("World Dai Star"));
-        assert_eq!(strip_special_suffix("Frieren SP").as_deref(), Some("Frieren"));
-        assert_eq!(strip_special_suffix("Show Specials").as_deref(), Some("Show"));
-        assert_eq!(strip_special_suffix("Show_特典映像").as_deref(), Some("Show"));
+        assert_eq!(
+            strip_special_suffix("World Dai Star 特典").as_deref(),
+            Some("World Dai Star")
+        );
+        assert_eq!(
+            strip_special_suffix("Frieren SP").as_deref(),
+            Some("Frieren")
+        );
+        assert_eq!(
+            strip_special_suffix("Show Specials").as_deref(),
+            Some("Show")
+        );
+        assert_eq!(
+            strip_special_suffix("Show_特典映像").as_deref(),
+            Some("Show")
+        );
         // No special marker → None (handled by normal folder logic).
         assert_eq!(strip_special_suffix("World Dai Star"), None);
         // Pure generic → None.

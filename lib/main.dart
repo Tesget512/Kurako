@@ -30,8 +30,7 @@ Future<void> main() async {
   // Desktop: drop the native OS title bar and manage the window ourselves
   // (custom drag region + window buttons drawn in-app). See widgets/
   // window_caption.dart. Android/iOS skip this entirely.
-  final isDesktop =
-      Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   if (isDesktop) {
     await windowManager.ensureInitialized();
     const options = WindowOptions(
@@ -59,6 +58,7 @@ Future<void> main() async {
   final dbPath = p.join(dir.path, 'anime_library.db');
   await rust.initDb(dbPath: dbPath);
   appDataDirPath = dir.path;
+  defaultDownloadDirPath = await _defaultDownloadDir(dir);
 
   // Restore the saved Bangumi token, if any.
   final prefs = await SharedPreferences.getInstance();
@@ -105,4 +105,17 @@ Future<Directory> _dataDir() async {
     await dir.create(recursive: true);
   }
   return dir;
+}
+
+/// iOS downloads belong in the app's Documents container, not App Support:
+/// with file sharing enabled this is visible in Files as KURAKO's own folder.
+/// The database remains private in App Support.
+Future<String> _defaultDownloadDir(Directory dataDir) async {
+  if (!Platform.isIOS) return p.join(dataDir.path, 'downloads');
+  final documents = await getApplicationDocumentsDirectory();
+  final downloads = Directory(p.join(documents.path, 'KURAKO Downloads'));
+  if (!await downloads.exists()) {
+    await downloads.create(recursive: true);
+  }
+  return downloads.path;
 }

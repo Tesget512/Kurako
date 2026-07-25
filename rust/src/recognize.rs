@@ -26,19 +26,69 @@ pub fn is_video_file(name: &str) -> bool {
 // when a flattened (all-underscore) filename glued them on. Lowercase, matched
 // as whole space-separated words.
 static GROUP_WORDS: &[&str] = &[
-    "nekomoe", "kissaten", "vcb", "studio", "vcb-studio", "lilith", "raws", "lilith-raws",
-    "airota", "dhr", "makarihoshiyume", "kissub", "kisssub", "dbd", "dbd-raws", "ohys",
-    "ohys-raws", "sweetsub", "moozzi2", "philosophy", "jibaku", "ktkj", "sakurato", "haruhana",
-    "ани", "leopard", "leopard-raws", "orion", "beatrice", "beatrice-raws", "uha", "uhawmaki",
-    "mabors", "mabors-sub", "comicat", "kamigami", "hkg", "skytree", "bmf", "ani", "baha",
-    "greentea", "dynamis", "prejudice", "newjk", "fsd", "sub",
+    "nekomoe",
+    "kissaten",
+    "vcb",
+    "studio",
+    "vcb-studio",
+    "lilith",
+    "raws",
+    "lilith-raws",
+    "airota",
+    "dhr",
+    "makarihoshiyume",
+    "kissub",
+    "kisssub",
+    "dbd",
+    "dbd-raws",
+    "ohys",
+    "ohys-raws",
+    "sweetsub",
+    "moozzi2",
+    "philosophy",
+    "jibaku",
+    "ktkj",
+    "sakurato",
+    "haruhana",
+    "ани",
+    "leopard",
+    "leopard-raws",
+    "orion",
+    "beatrice",
+    "beatrice-raws",
+    "uha",
+    "uhawmaki",
+    "mabors",
+    "mabors-sub",
+    "comicat",
+    "kamigami",
+    "hkg",
+    "skytree",
+    "bmf",
+    "ani",
+    "baha",
+    "greentea",
+    "dynamis",
+    "prejudice",
+    "newjk",
+    "fsd",
+    "sub",
 ];
 
 // Multi-word group phrases, checked before single words so "Dynamis One" strips
 // as a unit ("one" alone would be far too dangerous to strip).
 static GROUP_PHRASES: &[&str] = &[
-    "nekomoe kissaten", "vcb studio", "lilith raws", "dbd raws", "ohys raws", "leopard raws",
-    "beatrice raws", "mabors sub", "studio greentea", "dynamis one", "prejudice studio",
+    "nekomoe kissaten",
+    "vcb studio",
+    "lilith raws",
+    "dbd raws",
+    "ohys raws",
+    "leopard raws",
+    "beatrice raws",
+    "mabors sub",
+    "studio greentea",
+    "dynamis one",
+    "prejudice studio",
     "moozzi2 sp",
 ];
 
@@ -246,9 +296,7 @@ fn clean_title(raw: &str) -> (String, Option<i64>, Option<String>) {
         if let Some(c) = RE_GLUED_LETTER_EP.captures(tok) {
             let letters = &c[1];
             let num: i64 = c[2].parse().unwrap_or(0);
-            if (1..=1500).contains(&num)
-                && !RE_TECH_WORD.is_match(&letters.to_lowercase())
-            {
+            if (1..=1500).contains(&num) && !RE_TECH_WORD.is_match(&letters.to_lowercase()) {
                 if found_ep.is_none() {
                     found_ep = Some(num);
                 }
@@ -317,10 +365,7 @@ fn strip_trailing_tech_glue(tok: &str, found_ep: &mut Option<i64>) -> Option<Str
     let low = tok.to_lowercase();
     // Find the earliest resolution keyword in the token.
     let res_kw = ["2160p", "1440p", "1080p", "720p", "480p", "576p"];
-    let pos = res_kw
-        .iter()
-        .filter_map(|kw| low.find(kw))
-        .min()?;
+    let pos = res_kw.iter().filter_map(|kw| low.find(kw)).min()?;
     // Head is the byte-prefix before the resolution (ASCII kw so byte pos is safe).
     let mut head = tok[..pos].to_string();
 
@@ -351,8 +396,8 @@ fn strip_trailing_tech_glue(tok: &str, found_ep: &mut Option<i64>) -> Option<Str
 // flattened filenames ("U14912WebRip", "U149SPBDRip", "U149OVA"). Ordered
 // longest-first so "BDRip" wins over "BD".
 const GLUED_TECH_SUFFIXES: &[&str] = &[
-    "webrip", "bdrip", "dvdrip", "bluray", "bdbox", "webdl", "hdtv", "remux", "web", "bdmv",
-    "bd", "ova", "oad", "ncop", "nced", "sp", "jpsc", "jptc", "big5", "chs", "cht", "gb",
+    "webrip", "bdrip", "dvdrip", "bluray", "bdbox", "webdl", "hdtv", "remux", "web", "bdmv", "bd",
+    "ova", "oad", "ncop", "nced", "sp", "jpsc", "jptc", "big5", "chs", "cht", "gb",
 ];
 
 /// Repeatedly peel known tech words glued to the END of a token with no
@@ -435,7 +480,12 @@ mod tests {
             ("[Group] CLANNAD - 01", 1),
         ] {
             let p = parse_filename(raw);
-            assert_eq!(group_key(&p.title), key0, "key mismatch for {raw:?} -> {:?}", p.title);
+            assert_eq!(
+                group_key(&p.title),
+                key0,
+                "key mismatch for {raw:?} -> {:?}",
+                p.title
+            );
             assert_eq!(p.episode_no, Some(ep), "ep mismatch for {raw:?}");
         }
         // Bare title with no number stays intact and shares the same key.
@@ -444,7 +494,11 @@ mod tests {
         // A glued 3-digit-without-leading-zero title is NOT split by our rule
         // ("mob100" stays whole, not letters+ep100).
         let mob = parse_filename("mob100");
-        assert_eq!(mob.episode_no, None, "mob100 must not yield ep 100: {:?}", mob);
+        assert_eq!(
+            mob.episode_no, None,
+            "mob100 must not yield ep 100: {:?}",
+            mob
+        );
         assert_eq!(group_key(&mob.title), "mob100");
     }
 
@@ -462,7 +516,11 @@ mod tests {
 
         // Season 1 stays bare so it groups with unmarked files of the show.
         let p1 = parse_filename("[Grp] Some Show S01E03 [1080p].mkv");
-        assert!(!p1.title.to_lowercase().contains("season"), "got: {:?}", p1.title);
+        assert!(
+            !p1.title.to_lowercase().contains("season"),
+            "got: {:?}",
+            p1.title
+        );
         assert_eq!(p1.episode_no, Some(3));
     }
 
@@ -471,7 +529,10 @@ mod tests {
         let p = parse_filename(
             "[DBD-Raws][Re Zero Kara Hajimeru Isekai Seikatsu Shin Henshuu-ban][menu][02][1080P][BDRip][HEVC-10bit][FLAC].mkv",
         );
-        assert_eq!(p.episode_no, None, "menu discs must not claim an episode number");
+        assert_eq!(
+            p.episode_no, None,
+            "menu discs must not claim an episode number"
+        );
         // and the real episode 02 keeps its number
         let p2 = parse_filename(
             "[DBD-Raws][Re Zero Kara Hajimeru Isekai Seikatsu Shin Henshuu-ban][02][1080P][BDRip][HEVC-10bit][FLAC].mkv",
@@ -496,12 +557,10 @@ mod tests {
     #[test]
     fn shinmai_groups_together() {
         // The same show across episodes must produce the same grouping key.
-        let a = parse_filename(
-            "[Lilith-Raws] Shinmai Renkinjutsushi no Tenpo Keiei - 01 [1080p].mkv",
-        );
-        let b = parse_filename(
-            "[Lilith-Raws] Shinmai Renkinjutsushi no Tenpo Keiei - 02 [1080p].mkv",
-        );
+        let a =
+            parse_filename("[Lilith-Raws] Shinmai Renkinjutsushi no Tenpo Keiei - 01 [1080p].mkv");
+        let b =
+            parse_filename("[Lilith-Raws] Shinmai Renkinjutsushi no Tenpo Keiei - 02 [1080p].mkv");
         assert_eq!(group_key(&a.title), group_key(&b.title));
         assert!(!group_key(&a.title).is_empty());
         assert_eq!(a.episode_no, Some(1));
@@ -510,16 +569,29 @@ mod tests {
 
     #[test]
     fn nekomoe_vcb_groups_together() {
-        let a = parse_filename("[Nekomoe kissaten&VCB-Studio] World Dai Star [01][Ma10p_1080p][x265_flac].mkv");
-        let b = parse_filename("[Nekomoe kissaten&VCB-Studio] World Dai Star [02][Ma10p_1080p][x265_flac].mkv");
+        let a = parse_filename(
+            "[Nekomoe kissaten&VCB-Studio] World Dai Star [01][Ma10p_1080p][x265_flac].mkv",
+        );
+        let b = parse_filename(
+            "[Nekomoe kissaten&VCB-Studio] World Dai Star [02][Ma10p_1080p][x265_flac].mkv",
+        );
         assert_eq!(group_key(&a.title), group_key(&b.title));
-        assert!(a.title.to_lowercase().contains("world dai star"), "got: {:?}", a.title);
+        assert!(
+            a.title.to_lowercase().contains("world dai star"),
+            "got: {:?}",
+            a.title
+        );
     }
 
     #[test]
     fn chinese_bracket_title() {
-        let p = parse_filename("[DHR&MakariHoshiyume][Akanesasu Shoujo][01][BDRip][BIG5][720P].mp4");
-        assert!(p.title.to_lowercase().contains("akanesasu"), "got: {:?}", p.title);
+        let p =
+            parse_filename("[DHR&MakariHoshiyume][Akanesasu Shoujo][01][BDRip][BIG5][720P].mp4");
+        assert!(
+            p.title.to_lowercase().contains("akanesasu"),
+            "got: {:?}",
+            p.title
+        );
         assert_eq!(p.episode_no, Some(1));
     }
 
@@ -548,9 +620,8 @@ mod tests {
     #[test]
     fn flattened_matches_bracketed() {
         // The flattened form must group with the properly-bracketed form.
-        let flat = parse_filename(
-            "Nekomoe_kissaten VCB_Studio_World_Dai_Star_02Ma10p_1080px265_fla.mkv",
-        );
+        let flat =
+            parse_filename("Nekomoe_kissaten VCB_Studio_World_Dai_Star_02Ma10p_1080px265_fla.mkv");
         let bracketed = parse_filename(
             "[Nekomoe kissaten&VCB-Studio] World Dai Star [02][Ma10p_1080p][x265_flac].mkv",
         );
@@ -561,9 +632,8 @@ mod tests {
     fn copy_marker_not_episode() {
         // The " (1)" copy markers must NOT all become episode 1; the real
         // episode is glued in "07Ma10p" / "10Ma10p".
-        let e7 = parse_filename(
-            "VCB_Studio_Hina_Logi_From_Luck_&_Logic_07Ma10p_1080px265_flac (1).mkv",
-        );
+        let e7 =
+            parse_filename("VCB_Studio_Hina_Logi_From_Luck_&_Logic_07Ma10p_1080px265_flac (1).mkv");
         let e10 = parse_filename(
             "VCB_Studio_Hina_Logi_From_Luck_&_Logic_10Ma10p_1080px265_flac_aac (1).mkv",
         );
@@ -582,9 +652,8 @@ mod tests {
     #[test]
     fn glued_group_no_separator() {
         // Group name glued directly onto the title with no separator.
-        let p = parse_filename(
-            "Nekomoe_kissatenTHE_IDOLM@STER_CINDERELLA_GIRLS_U149_09_1080pJPSC.mkv",
-        );
+        let p =
+            parse_filename("Nekomoe_kissatenTHE_IDOLM@STER_CINDERELLA_GIRLS_U149_09_1080pJPSC.mkv");
         let key = group_key(&p.title);
         assert!(
             key.contains("idolm") && key.contains("cinderella"),

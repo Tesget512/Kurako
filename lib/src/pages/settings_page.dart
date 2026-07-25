@@ -37,8 +37,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('删除手动匹配配置'),
-        content: const Text('将删除所有"单独匹配"和"移出此番剧"的记录，包括写入番剧文件夹内的匹配文件'
-            '和软件自身的配置。已有的分组不会立即改变，但下次扫描与匹配后会恢复为自动分组。\n\n确定继续吗？'),
+        content: const Text(
+          '将删除所有"单独匹配"和"移出此番剧"的记录，包括写入番剧文件夹内的匹配文件'
+          '和软件自身的配置。已有的分组不会立即改变，但下次扫描与匹配后会恢复为自动分组。\n\n确定继续吗？',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -56,15 +58,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       final n = await rust.clearMatchConfig();
       ref.invalidate(animeListProvider);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已删除 $n 个匹配配置文件，重新扫描后生效')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('已删除 $n 个匹配配置文件，重新扫描后生效')));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
       }
     }
   }
@@ -94,9 +96,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 ...folders.map(
                   (f) => ListTile(
-                    leading: Icon(f.sourceType == 'smb'
-                        ? Icons.lan_outlined
-                        : Icons.folder),
+                    leading: Icon(
+                      f.sourceType == 'smb' ? Icons.lan_outlined : Icons.folder,
+                    ),
                     title: Text(f.path),
                     subtitle: f.sourceType == 'smb'
                         ? const Text('SMB 网络共享')
@@ -167,6 +169,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: Text(
               Platform.isAndroid
                   ? '关闭则用内置播放器。开启后点播放会调用系统的外部播放器（如 MX Player / VLC）'
+                  : Platform.isIOS
+                  ? '开启后通过系统“打开方式”交给 VLC、Infuse 等应用；SMB 串流需先下载到本地'
                   : '关闭则使用内置播放器（media_kit，支持硬解与字幕）',
             ),
             value: settings.useExternalPlayer,
@@ -177,14 +181,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           // program explicitly (required for SMB streams — http URLs have no
           // file association), and re-pick the Windows default program if a
           // wrong one got associated.
-          if (settings.useExternalPlayer && !Platform.isAndroid) ...[
+          if (settings.useExternalPlayer &&
+              !Platform.isAndroid &&
+              !Platform.isIOS) ...[
             ListTile(
               contentPadding: const EdgeInsets.only(left: 16),
               leading: const Icon(Icons.smart_display_outlined),
               title: const Text('选择播放器程序'),
-              subtitle: Text(settings.externalPlayerPath.isEmpty
-                  ? '未选择 — 本地与 SMB 视频均用系统默认播放器打开；也可在此指定固定程序'
-                  : settings.externalPlayerPath),
+              subtitle: Text(
+                settings.externalPlayerPath.isEmpty
+                    ? '未选择 — 本地与 SMB 视频均用系统默认播放器打开；也可在此指定固定程序'
+                    : settings.externalPlayerPath,
+              ),
               trailing: Wrap(
                 children: [
                   if (settings.externalPlayerPath.isNotEmpty)
@@ -240,9 +248,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const BlacklistPage()),
-              );
+              Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const BlacklistPage()));
             },
           ),
           ListTile(
@@ -252,17 +260,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             subtitle: const Text('查看并删除已下载到本地的 SMB 视频'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const DownloadsPage()),
-              );
+              Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const DownloadsPage()));
             },
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.link_off_outlined),
             title: const Text('删除手动匹配配置'),
-            subtitle: const Text('清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
-                '下次扫描将恢复为自动分组'),
+            subtitle: const Text(
+              '清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
+              '下次扫描将恢复为自动分组',
+            ),
             onTap: () => _clearMatchConfig(context),
           ),
           _buildDownloadDirRow(context),
@@ -278,19 +288,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.favorite_outline),
             title: const Text('致谢'),
-            subtitle: const Text('详情页设计参考 Kazumi（GPL-3.0）；'
-                '元数据来自 Bangumi 番组计划；镜像由 bangumi-proxy 提供。'),
+            subtitle: const Text(
+              '详情页设计参考 Kazumi（GPL-3.0）；'
+              '元数据来自 Bangumi 番组计划；镜像由 bangumi-proxy 提供。',
+            ),
             onTap: () => showAboutDialog(
               context: context,
               applicationName: 'KURAKO',
               applicationVersion: '1.0.0',
               children: const [
-                Text('感谢以下开源项目与服务：\n\n'
-                    '• Kazumi — 详情页布局灵感\n'
-                    '• Bangumi 番组计划 — 番剧元数据与评分\n'
-                    '• bangumi-proxy (Yuri-NagaSaki) — 大陆可达镜像\n'
-                    '• media_kit / mpv — 视频播放\n'
-                    '• flutter_rust_bridge — Dart ↔ Rust 桥接'),
+                Text(
+                  '感谢以下开源项目与服务：\n\n'
+                  '• Kazumi — 详情页布局灵感\n'
+                  '• Bangumi 番组计划 — 番剧元数据与评分\n'
+                  '• bangumi-proxy (Yuri-NagaSaki) — 大陆可达镜像\n'
+                  '• media_kit / mpv — 视频播放\n'
+                  '• flutter_rust_bridge — Dart ↔ Rust 桥接',
+                ),
               ],
             ),
           ),
@@ -314,8 +328,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           Text(
             '自动优先硬解，异常花屏/绿屏时可改用软件解码。重新进入播放器后生效',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           const SizedBox(height: 8),
           SegmentedButton<String>(
@@ -347,8 +361,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           Text(
             '播放器快进按钮跳转的秒数（双击画面固定 10 秒，不受影响）',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
           ),
           Slider(
             value: secs.toDouble(),
@@ -364,8 +378,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     );
   }
 
-  /// Where SMB downloads are saved. Empty = app data dir / downloads.
-  Widget _buildDownloadDirRow(BuildContext context) {    final dir = ref.watch(downloadDirProvider);
+  /// Where SMB downloads are saved. iOS defaults to the Files-visible KURAKO
+  /// Documents folder; other platforms may choose a custom directory.
+  Widget _buildDownloadDirRow(BuildContext context) {
+    final dir = ref.watch(downloadDirProvider);
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: const Icon(Icons.folder_outlined),
@@ -377,19 +393,19 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             IconButton(
               tooltip: '恢复默认位置',
               icon: const Icon(Icons.restart_alt),
-              onPressed: () =>
-                  ref.read(downloadDirProvider.notifier).set(''),
+              onPressed: () => ref.read(downloadDirProvider.notifier).set(''),
             ),
-          IconButton(
-            tooltip: '选择文件夹',
-            icon: const Icon(Icons.folder_open),
-            onPressed: () async {
-              final picked = await FilePicker.platform.getDirectoryPath();
-              if (picked != null) {
-                ref.read(downloadDirProvider.notifier).set(picked);
-              }
-            },
-          ),
+          if (!Platform.isIOS)
+            IconButton(
+              tooltip: '选择文件夹',
+              icon: const Icon(Icons.folder_open),
+              onPressed: () async {
+                final picked = await FilePicker.platform.getDirectoryPath();
+                if (picked != null) {
+                  ref.read(downloadDirProvider.notifier).set(picked);
+                }
+              },
+            ),
         ],
       ),
     );
@@ -437,8 +453,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           title: const Text('使用系统默认字体'),
           subtitle: const Text('关闭则使用软件内置的霞鹜文楷屏幕字体'),
           value: ref.watch(useSystemFontProvider),
-          onChanged: (v) =>
-              ref.read(useSystemFontProvider.notifier).set(v),
+          onChanged: (v) => ref.read(useSystemFontProvider.notifier).set(v),
         ),
       ],
     );
@@ -459,8 +474,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             if (scale != 100)
               TextButton(
-                onPressed: () =>
-                    ref.read(uiScaleProvider.notifier).set(100),
+                onPressed: () => ref.read(uiScaleProvider.notifier).set(100),
                 child: const Text('重置'),
               ),
           ],
@@ -471,8 +485,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           max: 150,
           divisions: 15, // steps of 5
           label: '$scale%',
-          onChanged: (v) =>
-              ref.read(uiScaleProvider.notifier).set(v.round()),
+          onChanged: (v) => ref.read(uiScaleProvider.notifier).set(v.round()),
         ),
       ],
     );
@@ -483,8 +496,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // Contrasting check mark for readability on any swatch.
     final onColor =
         ThemeData.estimateBrightnessForColor(choice.color) == Brightness.dark
-            ? Colors.white
-            : Colors.black;
+        ? Colors.white
+        : Colors.black;
     return Tooltip(
       message: choice.label,
       child: InkResponse(
@@ -498,7 +511,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             shape: BoxShape.circle,
             border: selected
                 ? Border.all(
-                    color: Theme.of(context).colorScheme.onSurface, width: 3)
+                    color: Theme.of(context).colorScheme.onSurface,
+                    width: 3,
+                  )
                 : Border.all(color: Colors.black12, width: 1),
           ),
           child: selected ? Icon(Icons.check, color: onColor, size: 22) : null,
@@ -560,8 +575,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           title: const Text('使用 Bangumi 镜像'),
-          subtitle: const Text('通过大陆可达的镜像访问 Bangumi API 与封面图；'
-              '网络直连正常时可关闭。登录始终走官方域名。'),
+          subtitle: const Text(
+            '通过大陆可达的镜像访问 Bangumi API 与封面图；'
+            '网络直连正常时可关闭。登录始终走官方域名。',
+          ),
           value: ref.watch(bangumiMirrorProvider),
           onChanged: (v) {
             ref.read(bangumiMirrorProvider.notifier).set(v);
@@ -585,7 +602,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() => _loggingIn = true);
     try {
       final result = await BangumiOAuth.login();
-      await ref.read(settingsProvider.notifier).setOAuthSession(
+      await ref
+          .read(settingsProvider.notifier)
+          .setOAuthSession(
             accessToken: result.accessToken,
             refreshToken: result.refreshToken,
             expiresAt: result.expiresAt,

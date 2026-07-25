@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -7,6 +8,7 @@ import 'package:saf_util/saf_util_platform_interface.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import 'external_player.dart' show smbUncPath, ensureUncAuth;
+import 'ios_platform.dart';
 
 /// Abstracts where the library's video files live and how to reach them, so the
 /// scan + playback code is identical across desktop (POSIX paths) and Android
@@ -37,10 +39,10 @@ abstract class MediaSource {
 
   /// Pick the source appropriate for this episode's stored source_type.
   static MediaSource forEpisode(Episode e) => switch (e.sourceType) {
-        'saf' => SafMediaSource(),
-        'smb' => SmbMediaSource(),
-        _ => LocalMediaSource(),
-      };
+    'saf' => SafMediaSource(),
+    'smb' => SmbMediaSource(),
+    _ => LocalMediaSource(),
+  };
 
   /// Pick the default source for adding a new folder on this platform.
   static MediaSource forNewFolder() =>
@@ -53,9 +55,7 @@ class PlayableHandle {
   final String uri;
   final int? _fd;
   final bool _smb;
-  PlayableHandle(this.uri, {int? fd, bool smb = false})
-      : _fd = fd,
-        _smb = smb;
+  PlayableHandle(this.uri, {int? fd, bool smb = false}) : _fd = fd, _smb = smb;
 
   Future<void> release() async {
     if (_fd != null) {
@@ -78,7 +78,9 @@ class LocalMediaSource extends MediaSource {
   String get sourceType => 'local';
 
   @override
-  Future<String?> pickFolder() => FilePicker.platform.getDirectoryPath();
+  Future<String?> pickFolder() => Platform.isIOS
+      ? IosPlatform.pickLibraryFolder()
+      : FilePicker.platform.getDirectoryPath();
 
   @override
   Future<List<ScannedFile>> enumerate(String folderUri) async => const [];
@@ -126,8 +128,22 @@ class SafMediaSource extends MediaSource {
   final _saf = SafUtil();
 
   static const _videoExts = {
-    'mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv', 'webm', 'm4v', 'ts', 'm2ts',
-    'rmvb', 'rm', 'mpg', 'mpeg', '3gp', 'ogv',
+    'mkv',
+    'mp4',
+    'avi',
+    'mov',
+    'wmv',
+    'flv',
+    'webm',
+    'm4v',
+    'ts',
+    'm2ts',
+    'rmvb',
+    'rm',
+    'mpg',
+    'mpeg',
+    '3gp',
+    'ogv',
   };
 
   @override
@@ -162,15 +178,18 @@ class SafMediaSource extends MediaSource {
     }
     for (final c in children) {
       if (c.isDir) {
-        final childRel =
-            relativeParent.isEmpty ? c.name : '$relativeParent/${c.name}';
+        final childRel = relativeParent.isEmpty
+            ? c.name
+            : '$relativeParent/${c.name}';
         await _walk(c.uri, childRel, out);
       } else if (_isVideo(c.name)) {
-        out.add(ScannedFile(
-          uri: c.uri,
-          fileName: c.name,
-          relativeParent: relativeParent,
-        ));
+        out.add(
+          ScannedFile(
+            uri: c.uri,
+            fileName: c.name,
+            relativeParent: relativeParent,
+          ),
+        );
       }
     }
   }
@@ -235,6 +254,12 @@ class SmbMediaSource extends MediaSource {
     // Other platforms (Android/macOS/Linux) have no UNC: register with the local
     // proxy; libmpv plays the http:// URL.
     final url = await rust.smbPlayableUrl(smbUri: episode.filePath);
+    if (Platform.isIOS) {
+      // Validate the exact loopback route through iOS' own network stack before
+      // giving it to libmpv. This turns the old endless spinner into a concrete
+      // SMB/proxy error and also warms the authenticated SMB session.
+      await _verifyIosLoopbackStream(url);
+    }
     return PlayableHandle(url, smb: true);
   }
 
@@ -273,5 +298,34 @@ class SmbMediaSource extends MediaSource {
     final parts = rest.split('/');
     // parts[0]=host:port, parts[1]=share, rest=sub-path
     return parts.length > 2 ? parts.sublist(2).join('/') : '';
+  }
+}
+
+/// Fetch one byte through the Rust loopback proxy using URLSession's Dart
+/// equivalent. media_kit otherwise only reports a permanent "loading" state
+/// when iOS cannot connect to 127.0.0.1 or the SMB server rejects the request.
+Future<void> _verifyIosLoopbackStream(String url) async {
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
+  try {
+    final request = await client.getUrl(Uri.parse(url));
+    request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-0');
+    final response = await request.close().timeout(const Duration(seconds: 15));
+    if (response.statusCode != HttpStatus.ok &&
+        response.statusCode != HttpStatus.partialContent) {
+      throw HttpException('HTTP ${response.statusCode}', uri: Uri.parse(url));
+    }
+    final firstChunk = await response
+        .take(1)
+        .toList()
+        .timeout(const Duration(seconds: 15));
+    if (firstChunk.isEmpty || firstChunk.first.isEmpty) {
+      throw const HttpException('SMB 串流未返回视频数据');
+    }
+  } on SocketException catch (e) {
+    throw StateError('无法连接 iOS 本机 SMB 中转：${e.message}');
+  } on TimeoutException {
+    throw StateError('SMB 中转连接超时，请确认 NAS 与 iPhone 在同一局域网');
+  } finally {
+    client.close(force: true);
   }
 }

@@ -6,6 +6,7 @@ import 'package:android_intent_plus/flag.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/providers.dart';
+import 'ios_platform.dart';
 
 /// The locator to hand an external player for [ep].
 ///
@@ -14,7 +15,8 @@ import '../state/providers.dart';
 ///   let Windows' own SMB client serve it — the default video player opens it
 ///   exactly like a local file (no loopback proxy, no forced program choice).
 ///   This is why external SMB playback now behaves identically to local.
-/// - **Android SMB (not downloaded):** hand a real `smb://user:pass@host/path`
+/// - **Android/iOS SMB (not downloaded):** hand a real
+///   `smb://user:pass@host/path`
 ///   URI (see [_smbUrlWithCreds]) so the external player's *own* bundled SMB
 ///   client (VLC/MX Player both ship one, same as our Rust smb2 client) connects
 ///   directly — mirrors how VLC's own network browser opens SMB shares. This is
@@ -34,7 +36,7 @@ Future<String> externalPlayerLocator(Episode ep) async {
   if (Platform.isWindows) {
     return smbUncPath(ep.filePath);
   }
-  if (Platform.isAndroid) {
+  if (Platform.isAndroid || Platform.isIOS) {
     return _smbUrlWithCreds(ep.filePath);
   }
   return rust.smbPlayableUrl(smbUri: ep.filePath);
@@ -107,6 +109,23 @@ Future<void> ensureUncAuth(String uncPath) async {
 ///   the user's chosen player app opens it (with temporary read permission).
 ///   The desktop [playerPath] setting is ignored — Android picks the app itself.
 Future<void> launchExternalPlayer(String playerPath, String locator) async {
+  if (Platform.isIOS) {
+    if (locator.startsWith('smb://')) {
+      // iOS has no generic ACTION_VIEW chooser. Ask the OS to dispatch the
+      // native SMB URI; Files, VLC and other installed players may register a
+      // compatible handler and can then stream independently of KURAKO.
+      if (!await IosPlatform.openExternalUrl(locator)) {
+        throw Exception(
+          '系统没有可处理 SMB 地址的播放器。请在文件 App 或 VLC 中确认该 SMB 地址可打开，或先下载到本地',
+        );
+      }
+      return;
+    }
+    if (!await IosPlatform.shareVideo(locator)) {
+      throw Exception('无法打开系统分享面板，请确认该视频仍可访问');
+    }
+    return;
+  }
   if (Platform.isAndroid) {
     await _launchAndroidIntent(locator);
     return;
@@ -136,11 +155,10 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
     if (locator.startsWith('http')) {
       throw Exception('未配置外置播放器。请在 设置 → 播放器 中选择播放器程序（SMB 流播放需要）');
     }
-    await Process.start(
-      'rundll32',
-      ['url.dll,FileProtocolHandler', locator],
-      mode: ProcessStartMode.detached,
-    );
+    await Process.start('rundll32', [
+      'url.dll,FileProtocolHandler',
+      locator,
+    ], mode: ProcessStartMode.detached);
   } else if (Platform.isMacOS) {
     await Process.start('open', [locator], mode: ProcessStartMode.detached);
   } else {
@@ -158,11 +176,10 @@ Future<void> _openWithChooser() async {
   try {
     await sample.writeAsBytes(const [0]);
   } catch (_) {}
-  await Process.start(
-    'rundll32',
-    ['shell32.dll,OpenAs_RunDLL', sample.path],
-    mode: ProcessStartMode.detached,
-  );
+  await Process.start('rundll32', [
+    'shell32.dll,OpenAs_RunDLL',
+    sample.path,
+  ], mode: ProcessStartMode.detached);
 }
 
 /// Open the Windows "Open with" chooser so the user can (re)pick / set the
@@ -232,8 +249,10 @@ Future<void> revealInFileManager(String path) async {
     // "/select,<path>" blob in a single pair of quotes whenever the path had a
     // space — which explorer.exe doesn't recognize as the /select switch at
     // all, so it silently fell back to opening a plain Explorer window.
-    await Process.start('explorer.exe', ['/select,', path],
-        mode: ProcessStartMode.detached);
+    await Process.start('explorer.exe', [
+      '/select,',
+      path,
+    ], mode: ProcessStartMode.detached);
   } else if (Platform.isMacOS) {
     await Process.start('open', ['-R', path], mode: ProcessStartMode.detached);
   } else if (Platform.isLinux) {

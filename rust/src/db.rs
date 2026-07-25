@@ -89,7 +89,9 @@ pub fn init(db_path: &str) -> Result<()> {
 }
 
 fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let m = DB.get().ok_or_else(|| anyhow::anyhow!("db not initialized"))?;
+    let m = DB
+        .get()
+        .ok_or_else(|| anyhow::anyhow!("db not initialized"))?;
     let conn = m.lock().unwrap();
     f(&conn)
 }
@@ -247,9 +249,7 @@ pub fn list_anime() -> Result<Vec<Anime>> {
 pub fn get_anime(id: i64) -> Result<Option<Anime>> {
     with_conn(|c| {
         let sql = format!("{ANIME_SELECT} WHERE a.id = ?1");
-        let row = c
-            .query_row(&sql, params![id], map_anime)
-            .optional()?;
+        let row = c.query_row(&sql, params![id], map_anime).optional()?;
         Ok(row)
     })
 }
@@ -339,7 +339,8 @@ pub fn bind_bangumi(
 /// Bound anime ids and their subject ids, for collection-status sync.
 pub fn bound_anime() -> Result<Vec<(i64, i64)>> {
     with_conn(|c| {
-        let mut stmt = c.prepare("SELECT id, bangumi_id FROM anime WHERE bangumi_id IS NOT NULL")?;
+        let mut stmt =
+            c.prepare("SELECT id, bangumi_id FROM anime WHERE bangumi_id IS NOT NULL")?;
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -550,8 +551,7 @@ pub fn prune_missing(
         return Ok(0);
     }
     with_conn(|c| {
-        let mut stmt =
-            c.prepare("SELECT file_path FROM episodes WHERE source_type = ?1")?;
+        let mut stmt = c.prepare("SELECT file_path FROM episodes WHERE source_type = ?1")?;
         let paths: Vec<String> = stmt
             .query_map(params![source_type], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -738,9 +738,8 @@ pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>> {
                     .or(title_raw);
                 // Fall back to the URI's last segment when the episode is gone.
                 let file_name: Option<String> = r.get(7)?;
-                let file_name = file_name.unwrap_or_else(|| {
-                    smb_uri.rsplit('/').next().unwrap_or(&smb_uri).to_string()
-                });
+                let file_name = file_name
+                    .unwrap_or_else(|| smb_uri.rsplit('/').next().unwrap_or(&smb_uri).to_string());
                 Ok(crate::models::DownloadDetail {
                     id: r.get(0)?,
                     smb_uri,
