@@ -372,6 +372,39 @@ async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
     Ok(s)
 }
 
+/// Open a remote file through the reusable session.  NASes commonly close an
+/// otherwise-idle SMB session without notifying the client; retrying once with
+/// a newly authenticated session makes that recoverable instead of surfacing
+/// a spurious HTTP 500 to the iOS loopback player.
+async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReader> {
+    let mut last_error = None;
+    for attempt in 0..2 {
+        let sess = match session(c).await {
+            Ok(s) => s,
+            Err(e) => {
+                last_error = Some(e);
+                invalidate_session();
+                continue;
+            }
+        };
+        match tokio::time::timeout(
+            SETUP_TIMEOUT,
+            sess.client.open_file_reader(&sess.tree, path),
+        )
+        .await
+        {
+            Ok(Ok(reader)) => return Ok(reader),
+            Ok(Err(e)) => last_error = Some(e.into()),
+            Err(_) => last_error = Some(anyhow::anyhow!("smb open file timed out")),
+        }
+        invalidate_session();
+        if attempt == 0 {
+            continue;
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("smb open file failed")))
+}
+
 /// Drop the cached session. Called on a read/open failure (the connection is
 /// presumed dead — NAS idle-closed it, network blip, credentials changed) so
 /// the *next* request reconnects instead of repeatedly failing against a dead
@@ -529,9 +562,7 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     };
 
     let Some(c) = creds() else {
-        let _ = stream
-            .write_all(b"HTTP/1.1 500 No SMB\r\nContent-Length: 0\r\n\r\n")
-            .await;
+        write_http_error(&mut stream, "500 No SMB", "SMB credentials are unavailable").await;
         return Ok(());
     };
 
@@ -546,37 +577,23 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     // the session (it's presumed dead) and answer with a real HTTP 500, so
     // libmpv sees a clean failure — and the *next* request reconnects — instead
     // of spinning forever or repeatedly failing against a stale handle.
-    let sess = match session(&c).await {
-        Ok(s) => s,
-        Err(_) => {
-            invalidate_session();
-            let _ = stream
-                .write_all(b"HTTP/1.1 500 SMB Connect Failed\r\nContent-Length: 0\r\n\r\n")
-                .await;
-            return Ok(());
-        }
-    };
-    let reader = match tokio::time::timeout(
-        SETUP_TIMEOUT,
-        sess.client.open_file_reader(&sess.tree, &path),
-    )
-    .await
-    {
-        Ok(Ok(r)) => r,
-        _ => {
-            invalidate_session();
-            let _ = stream
-                .write_all(b"HTTP/1.1 500 SMB Open Failed\r\nContent-Length: 0\r\n\r\n")
-                .await;
+    let reader = match open_session_reader(&c, &path).await {
+        Ok(r) => r,
+        Err(e) => {
+            write_http_error(&mut stream, "500 SMB Open Failed", &format!("{e:#}")).await;
             return Ok(());
         }
     };
     let total = reader.size();
 
     if total == 0 {
-        let _ = stream
-            .write_all(b"HTTP/1.1 404 Empty File\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .await;
+        let _ = reader.close().await;
+        write_http_error(
+            &mut stream,
+            "404 Empty File",
+            "SMB reported a zero-byte video file",
+        )
+        .await;
         return Ok(());
     }
 
@@ -609,6 +626,7 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     header.push_str("\r\n");
     stream.write_all(header.as_bytes()).await?;
     if method.eq_ignore_ascii_case("HEAD") {
+        let _ = reader.close().await;
         return Ok(());
     }
 
@@ -650,10 +668,24 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         BYTES_SERVED.fetch_add(data.len() as u64, Ordering::Relaxed);
         off += data.len() as u64;
     }
-    // No disconnect here: `sess` is the shared persistent session (see
-    // [SESSION]), reused by every other in-flight and future stream — only a
-    // detected failure (above) invalidates it, a normal finish must not.
+    // FileReader owns a remote SMB handle. Dropping it without `close` leaks
+    // that handle on the server until the whole session is torn down; a few
+    // iOS HEAD/range probes were therefore enough to exhaust some SMB servers.
+    let _ = reader.close().await;
+    // No session disconnect here: it is reused by future streams. Only an
+    // actual read/open failure invalidates it.
     Ok(())
+}
+
+/// Send a small human-readable error body so Dart can report why iOS received
+/// HTTP 500 instead of reducing every SMB failure to an opaque status code.
+async fn write_http_error(stream: &mut TcpStream, status: &str, detail: &str) {
+    let body = detail.replace(['\r', '\n'], " ");
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
 }
 
 /// A conservative content type lets iOS' URL loader identify MP4/MOV streams
@@ -722,6 +754,15 @@ pub async fn download(
     let reader = client.open_file_reader(&tree, &path).await?;
     let total = reader.size();
 
+    // A zero-length video is never a valid completed download. Previously the
+    // loop below was skipped and a zero-byte file was recorded as successful,
+    // which is exactly the "instant completion but no file" symptom on iOS.
+    if total == 0 {
+        let _ = reader.close().await;
+        let _ = client.disconnect_share(&tree).await;
+        anyhow::bail!("SMB reported this video as 0 bytes; download was not saved");
+    }
+
     tokio::fs::create_dir_all(dest_dir)
         .await
         .context("create download dir")?;
@@ -739,25 +780,32 @@ pub async fn download(
 
     const CHUNK: u64 = 1024 * 1024;
     let mut off: u64 = 0;
-    while off < total {
-        if is_cancelled(smb_uri) {
-            drop(out);
-            let _ = tokio::fs::remove_file(&part_path).await;
-            let _ = client.disconnect_share(&tree).await;
-            anyhow::bail!("下载已取消");
+    let transfer_result: Result<()> = async {
+        while off < total {
+            if is_cancelled(smb_uri) {
+                anyhow::bail!("下载已取消");
+            }
+            let want = CHUNK.min(total - off);
+            let data = reader.read_at(off, want).await.context("smb read")?;
+            if data.is_empty() {
+                break;
+            }
+            out.write_all(&data).await.context("write local file")?;
+            off += data.len() as u64;
+            progress(off, total);
         }
-        let want = CHUNK.min(total - off);
-        let data = reader.read_at(off, want).await.context("smb read")?;
-        if data.is_empty() {
-            break;
-        }
-        out.write_all(&data).await.context("write local file")?;
-        off += data.len() as u64;
-        progress(off, total);
+        out.flush().await.context("flush local file")?;
+        Ok(())
     }
-    out.flush().await?;
+    .await;
     drop(out);
+    let _ = reader.close().await;
     let _ = client.disconnect_share(&tree).await;
+
+    if let Err(e) = transfer_result {
+        let _ = tokio::fs::remove_file(&part_path).await;
+        return Err(e);
+    }
 
     if off < total {
         let _ = tokio::fs::remove_file(&part_path).await;

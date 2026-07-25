@@ -52,7 +52,16 @@ Future<String> _smbUrlWithCreds(String smbUri) async {
   final slash = rest.indexOf('/');
   if (slash < 0) return smbUri;
   var host = rest.substring(0, slash);
-  final pathPart = rest.substring(slash); // leading '/'
+  // Episode paths originate from SMB directory entries and are deliberately
+  // kept as human-readable strings in the database.  `URL(string:)` on iOS
+  // rejects their spaces, CJK characters and brackets, though VLC/Infuse do
+  // register the smb scheme itself. Encode each component only at the handoff
+  // boundary; preserve `/` as a path separator.
+  final pathPart = rest
+      .substring(slash)
+      .split('/')
+      .map(Uri.encodeComponent)
+      .join('/');
   if (host.contains(':445')) host = host.replaceFirst(':445', '');
   if (creds.user.isEmpty) return 'smb://$host$pathPart';
   final u = Uri.encodeComponent(creds.user);

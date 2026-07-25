@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -312,7 +313,11 @@ Future<void> _verifyIosLoopbackStream(String url) async {
     final response = await request.close().timeout(const Duration(seconds: 15));
     if (response.statusCode != HttpStatus.ok &&
         response.statusCode != HttpStatus.partialContent) {
-      throw HttpException('HTTP ${response.statusCode}', uri: Uri.parse(url));
+      final detail = await response.transform(utf8.decoder).join();
+      throw HttpException(
+        'HTTP ${response.statusCode}${detail.isEmpty ? '' : ': $detail'}',
+        uri: Uri.parse(url),
+      );
     }
     final firstChunk = await response
         .take(1)
