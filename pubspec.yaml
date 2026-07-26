@@ -66,6 +66,12 @@ dependencies:
   # Open the system browser (OAuth authorize URL) — cross-platform.
   url_launcher: ^6.3.0
 
+  # Native OAuth authentication session.  On iOS/iPadOS this uses
+  # ASWebAuthenticationSession, which returns to KURAKO immediately after the
+  # provider redirects to our custom callback instead of leaving a suspended
+  # loopback HTTP server waiting in the background.
+  flutter_web_auth_2: ^5.0.0
+
   # App data directory
   path_provider: ^2.1.5
   path: ^1.9.0

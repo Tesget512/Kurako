@@ -1,114 +1,62 @@
 import 'dart:async';
-import 'dart:io';
 
-import 'package:android_intent_plus/android_intent.dart';
-import 'package:url_launcher/url_launcher_string.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/api.dart' show OAuthResult;
 
-/// Fixed loopback callback that must match the "回调地址" registered on the
-/// Bangumi developer console (http://localhost:6420/callback). Kept in sync
-/// with the Rust-side constant.
-const String kOAuthRedirectUri = 'http://localhost:6420/callback';
-const int _kCallbackPort = 6420;
-
-/// Drives the Bangumi OAuth2 authorization-code flow for a desktop app:
-/// 1. spin up a one-shot loopback HTTP server on :6420,
-/// 2. open the system browser at the authorize URL,
-/// 3. capture the `?code=` Bangumi redirects back with,
-/// 4. exchange it (in Rust) for access + refresh tokens.
+/// Callback address registered in the Bangumi developer console. Kept in sync
+/// with Rust's `OAUTH_REDIRECT_URI`.
 ///
-/// The OAuth application credentials are baked into the Rust core, so the user
-/// only needs to click "login" — no App ID/Secret entry required.
+/// This must remain the application's only configured Bangumi callback URL.
+/// `FlutterWebAuth2` uses the OS authentication session to intercept it, so
+/// Safari/Chrome closes and the app resumes as soon as authorization succeeds.
+const String kOAuthRedirectUri = 'kurako://oauth/callback';
+const String _kCallbackScheme = 'kurako';
+
+/// Drives the Bangumi OAuth2 authorization-code flow:
+/// 1. open the provider in the operating system's authentication session,
+/// 2. capture Bangumi's `kurako://oauth/callback?code=...` redirect,
+/// 3. exchange the one-time code (valid for 60 seconds) for tokens in Rust.
+///
+/// Unlike the old localhost server, this works while iOS/iPadOS has the Flutter
+/// app in the background.  `ASWebAuthenticationSession` shares the user's
+/// existing Bangumi login and automatically dismisses itself on the callback.
 class BangumiOAuth {
   /// Runs the full flow and returns the tokens, or throws on error/timeout.
   static Future<OAuthResult> login({
     Duration timeout = const Duration(minutes: 5),
   }) async {
-    HttpServer server;
+    final authUrl = await rust.oauthAuthorizeUrl();
+    String callbackUrl;
     try {
-      server = await HttpServer.bind(
-        InternetAddress.loopbackIPv4,
-        _kCallbackPort,
-      );
-    } on SocketException catch (e) {
-      throw OAuthException('无法监听回调端口 $_kCallbackPort：${e.message}');
-    }
-
-    final codeCompleter = Completer<String>();
-    late final StreamSubscription sub;
-    sub = server.listen((HttpRequest req) async {
-      final code = req.uri.queryParameters['code'];
-      final error = req.uri.queryParameters['error'];
-      req.response.headers.contentType = ContentType.html;
-      if (code != null && code.isNotEmpty) {
-        req.response.write(_html('授权成功', '已获取授权码，可以关闭此页面返回应用。'));
-        if (!codeCompleter.isCompleted) codeCompleter.complete(code);
-      } else {
-        req.response.write(_html('授权失败', error ?? '未收到授权码，请重试。'));
-        if (!codeCompleter.isCompleted) {
-          codeCompleter.completeError(
-            OAuthException('授权被拒绝或失败：${error ?? '未知错误'}'),
+      callbackUrl =
+          await FlutterWebAuth2.authenticate(
+            url: authUrl,
+            callbackUrlScheme: _kCallbackScheme,
+          ).timeout(
+            timeout,
+            onTimeout: () => throw const OAuthException('授权超时，请重试'),
           );
-        }
-      }
-      await req.response.close();
-    });
-
-    try {
-      final authUrl = await rust.oauthAuthorizeUrl();
-      await _openBrowser(authUrl);
-
-      final code = await codeCompleter.future.timeout(
-        timeout,
-        onTimeout: () => throw const OAuthException('授权超时，请重试'),
-      );
-
-      return await rust.oauthExchangeCode(code: code);
-    } finally {
-      await sub.cancel();
-      await server.close(force: true);
+    } on PlatformException catch (e) {
+      throw OAuthException('无法完成 Bangumi 授权：${e.message ?? e.code}');
     }
-  }
 
-  /// Open [url] in the system default browser.
-  static Future<void> _openBrowser(String url) async {
-    if (Platform.isAndroid) {
-      // Use an ACTION_VIEW intent with the raw URL as data. This is the same
-      // reliable path the external player uses; it avoids url_launcher's
-      // Uri round-trip, which could re-encode the already-percent-encoded
-      // redirect_uri and make Bangumi report "No redirect URI was supplied".
-      final intent = AndroidIntent(action: 'action_view', data: url);
-      await intent.launch();
-    } else if (Platform.isIOS) {
-      // Keep the nested redirect_uri exactly as Rust encoded it. Parsing it as
-      // a Dart Uri can alter its percent escapes before UIKit receives the
-      // string, making Bangumi reject the authorization request.
-      final launched = await launchUrlString(
-        url,
-        mode: LaunchMode.externalApplication,
-      );
-      if (!launched) {
-        throw const OAuthException('无法打开系统浏览器进行 Bangumi 授权');
-      }
-    } else if (Platform.isWindows) {
-      // Do NOT route through `cmd /c start` — cmd treats `&` as a command
-      // separator, so a query string like `?a=1&b=2` gets truncated at the
-      // first `&`. rundll32 passes the URL as a single literal argument.
-      await Process.start('rundll32', ['url.dll,FileProtocolHandler', url]);
-    } else if (Platform.isMacOS) {
-      await Process.start('open', [url]);
-    } else {
-      await Process.start('xdg-open', [url]);
+    final callback = Uri.tryParse(callbackUrl);
+    if (callback == null || callback.scheme != _kCallbackScheme) {
+      throw const OAuthException('Bangumi 返回了无效的授权回调，请重试。');
     }
+    final error = callback.queryParameters['error'];
+    if (error != null && error.isNotEmpty) {
+      throw OAuthException('授权被拒绝或失败：$error');
+    }
+    final code = callback.queryParameters['code'];
+    if (code == null || code.isEmpty) {
+      throw const OAuthException('授权回调未包含授权码，请重试。');
+    }
+    return rust.oauthExchangeCode(code: code);
   }
-
-  static String _html(String title, String body) =>
-      '<!doctype html><html><head><meta charset="utf-8">'
-      '<title>$title</title></head>'
-      '<body style="font-family:sans-serif;text-align:center;padding-top:80px;">'
-      '<h2>$title</h2><p>$body</p></body></html>';
 }
 
 class OAuthException implements Exception {

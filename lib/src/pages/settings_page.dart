@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:file_picker/file_picker.dart';
@@ -10,6 +11,7 @@ import '../services/external_player.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
 import 'blacklist_page.dart';
+import 'about_page.dart';
 import 'downloads_page.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
@@ -224,25 +226,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 onTap: () => openWindowsProgramChooser(),
               ),
           ],
-          // Touchscreen Windows devices: the desktop hover controls emulate a
-          // mouse and are clumsy by touch — offer the mobile touch controls.
-          if (Platform.isWindows ||
-              (Platform.isIOS &&
-                  MediaQuery.sizeOf(context).shortestSide >= 600))
-            SwitchListTile(
-              title: Text(
-                Platform.isIOS ? '使用桌面式播放器控件' : '播放器触屏控制模式',
-              ),
-              subtitle: Text(
-                Platform.isIOS
-                    ? '默认使用触摸手势；连接鼠标、触控板或键盘时，可开启桌面式悬停控件'
-                    : '为触屏设备启用触摸手势控件（双击快进、滑动调节音量/亮度）',
-              ),
-              value: ref.watch(touchModePlayerProvider),
-              onChanged: (v) =>
-                  ref.read(touchModePlayerProvider.notifier).set(v),
-            ),
           _buildDecodeModeRow(context),
+          _buildSuperResolutionRow(context, settings),
           _buildSeekDurationRow(context),
           const Divider(height: 32),
           _section(context, '外观'),
@@ -286,35 +271,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _buildDownloadDirRow(context),
           const Divider(height: 32),
           _section(context, '关于'),
-          const ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Icon(Icons.info_outline),
-            title: Text('KURAKO'),
-            subtitle: Text('本地番剧库播放器 · Flutter + Rust'),
-          ),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.favorite_outline),
-            title: const Text('致谢'),
-            subtitle: const Text(
-              '详情页设计参考 Kazumi（GPL-3.0）；'
-              '元数据来自 Bangumi 番组计划；镜像由 bangumi-proxy 提供。',
-            ),
-            onTap: () => showAboutDialog(
-              context: context,
-              applicationName: 'KURAKO',
-              applicationVersion: '1.0.0',
-              children: const [
-                Text(
-                  '感谢以下开源项目与服务：\n\n'
-                  '• Kazumi — 详情页布局灵感\n'
-                  '• Bangumi 番组计划 — 番剧元数据与评分\n'
-                  '• bangumi-proxy (Yuri-NagaSaki) — 大陆可达镜像\n'
-                  '• media_kit / mpv — 视频播放\n'
-                  '• flutter_rust_bridge — Dart ↔ Rust 桥接',
-                ),
-              ],
-            ),
+            leading: const Icon(Icons.info_outline),
+            title: const Text('关于 Kurako'),
+            subtitle: const Text('版本信息、致谢与项目主页'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const AboutPage())),
           ),
         ],
       ),
@@ -383,6 +348,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+
+  /// Anime4K is an mpv GLSL filter, rather than a Flutter visual effect.  The
+  /// choice is persisted here and installed/applied by the next player page.
+  Widget _buildSuperResolutionRow(BuildContext context, Settings settings) {
+    final enabled = settings.superResolutionMode == 'anime4k-lite';
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('Anime4K 超分辨率（轻量）'),
+      subtitle: const Text(
+        '使用 Anime4K GLSL 着色器增强低分辨率动画。需要硬件解码与 GPU 渲染；开启后重新进入播放器生效，可能增加耗电和发热。',
+      ),
+      value: enabled,
+      onChanged: (value) => ref
+          .read(settingsProvider.notifier)
+          .setSuperResolutionMode(value ? 'anime4k-lite' : 'off'),
     );
   }
 

@@ -42,7 +42,7 @@ Future<void> main() async {
       // entirely, so it does nothing there. On macOS it hides the native
       // traffic-light buttons in favor of our own WindowButtons.
       windowButtonVisibility: false,
-      title: 'KURAKO',
+      title: 'Kurako',
     );
     // Show only once ready to avoid a flash of the un-styled native frame.
     windowManager.waitUntilReadyToShow(options, () async {

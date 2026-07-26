@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -8,12 +8,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/anime4k_shader_assets.dart';
+import '../services/ios_platform.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
@@ -85,12 +88,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Episode get _ep => widget.episodes[_index];
 
   Timer? _saveTimer;
+  bool _controlsLocked = false;
+  bool _takingScreenshot = false;
+  bool _reportedSuperResolutionFailure = false;
   int _positionMs = 0;
   int _durationMs = 0;
   bool _resumed = false;
   bool _tracksHandled = false;
+  // media_kit retains its controls subtree while the page rebuilds.  Keep the
+  // transport icon on a notifier of its own, so an authoritative native state
+  // event can update that one button without relying on a theme rebuild.
+  final ValueNotifier<bool> _playing = ValueNotifier(false);
   double _rate = 1.0;
   double _subDelay = 0; // seconds
+  StreamSubscription? _positionSub;
+  StreamSubscription? _durationSub;
+  StreamSubscription? _tracksSub;
+  StreamSubscription? _playingSub;
   StreamSubscription? _completedSub;
   // External subtitle files next to the video (auto-loaded; listed in the
   // track sheet so the user can switch between them).
@@ -176,8 +190,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (Platform.isAndroid) {
       _pip = SimplePip();
     }
-    _openCurrent();
     _listen();
+    _openCurrent();
   }
 
   /// Toggle native OS fullscreen (desktop only). No-op on real mobile, which is
@@ -246,6 +260,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             .catchError((_) => false);
         if (seq != _openSeq) return;
         if (loaded) {
+          await _applyConfiguredSuperResolution(seq);
           _loadExternalSubtitles(seq);
           _loadChapters(seq);
           break;
@@ -276,6 +291,105 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
     }
     if (mounted && seq == _openSeq) setState(() {});
+  }
+
+  /// Applies the persisted Anime4K choice after mpv has an attached video
+  /// surface. A GLSL shader is a libmpv feature, so it deliberately lives at
+  /// this layer rather than pretending to upscale a Flutter texture.
+  Future<void> _applyConfiguredSuperResolution(int seq) async {
+    // The player can open before Riverpod's SharedPreferences-backed settings
+    // finish loading on a cold launch. Wait here (after the video is already
+    // usable) so an enabled preference is never mistaken for the default off.
+    await ref.read(settingsProvider.notifier).ready;
+    if (seq != _openSeq) return;
+    final mode = ref.read(settingsProvider).superResolutionMode;
+    try {
+      final platform = _player.platform;
+      if (platform is! NativePlayer) {
+        throw StateError('当前播放器后端不支持 GLSL 着色器');
+      }
+      if (mode == 'anime4k-lite') {
+        final directory = await Anime4kShaderAssets.ensureInstalled();
+        if (seq != _openSeq) return;
+        final separator = Platform.isWindows ? ';' : ':';
+        final shaderPaths = Anime4kShaderAssets.liteShaderOrder
+            .map((name) => p.join(directory.path, name))
+            .join(separator);
+        await platform.command([
+          'change-list',
+          'glsl-shaders',
+          'set',
+          shaderPaths,
+        ]);
+      } else {
+        await platform.command(['change-list', 'glsl-shaders', 'clr', '']);
+      }
+    } catch (error) {
+      // Keep playback usable if a platform's libmpv build or its current GPU
+      // renderer cannot compile GLSL. This covers renderers that use a
+      // hardware overlay instead of an mpv GPU surface.
+      if (mode == 'anime4k-lite' &&
+          mounted &&
+          seq == _openSeq &&
+          !_reportedSuperResolutionFailure) {
+        _reportedSuperResolutionFailure = true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Anime4K 超分辨率未启用：当前渲染器不支持 GLSL 着色器（$error）')),
+        );
+      }
+    }
+  }
+
+  Future<void> _takeScreenshot() async {
+    if (_takingScreenshot) return;
+    setState(() => _takingScreenshot = true);
+    try {
+      final bytes = await _player.screenshot(
+        format: 'image/png',
+        includeLibassSubtitles: true,
+      );
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError('播放器没有返回可保存的画面');
+      }
+      final destination = Directory(
+        effectiveDownloadDir(ref.read(downloadDirProvider)),
+      );
+      if (!await destination.exists()) {
+        await destination.create(recursive: true);
+      }
+      final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+      final file = File(p.join(destination.path, 'Kurako-$timestamp.png'));
+      await file.writeAsBytes(bytes, flush: true);
+      if (mounted) {
+        if (Platform.isIOS) {
+          var savedToPhotos = false;
+          try {
+            savedToPhotos = await IosPlatform.saveImageToPhotos(file.path);
+          } catch (_) {
+            // The private, Files-visible PNG remains available below when the
+            // user denies Photos access or iOS rejects this particular frame.
+          }
+          if (!mounted) return;
+          if (savedToPhotos) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('截图已保存到系统相册')));
+            return;
+          }
+        }
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('截图已保存到 ${file.path}')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('截图失败：$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _takingScreenshot = false);
+    }
   }
 
   /// Find sidecar subtitle files (video.sc.ass etc.) and auto-load the best
@@ -347,7 +461,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   void _listen() {
-    _player.stream.position.listen((pos) {
+    _playing.value = _player.state.playing;
+    _positionSub = _player.stream.position.listen((pos) {
+      if (!mounted) return;
       _positionMs = pos.inMilliseconds;
       if (!_resumed &&
           _durationMs > 0 &&
@@ -357,12 +473,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         _player.seek(Duration(milliseconds: _ep.lastPositionMs.toInt()));
       }
     });
-    _player.stream.duration.listen((d) => _durationMs = d.inMilliseconds);
-    _player.stream.tracks.listen((tracks) {
+    _durationSub = _player.stream.duration.listen((d) {
+      if (mounted) _durationMs = d.inMilliseconds;
+    });
+    _tracksSub = _player.stream.tracks.listen((tracks) {
+      if (!mounted) return;
       if (_tracksHandled) return;
       if (tracks.subtitle.isEmpty && tracks.audio.isEmpty) return;
       _tracksHandled = true;
       _applyTrackPreference(tracks);
+    });
+    _playingSub = _player.stream.playing.listen((playing) {
+      if (_playing.value != playing) _playing.value = playing;
     });
     // Autoplay the next episode when one finishes.
     _completedSub = _player.stream.completed.listen((done) {
@@ -583,6 +705,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     await _player.seek(_durationMs > 0 && target > max ? max : target);
   }
 
+  /// Toggle from the state currently rendered to the user.  This avoids the
+  /// native player's initial stream event racing the very first press: the
+  /// button updates immediately, then the authoritative playing stream keeps
+  /// it in sync once mpv confirms the command.
+  Future<void> _togglePlaying() async {
+    final shouldPlay = !_playing.value;
+    _playing.value = shouldPlay;
+    try {
+      if (shouldPlay) {
+        await _player.play();
+      } else {
+        await _player.pause();
+      }
+    } catch (_) {
+      _playing.value = _player.state.playing;
+    }
+  }
+
   Future<void> _setSubDelay(double seconds) async {
     _subDelay = seconds;
     // mpv property: positive delay shows subtitles later.
@@ -594,6 +734,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   void dispose() {
     _saveTimer?.cancel();
     _switchDebounce?.cancel();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
+    _tracksSub?.cancel();
+    _playingSub?.cancel();
     _completedSub?.cancel();
     _episodeScrollController?.dispose();
     _save();
@@ -608,6 +752,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       windowManager.setFullScreen(false);
     }
     _fullscreen.dispose();
+    _playing.dispose();
     super.dispose();
   }
 
@@ -621,30 +766,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     final seed = ref.watch(themeProvider).seedColor;
     _cs = ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
 
-    // Desktop (mouse/keyboard) and mobile (touch) need different control sets:
-    // MaterialDesktopVideoControls has hover seek bar + keyboard shortcuts;
-    // MaterialVideoControls has the touch gestures (double-tap seek, swipe
-    // volume/brightness, long-press speed). Touch-mode lets touchscreen
-    // desktop devices opt into the touch controls too.
-    // iPad keeps touch controls by default.  The settings switch lets an iPad
-    // with Stage Manager, a trackpad or a keyboard opt into the desktop layout.
-    final isDesktop =
-        Platform.isWindows ||
-        Platform.isLinux ||
-        Platform.isMacOS;
-    final ipadCanUseDesktopControls =
-        Platform.isIOS && MediaQuery.sizeOf(context).shortestSide >= 600;
-    final touchMode = ref.watch(touchModePlayerProvider);
-    final useDesktopControls = isDesktop
-        ? !touchMode
-        : ipadCanUseDesktopControls && touchMode;
-    final useTouchControls = !useDesktopControls;
-
+    // One control model for every platform: touch gestures remain available on
+    // phones/tablets, while the same surface also understands mouse hover,
+    // mouse double-click and hardware-keyboard shortcuts. This avoids giving
+    // iPad Stage Manager and Android keyboards a different, weaker player.
     final video = Video(
       controller: _controller,
-      controls: useTouchControls
-          ? MaterialVideoControls
-          : MaterialDesktopVideoControls,
+      controls: MaterialVideoControls,
       subtitleViewConfiguration: const SubtitleViewConfiguration(
         // libass draws subtitles onto the video texture; hide the Flutter
         // overlay to avoid double text.
@@ -652,31 +780,31 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       ),
     );
 
-    final Widget themed = useTouchControls
-        ? MaterialVideoControlsTheme(
-            normal: _mobileTheme(),
-            fullscreen: _mobileTheme(),
-            child: video,
-          )
-        : MaterialDesktopVideoControlsTheme(
-            normal: _desktopTheme(),
-            fullscreen: _desktopTheme(),
-            child: video,
-          );
+    final Widget themed = MaterialVideoControlsTheme(
+      normal: _mobileTheme(),
+      fullscreen: _mobileTheme(),
+      child: video,
+    );
 
     // media_kit's long-press speed-up only registers onLongPress/onLongPressEnd
     // — if the system interrupts the gesture (navigation gesture, PiP, an
     // incoming call), the cancel path fires instead of onLongPressEnd and the
     // rate stays stuck at speedUpFactor. Watch raw pointer up/cancel and
     // restore the user's chosen rate shortly after every release.
-    final Widget guarded = useTouchControls
-        ? Listener(
-            behavior: HitTestBehavior.translucent,
-            onPointerUp: (_) => _restoreRateAfterGesture(),
-            onPointerCancel: (_) => _restoreRateAfterGesture(),
-            child: themed,
-          )
-        : themed;
+    final Widget guarded = Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerUp: (_) => _restoreRateAfterGesture(),
+      onPointerCancel: (_) => _restoreRateAfterGesture(),
+      child: themed,
+    );
+
+    // Once locked, the vendored touch controls suppress their own gestures and
+    // UI. This separate button intentionally sits outside that subtree, so a
+    // child or an accidental hand touch cannot do anything except unlock.
+    final Widget playerBody = Stack(
+      fit: StackFit.expand,
+      children: [guarded, if (_controlsLocked) _buildUnlockControlsButton()],
+    );
 
     final dark = Theme.of(context).copyWith(colorScheme: _cs);
 
@@ -687,7 +815,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // the values baked into the theme (seek duration, control set) to force
       // a clean remount whenever they change — double-tap durations included.
       child: KeyedSubtree(
-        key: ValueKey('player-controls-$_seekSec-$useTouchControls'),
+        key: ValueKey('player-controls-$_seekSec-$_controlsLocked'),
         child: Scaffold(
           key: _scaffoldKey,
           backgroundColor: Colors.black,
@@ -695,7 +823,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           // Open only via the buttons — an edge-swipe would fight the player's
           // horizontal seek gesture.
           endDrawerEnableOpenDragGesture: false,
-          body: guarded,
+          body: playerBody,
         ),
       ),
     );
@@ -733,7 +861,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return Drawer(
       backgroundColor: cs.surface,
       width: 340,
+      // The drawer surface itself must meet the physical right edge.  Applying
+      // horizontal SafeArea padding here made an end drawer float inward on
+      // landscape iPhones when the notch was on the opposite (left) side.
       child: SafeArea(
+        left: false,
+        right: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -851,6 +984,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   // ---- Desktop controls (mouse + keyboard) ----
 
+  // Kept as a migration reference while the unified controls are exercised on
+  // every platform; the active player now always uses [_mobileTheme].
+  // ignore: unused_element
   MaterialDesktopVideoControlsThemeData _desktopTheme() {
     return MaterialDesktopVideoControlsThemeData(
       // Hide the mouse cursor when the controls auto-hide (idle over the video).
@@ -966,17 +1102,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 children: [
                   const Icon(Icons.fast_forward, color: Colors.white, size: 20),
                   const SizedBox(width: 2),
-                  Consumer(
-                    builder: (context, ref, _) {
-                      final s = ref.watch(seekDurationProvider);
-                      return Text(
-                        '${s}s',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 11,
-                        ),
-                      );
-                    },
+                  Text(
+                    '${_seekSec}s',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                    ),
                   ),
                 ],
               ),
@@ -1019,9 +1150,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     return MaterialVideoControlsThemeData(
       // Touch gestures.
       seekOnDoubleTap: true,
+      // PiliPlus uses a left-quarter / central-half / right-quarter layout:
+      // the centre toggles playback while only the two outer quarters seek.
+      // The vendored controls honour the same ratios for both hit-testing and
+      // the seek animation placement.
+      seekOnDoubleTapLayoutTapsRatios: const [1, 2, 1],
+      seekOnDoubleTapLayoutWidgetRatios: const [1, 2, 1],
       volumeGesture: true,
       brightnessGesture: true,
       seekGesture: true,
+      controlsLocked: _controlsLocked,
       speedUpOnLongPress: true,
       speedUpFactor: 2.0,
       // Tame the drag sensitivity — the package defaults (vertical 100,
@@ -1034,29 +1172,61 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // button so the two gestures are independent.
       seekOnDoubleTapBackwardDuration: const Duration(seconds: 10),
       seekOnDoubleTapForwardDuration: const Duration(seconds: 10),
-      // MD3 seek bar: theme-colored, thicker, bigger thumb. Lifted fully above
-      // the bottom button row (bottom:56 > buttonBarHeight) — same layout as
-      // the desktop controls — so it can't be mis-tapped at the screen edge.
+      // Keep playback unobstructed when the user calls up controls.  The
+      // previous full-screen dimmer + three large centre buttons resembled a
+      // YouTube-style overlay and made an ordinary pause or episode change feel
+      // needlessly disruptive on touch devices.
+      backdropColor: Colors.transparent,
+      // A compact two-row bottom bar derived from PiliPlus: the progress line
+      // sits just above the transport row, rather than floating high above it.
       seekBarThumbColor: _cs.primary,
-      seekBarColor: Colors.white24,
+      seekBarColor: Colors.white54,
       seekBarPositionColor: _cs.primary,
-      seekBarBufferColor: Colors.white38,
-      seekBarHeight: 4.2,
-      seekBarThumbSize: 13,
-      seekBarMargin: const EdgeInsets.only(left: 16, right: 16, bottom: 56),
+      seekBarBufferColor: Colors.white70,
+      seekBarHeight: 4.5,
+      seekBarThumbSize: 12,
+      seekBarMargin: const EdgeInsets.fromLTRB(20, 0, 20, 54),
+      seekBarContainerHeight: 32,
+      buttonBarHeight: 38,
+      buttonBarButtonSize: 24,
+      topButtonBarMargin: const EdgeInsets.fromLTRB(10, 4, 10, 0),
       bottomButtonBarMargin: const EdgeInsets.only(
-        left: 16,
-        right: 16,
-        bottom: 8,
+        left: 10,
+        right: 10,
+        bottom: 12,
       ),
       // Top bar: back + title + quick-seek + rate + episode drawer + overflow.
-      topButtonBar: [
+      topButtonBar: [Expanded(child: _readableTopBar())],
+      // Do not put a large prev / pause / next group in the middle of the
+      // picture.  Chinese video players conventionally keep these frequently
+      // used actions at the bottom beside the timestamp, leaving the picture
+      // visible while the rest of the controls are shown.
+      primaryButtonBar: const [],
+      // Bottom bar: timestamp + episode transport + secondary controls.  This
+      // preserves our own episode switching path (watch progress, SMB handle
+      // release and debounce) instead of media_kit's unrelated playlist skip.
+      bottomButtonBar: [Expanded(child: _readableBottomBar())],
+    );
+  }
+
+  /// Small, local backdrops make labels and the seek area legible on bright
+  /// video without putting a dim layer over the entire picture.
+  Widget _readableBar({required Widget child}) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: const Color(0x9C000000),
+      borderRadius: BorderRadius.circular(5),
+      boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 8)],
+    ),
+    child: child,
+  );
+
+  Widget _readableTopBar() => _readableBar(
+    child: Row(
+      children: [
         MaterialCustomButton(
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: _popSelf,
         ),
-        // WindowDragArea is a no-op on real mobile; on a touchscreen Windows
-        // device with 触屏模式 enabled it lets the title drag-move the window.
         Expanded(
           child: WindowDragArea(
             child: Text(
@@ -1074,6 +1244,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             onPressed: _enterPip,
           ),
         _rateButton(),
+        MaterialCustomButton(
+          icon: Icon(
+            _takingScreenshot
+                ? Icons.hourglass_top
+                : Icons.photo_camera_outlined,
+            color: Colors.white,
+          ),
+          onPressed: _takingScreenshot ? () {} : () => _takeScreenshot(),
+        ),
+        MaterialCustomButton(
+          icon: Icon(
+            _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
+            color: Colors.white,
+          ),
+          onPressed: () => setState(() => _controlsLocked = !_controlsLocked),
+        ),
         if (widget.episodes.length > 1)
           MaterialCustomButton(
             icon: const Icon(Icons.playlist_play, color: Colors.white),
@@ -1083,41 +1269,116 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           icon: const Icon(Icons.tune, color: Colors.white),
           onPressed: () => _openPanel(_Panel.menu),
         ),
-        // On a real phone/tablet this is a no-op; on Windows with 触屏模式
-        // (touch controls opted-in on a touchscreen desktop) the window still
-        // needs its minimize/maximize/close buttons somewhere.
         if (!_isMobile) const WindowButtons(light: true),
       ],
-      // Bottom primary bar: prev / play-pause / next around the seek bar.
-      primaryButtonBar: [
-        MaterialCustomButton(
-          icon: Icon(
-            Icons.skip_previous,
-            color: _hasPrev ? Colors.white : Colors.white30,
-          ),
-          onPressed: _hasPrev ? _playPrev : () {},
-        ),
-        const SizedBox(width: 8),
-        const MaterialPlayOrPauseButton(iconSize: 48),
-        const SizedBox(width: 8),
-        MaterialCustomButton(
-          icon: Icon(
-            Icons.skip_next,
-            color: _hasNext ? Colors.white : Colors.white30,
-          ),
-          onPressed: _hasNext ? () => _playNext() : () {},
-        ),
-      ],
-      // Bottom bar: position + (on Windows 触屏模式 only) a native-fullscreen
-      // toggle. Real mobile is already fullscreen+landscape, so the button is
-      // omitted there (guarded by !_isMobile) to avoid a redundant control.
-      bottomButtonBar: [
-        const MaterialPositionIndicator(),
+    ),
+  );
+
+  Widget _readableBottomBar() => _readableBar(
+    child: Row(
+      children: [
+        _touchTransportGroup(),
         const Spacer(),
+        if (widget.episodes.length > 1)
+          MaterialCustomButton(
+            icon: const Icon(Icons.playlist_play, color: Colors.white),
+            onPressed: () => _openPanel(_Panel.episodes),
+          ),
         if (!_isMobile) _touchFullscreenButton(),
       ],
-    );
-  }
+    ),
+  );
+
+  /// Compact touch transport group modelled after PiliPlus:
+  /// play/pause → time → previous → next.  Keeping this as one Row makes the
+  /// placement deterministic on phones, iPads and narrow Stage Manager panes.
+  Widget _touchTransportGroup() => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      ValueListenableBuilder<bool>(
+        valueListenable: _playing,
+        builder: (context, playing, _) => _compactTouchButton(
+          icon: playing ? Icons.pause : Icons.play_arrow,
+          iconSize: 29,
+          tooltip: playing ? '暂停' : '播放',
+          onTap: _togglePlaying,
+        ),
+      ),
+      const SizedBox(width: 3),
+      const MaterialPositionIndicator(
+        style: TextStyle(color: Colors.white, fontSize: 12, height: 1),
+      ),
+      const SizedBox(width: 7),
+      _compactTouchButton(
+        icon: Icons.skip_previous,
+        tooltip: '上一集',
+        enabled: _hasPrev,
+        onTap: _playPrev,
+      ),
+      _compactTouchButton(
+        icon: Icons.skip_next,
+        tooltip: '下一集',
+        enabled: _hasNext,
+        onTap: () => _playNext(),
+      ),
+    ],
+  );
+
+  /// PiliPlus uses 30px-high transport targets instead of Material's default
+  /// 48px IconButton footprint.  It keeps the controls visibly grouped in the
+  /// lower-left corner without sacrificing a usable touch hit area.
+  Widget _compactTouchButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+    bool enabled = true,
+    double iconSize = 23,
+  }) => Tooltip(
+    message: tooltip,
+    child: SizedBox(
+      width: icon == Icons.play_arrow || icon == Icons.pause ? 36 : 34,
+      height: 30,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: enabled ? onTap : null,
+        child: Center(
+          child: Icon(
+            icon,
+            size: iconSize,
+            color: enabled ? Colors.white : Colors.white30,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _buildUnlockControlsButton() => Align(
+    alignment: Alignment.centerLeft,
+    child: SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(left: 12),
+        child: Material(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(24),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(24),
+            onTap: () => setState(() => _controlsLocked = false),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.lock_open_outlined, color: Colors.white, size: 21),
+                  SizedBox(width: 6),
+                  Text('解锁', style: TextStyle(color: Colors.white)),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 
   /// Windows-touch fullscreen toggle; icon tracks [_fullscreen] live.
   Widget _touchFullscreenButton() => ValueListenableBuilder<bool>(
@@ -1152,10 +1413,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   // Quick-seek button: tap jumps forward by the configured duration; long-press
-  // opens the duration setting. The label watches the provider directly via
-  // Consumer — media_kit's controls theme has a broken updateShouldNotify, so
-  // the button bar isn't rebuilt when we hand it a fresh theme; watching here
-  // keeps the shown duration live regardless.
+  // opens the duration setting. [_seekSec] is watched by the owning page and
+  // included in the keyed controls subtree.  Do not put another Consumer inside
+  // media_kit's retained overlay: during route teardown it can outlive this
+  // page by one frame and attempt to rebuild a defunct Riverpod element.
   Widget _seekButton() {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -1168,14 +1429,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           children: [
             const Icon(Icons.fast_forward, color: Colors.white, size: 20),
             const SizedBox(width: 2),
-            Consumer(
-              builder: (context, ref, _) {
-                final s = ref.watch(seekDurationProvider);
-                return Text(
-                  '${s}s',
-                  style: const TextStyle(color: Colors.white, fontSize: 11),
-                );
-              },
+            Text(
+              '${_seekSec}s',
+              style: const TextStyle(color: Colors.white, fontSize: 11),
             ),
           ],
         ),

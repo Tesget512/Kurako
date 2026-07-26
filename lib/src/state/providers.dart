@@ -522,6 +522,8 @@ class Settings {
   // Persisted OAuth session.
   final String bangumiRefreshToken;
   final int bangumiTokenExpiresAt; // Unix seconds; 0 = none.
+  /// `off` or `anime4k-lite`. Applied the next time a video is opened.
+  final String superResolutionMode;
 
   const Settings({
     this.useExternalPlayer = false,
@@ -529,6 +531,7 @@ class Settings {
     this.bangumiToken = '',
     this.bangumiRefreshToken = '',
     this.bangumiTokenExpiresAt = 0,
+    this.superResolutionMode = 'off',
   });
 
   bool get isLoggedIn => bangumiToken.isNotEmpty;
@@ -539,6 +542,7 @@ class Settings {
     String? bangumiToken,
     String? bangumiRefreshToken,
     int? bangumiTokenExpiresAt,
+    String? superResolutionMode,
   }) {
     return Settings(
       useExternalPlayer: useExternalPlayer ?? this.useExternalPlayer,
@@ -547,6 +551,7 @@ class Settings {
       bangumiRefreshToken: bangumiRefreshToken ?? this.bangumiRefreshToken,
       bangumiTokenExpiresAt:
           bangumiTokenExpiresAt ?? this.bangumiTokenExpiresAt,
+      superResolutionMode: superResolutionMode ?? this.superResolutionMode,
     );
   }
 }
@@ -570,6 +575,7 @@ class SettingsNotifier extends StateNotifier<Settings> {
       bangumiToken: prefs.getString('bangumi_token') ?? '',
       bangumiRefreshToken: prefs.getString('bangumi_refresh_token') ?? '',
       bangumiTokenExpiresAt: prefs.getInt('bangumi_token_expires_at') ?? 0,
+      superResolutionMode: prefs.getString('super_resolution_mode') ?? 'off',
     );
     // Push any existing access token into Rust and refresh if near expiry.
     if (state.bangumiToken.isNotEmpty) {
@@ -588,6 +594,12 @@ class SettingsNotifier extends StateNotifier<Settings> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('external_player_path', value);
     state = state.copyWith(externalPlayerPath: value);
+  }
+
+  Future<void> setSuperResolutionMode(String value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('super_resolution_mode', value);
+    state = state.copyWith(superResolutionMode: value);
   }
 
   /// Persist a freshly obtained OAuth session (access + refresh + expiry).

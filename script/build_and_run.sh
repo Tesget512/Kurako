@@ -16,7 +16,8 @@ if [[ ! -x "$FLUTTER_BIN" ]]; then
 fi
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
-"$FLUTTER_BIN" build macos --debug
+BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %z')"
+"$FLUTTER_BIN" build macos --debug "--dart-define=KURAKO_BUILD_TIME=$BUILD_TIME"
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE" --args --enable-software-rendering

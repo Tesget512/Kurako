@@ -18,7 +18,7 @@ the repository history rather than only in build output or commit titles.
 - iOS supports a Release Dart build exported with a Development signing
   profile, suitable for direct installation on devices that belong to the
   selected Apple Development team. The release package is emitted as
-  `dist/out/KURAKO-iOS-release.ipa`.
+  `dist/out/Kurako-iOS-release.ipa`.
 - Rust is cross-compiled through Cargokit and embedded through the generated
   podspec. The build scripts select the toolchain explicitly so Xcode shell
   phases can find `rustc` and Cargo.
@@ -49,13 +49,11 @@ the repository history rather than only in build output or commit titles.
 ## Bangumi OAuth
 
 - Bangumi has one fixed callback registered for this application:
-  `http://localhost:6420/callback`.
-- The app opens a temporary loopback HTTP listener before opening the official
-  Bangumi authorization page, then exchanges the returned authorization code in
-  the Rust core.
-- iOS and Android pass the generated authorization URL to their system browser
-  without parsing and reconstructing the already-encoded `redirect_uri` query
-  value. This prevents Bangumi's `invalid_uri` / missing redirect URI error.
+  `kurako://oauth/callback`.
+- The app uses its operating system's authentication session and captures that
+  custom callback directly, then exchanges the returned authorization code in
+  the Rust core. This avoids an iOS/Android browser suspending a localhost
+  listener before the callback can be served.
 
 ## Verification
 

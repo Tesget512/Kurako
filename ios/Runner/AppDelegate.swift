@@ -1,4 +1,5 @@
 import Flutter
+import Photos
 import UIKit
 
 /// iOS-specific integrations that require a real UIKit controller instead of
@@ -24,6 +25,9 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
       case "shareVideo":
         let args = call.arguments as? [String: Any]
         self.shareVideo(args?["path"] as? String, result: result)
+      case "saveImageToPhotos":
+        let args = call.arguments as? [String: Any]
+        self.saveImageToPhotos(args?["path"] as? String, result: result)
       case "openExternalUrl":
         let args = call.arguments as? [String: Any]
         self.openExternalUrl(args?["url"] as? String, result: result)
@@ -126,6 +130,78 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
       activityItems: [URL(fileURLWithPath: path)], applicationActivities: nil)
     topViewController()?.present(controller, animated: true)
     result(true)
+  }
+
+  /// Adds a PNG/JPEG to Photos using iOS's narrow add-only authorization. The
+  /// Dart side keeps the app-private copy as a fallback if the user declines.
+  private func saveImageToPhotos(_ path: String?, result: @escaping FlutterResult) {
+    guard let path, !path.isEmpty, let image = UIImage(contentsOfFile: path) else {
+      result(FlutterError(code: "invalid_image", message: "截图文件无法读取", details: nil))
+      return
+    }
+
+    let status: PHAuthorizationStatus
+    if #available(iOS 14, *) {
+      // Modern iOS: request only permission to add, never to read the user's
+      // existing library.
+      status = PHPhotoLibrary.authorizationStatus(for: .addOnly)
+    } else {
+      // Keep iOS 12/13 compatible; they only provide the older Photos
+      // permission API.
+      status = PHPhotoLibrary.authorizationStatus()
+    }
+    if status == .notDetermined {
+      requestPhotoAuthorization(image, result: result)
+      return
+    }
+    finishPhotoAuthorization(status, image: image, result: result)
+  }
+
+  private func requestPhotoAuthorization(_ image: UIImage, result: @escaping FlutterResult) {
+    let completion: (PHAuthorizationStatus) -> Void = { [weak self] status in
+      DispatchQueue.main.async {
+        guard let self else {
+          result(FlutterError(code: "bridge_unavailable", message: nil, details: nil))
+          return
+        }
+        self.finishPhotoAuthorization(status, image: image, result: result)
+      }
+    }
+    if #available(iOS 14, *) {
+      PHPhotoLibrary.requestAuthorization(for: .addOnly, handler: completion)
+    } else {
+      PHPhotoLibrary.requestAuthorization(completion)
+    }
+  }
+
+  private func finishPhotoAuthorization(_ status: PHAuthorizationStatus,
+                                        image: UIImage,
+                                        result: @escaping FlutterResult) {
+    if status == .authorized {
+      addImageToPhotos(image, result: result)
+      return
+    }
+    if #available(iOS 14, *), status == .limited {
+      addImageToPhotos(image, result: result)
+      return
+    }
+    result(FlutterError(code: "photos_permission_denied", message: "未获允许写入系统相册", details: nil))
+  }
+
+  private func addImageToPhotos(_ image: UIImage, result: @escaping FlutterResult) {
+    PHPhotoLibrary.shared().performChanges({
+      PHAssetCreationRequest.creationRequestForAsset(from: image)
+    }) { success, error in
+      DispatchQueue.main.async {
+        if success {
+          result(true)
+        } else {
+          result(FlutterError(code: "photos_save_failed",
+                              message: error?.localizedDescription ?? "系统相册写入失败",
+                              details: nil))
+        }
+      }
+    }
   }
 
   /// Ask iOS to route a URI to the application which registered its scheme.

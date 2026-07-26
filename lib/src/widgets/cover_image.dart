@@ -28,7 +28,7 @@ class CoverImage extends ConsumerWidget {
   });
 
   static const _headers = {
-    'User-Agent': 'KURAKO/1.0',
+    'User-Agent': 'Kurako/1.0',
     'Referer': 'https://bgm.tv/',
   };
 
@@ -71,8 +71,7 @@ class CoverImage extends ConsumerWidget {
       memCacheWidth: cacheWidth,
       placeholder: (_, _) =>
           Container(color: theme.colorScheme.surfaceContainerHighest),
-      errorWidget: (_, _, _) =>
-          _fallback(theme, Icons.broken_image_outlined),
+      errorWidget: (_, _, _) => _fallback(theme, Icons.broken_image_outlined),
     );
   }
 

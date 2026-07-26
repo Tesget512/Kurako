@@ -1,4 +1,4 @@
-# KURAKO
+# Kurako
 
 A new Flutter project.
 

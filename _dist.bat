@@ -24,10 +24,12 @@ if "%MODE%"=="" set "MODE=all"
 
 if /I "%MODE%"=="apk" goto :apk
 
+for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'"') do set "KURAKO_BUILD_TIME=%%i"
+
 REM ---- Windows Release ----
 echo === [1/2] flutter build windows --release ===
 taskkill /IM kurako.exe /F >nul 2>&1
-call flutter build windows --release
+call flutter build windows --release --dart-define="KURAKO_BUILD_TIME=%KURAKO_BUILD_TIME%"
 if errorlevel 1 ( echo BUILD FAILED ^(windows^) & exit /b 1 )
 echo === 打包 Windows 便携版到 dist\out ===
 set "WINSRC=build\windows\x64\runner\Release"
@@ -40,8 +42,8 @@ set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if exist "%ISCC%" (
   "%ISCC%" installer.iss
   if errorlevel 1 ( echo BUILD FAILED ^(installer^) & exit /b 1 )
-  copy /Y "dist\KURAKO-Setup-1.0.0.exe" "%OUT%\KURAKO-Setup-1.0.0.exe" >nul
-  echo   -> %OUT%\KURAKO-Setup-1.0.0.exe
+  copy /Y "dist\Kurako-Setup-1.0.0.exe" "%OUT%\Kurako-Setup-1.0.0.exe" >nul
+  echo   -> %OUT%\Kurako-Setup-1.0.0.exe
 ) else (
   echo   [跳过] 未找到 ISCC.exe，未生成安装包
 )
@@ -49,14 +51,15 @@ if /I "%MODE%"=="win" goto :done
 
 :apk
 REM ---- Android Release APK (split-per-abi) ----
+if not defined KURAKO_BUILD_TIME for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'"') do set "KURAKO_BUILD_TIME=%%i"
 echo === [2/2] flutter build apk --release --split-per-abi ===
-call flutter build apk --release --split-per-abi
+call flutter build apk --release --split-per-abi --dart-define="KURAKO_BUILD_TIME=%KURAKO_BUILD_TIME%"
 if errorlevel 1 ( echo BUILD FAILED ^(apk^) & exit /b 1 )
 echo === 复制 APK 到 dist\out ===
-copy /Y "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk"   "%OUT%\KURAKO-arm64-v8a.apk" >nul
-copy /Y "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "%OUT%\KURAKO-armeabi-v7a.apk" >nul 2>&1
-copy /Y "build\app\outputs\flutter-apk\app-x86_64-release.apk"      "%OUT%\KURAKO-x86_64.apk" >nul 2>&1
-echo   -> %OUT%\KURAKO-arm64-v8a.apk
+copy /Y "build\app\outputs\flutter-apk\app-arm64-v8a-release.apk"   "%OUT%\Kurako-arm64-v8a.apk" >nul
+copy /Y "build\app\outputs\flutter-apk\app-armeabi-v7a-release.apk" "%OUT%\Kurako-armeabi-v7a.apk" >nul 2>&1
+copy /Y "build\app\outputs\flutter-apk\app-x86_64-release.apk"      "%OUT%\Kurako-x86_64.apk" >nul 2>&1
+echo   -> %OUT%\Kurako-arm64-v8a.apk
 
 :done
 echo.

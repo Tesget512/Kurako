@@ -90,7 +90,8 @@ class AnimeBdApp extends ConsumerWidget {
         // also returns a scheme on Windows/macOS (the system accent color),
         // which would silently override the user's chosen preset — so gate on
         // Android explicitly.
-        final useDynamic = theme.followSystem &&
+        final useDynamic =
+            theme.followSystem &&
             Platform.isAndroid &&
             lightDynamic != null &&
             darkDynamic != null;
@@ -98,14 +99,17 @@ class AnimeBdApp extends ConsumerWidget {
         // leaves the new MD3 surfaceContainer* roles unset, so chips/cards lose
         // their背景 tint. Re-seed from the Monet primary instead — keeps the
         // wallpaper hue, fills every role.
-        final Color seed =
-            useDynamic ? lightDynamic.primary : theme.seedColor;
-        final light =
-            ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.light);
-        final dark =
-            ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
+        final Color seed = useDynamic ? lightDynamic.primary : theme.seedColor;
+        final light = ColorScheme.fromSeed(
+          seedColor: seed,
+          brightness: Brightness.light,
+        );
+        final dark = ColorScheme.fromSeed(
+          seedColor: seed,
+          brightness: Brightness.dark,
+        );
         return MaterialApp(
-          title: 'KURAKO',
+          title: 'Kurako',
           debugShowCheckedModeBanner: false,
           theme: _theme(light, systemFont: systemFont),
           darkTheme: _theme(dark, systemFont: systemFont),

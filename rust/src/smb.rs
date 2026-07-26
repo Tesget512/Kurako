@@ -13,6 +13,7 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -31,6 +32,13 @@ const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
 /// indefinitely and the player spins on "loading". A bounded connect turns that
 /// into a clean, recoverable failure instead of a deadlock.
 const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+
+/// Windows may silently discard an idle mobile SMB connection while the app is
+/// in the background.  Do not wait for that stale connection's full request
+/// timeout on the next user action: when no proxy stream is active, establish a
+/// fresh session after this quiet period.  Continuous playback, downloads and
+/// scans keep using the same multiplexed session as before.
+const IDLE_SESSION_RECONNECT_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Cached SMB credentials, used to establish the shared connection on startup
 /// and after a genuine network failure.
@@ -68,6 +76,24 @@ struct SmbSessionInner {
 
 struct SmbSession {
     inner: tokio::sync::Mutex<SmbSessionInner>,
+    last_activity: Mutex<Instant>,
+}
+
+impl SmbSession {
+    fn new(client: smb2::SmbClient, tree: smb2::Tree) -> Self {
+        Self {
+            inner: tokio::sync::Mutex::new(SmbSessionInner { client, tree }),
+            last_activity: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn touch(&self) {
+        *self.last_activity.lock().unwrap() = Instant::now();
+    }
+
+    fn has_been_idle_too_long(&self) -> bool {
+        self.last_activity.lock().unwrap().elapsed() >= IDLE_SESSION_RECONNECT_AFTER
+    }
 }
 
 static SESSION: Mutex<Option<std::sync::Arc<SmbSession>>> = Mutex::new(None);
@@ -77,9 +103,7 @@ static SESSION_INIT: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mu
 
 fn cache_session(c: SmbCreds, client: smb2::SmbClient, tree: smb2::Tree) {
     *CREDS.lock().unwrap() = Some(c);
-    *SESSION.lock().unwrap() = Some(std::sync::Arc::new(SmbSession {
-        inner: tokio::sync::Mutex::new(SmbSessionInner { client, tree }),
-    }));
+    *SESSION.lock().unwrap() = Some(std::sync::Arc::new(SmbSession::new(client, tree)));
 }
 
 /// The `smb://addr/share/subdir/` URI prefix that enumerated files under
@@ -146,6 +170,10 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
         user: user.to_string(),
         password: password.to_string(),
     };
+    // This is an explicit reconnect/reconfiguration request. Do not let a
+    // previous timed-out server session remain the process-wide default while
+    // validation is trying to establish the new one.
+    invalidate_session();
     // A busy SMB server can briefly reject a second session while it reaps an
     // old one. Retrying this *initial* connection once avoids presenting the
     // cryptic bare "smb connect" error after a player/download was just
@@ -156,13 +184,17 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
             Ok((mut client, mut tree)) => {
                 // A root listing proves auth + share access work. Keep the
                 // connected tree on success instead of TreeDisconnect-ing it.
-                let listed = client.list_directory(&mut tree, "").await;
+                let listed =
+                    tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(&mut tree, "")).await;
                 match listed {
-                    Ok(_) => {
+                    Ok(Ok(_)) => {
                         cache_session(c, client, tree);
                         return Ok(());
                     }
-                    Err(e) => last_error = Some(e.into()),
+                    Ok(Err(error)) => last_error = Some(error.into()),
+                    Err(_) => {
+                        last_error = Some(anyhow::anyhow!("smb root listing timed out"));
+                    }
                 }
             }
             Err(e) => last_error = Some(e),
@@ -181,28 +213,53 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
 pub async fn enumerate(subdir: &str) -> Result<Vec<ScannedFile>> {
     let c = creds().context("smb not connected")?;
     let session = session(&c).await?;
-    let mut session = session.inner.lock().await;
-    let SmbSessionInner { client, tree } = &mut *session;
     let mut out = Vec::new();
     let base = subdir.trim_matches('/').to_string();
-    walk(client, tree, &c, &base, "", &mut out).await?;
+    walk(&session, &c, &base, "", &mut out).await?;
     Ok(out)
 }
 
 /// Depth-first walk. `smb_path` is the path on the share; `rel` is the path
 /// relative to the enumerate root (for grouping).
 async fn walk(
-    client: &mut smb2::SmbClient,
-    tree: &mut smb2::Tree,
+    session: &std::sync::Arc<SmbSession>,
     creds: &SmbCreds,
     smb_path: &str,
     rel: &str,
     out: &mut Vec<ScannedFile>,
 ) -> Result<()> {
-    let entries = client
-        .list_directory(tree, smb_path)
-        .await
-        .with_context(|| format!("smb list {smb_path}"))?;
+    // Do not hold the session mutex over the entire recursive scan. A single
+    // folder request may stall after Wi-Fi sleep or an SMB server timeout; if
+    // that used to happen mid-walk, every later playback/refresh queued behind
+    // this one lock forever even after the UI abandoned the original Future.
+    let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
+        Ok(guard) => guard,
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb session remained busy for too long")
+        }
+    };
+    let entries = {
+        let SmbSessionInner { client, tree } = &mut *guard;
+        tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(tree, smb_path)).await
+    };
+    let entries = match entries {
+        Ok(Ok(entries)) => {
+            session.touch();
+            entries
+        }
+        Ok(Err(error)) => {
+            drop(guard);
+            invalidate_session();
+            return Err(error).with_context(|| format!("smb list {smb_path}"));
+        }
+        Err(_) => {
+            drop(guard);
+            invalidate_session();
+            anyhow::bail!("smb list {smb_path} timed out")
+        }
+    };
+    drop(guard);
     for e in entries {
         if e.name == "." || e.name == ".." {
             continue;
@@ -218,7 +275,7 @@ async fn walk(
             format!("{rel}/{}", e.name)
         };
         if e.is_directory {
-            Box::pin(walk(client, tree, creds, &child_smb, &child_rel, out)).await?;
+            Box::pin(walk(session, creds, &child_smb, &child_rel, out)).await?;
         } else if is_video(&e.name) {
             // Parent folder of this file, relative to the enumerate root.
             let parent = child_rel
@@ -263,13 +320,34 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
 
     let c = creds().context("smb not connected")?;
     let session = session(&c).await?;
-    let mut session = session.inner.lock().await;
-    let SmbSessionInner { client, tree } = &mut *session;
-    let entries = client
-        .list_directory(tree, &dir)
-        .await
-        .with_context(|| format!("smb list {dir}"))?;
-    drop(session);
+    let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
+        Ok(guard) => guard,
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb session remained busy for too long")
+        }
+    };
+    let entries = {
+        let SmbSessionInner { client, tree } = &mut *guard;
+        tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(tree, &dir)).await
+    };
+    let entries = match entries {
+        Ok(Ok(entries)) => {
+            session.touch();
+            entries
+        }
+        Ok(Err(error)) => {
+            drop(guard);
+            invalidate_session();
+            return Err(error).with_context(|| format!("smb list {dir}"));
+        }
+        Err(_) => {
+            drop(guard);
+            invalidate_session();
+            anyhow::bail!("smb list {dir} timed out")
+        }
+    };
+    drop(guard);
 
     let mut out = Vec::new();
     for e in entries {
@@ -304,9 +382,28 @@ pub async fn read_sidecar(folder_uri: &str) -> Result<crate::sidecar::SidecarMap
     };
     let c = creds().context("smb not connected")?;
     let session = session(&c).await?;
-    let mut session = session.inner.lock().await;
-    let SmbSessionInner { client, tree } = &mut *session;
-    let bytes = client.read_file(tree, &path).await;
+    let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
+        Ok(guard) => guard,
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb session remained busy for too long")
+        }
+    };
+    let bytes = {
+        let SmbSessionInner { client, tree } = &mut *guard;
+        tokio::time::timeout(SETUP_TIMEOUT, client.read_file(tree, &path)).await
+    };
+    drop(guard);
+    let bytes = match bytes {
+        Ok(bytes) => {
+            session.touch();
+            bytes
+        }
+        Err(_) => {
+            invalidate_session();
+            return Err(anyhow::anyhow!("smb read sidecar timed out"));
+        }
+    };
     // A read failure here is almost always "file not found" (no sidecar in this
     // folder), which is normal — treat it as an empty map, not an error.
     Ok(bytes.map(|b| crate::sidecar::parse(&b)).unwrap_or_default())
@@ -324,10 +421,29 @@ pub async fn write_sidecar(folder_uri: &str, map: &crate::sidecar::SidecarMap) -
     };
     let c = creds().context("smb not connected")?;
     let session = session(&c).await?;
-    let mut session = session.inner.lock().await;
-    let SmbSessionInner { client, tree } = &mut *session;
     let data = crate::sidecar::serialize(map);
-    let res = client.write_file(tree, &path, &data).await;
+    let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
+        Ok(guard) => guard,
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb session remained busy for too long")
+        }
+    };
+    let res = {
+        let SmbSessionInner { client, tree } = &mut *guard;
+        tokio::time::timeout(SETUP_TIMEOUT, client.write_file(tree, &path, &data)).await
+    };
+    drop(guard);
+    let res = match res {
+        Ok(res) => {
+            session.touch();
+            res
+        }
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb write sidecar timed out")
+        }
+    };
     res.map(|_| ()).context("smb write sidecar")
 }
 
@@ -344,9 +460,28 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
     };
     let c = creds().context("smb not connected")?;
     let session = session(&c).await?;
-    let mut session = session.inner.lock().await;
-    let SmbSessionInner { client, tree } = &mut *session;
-    let res = client.delete_file(tree, &path).await;
+    let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
+        Ok(guard) => guard,
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb session remained busy for too long")
+        }
+    };
+    let res = {
+        let SmbSessionInner { client, tree } = &mut *guard;
+        tokio::time::timeout(SETUP_TIMEOUT, client.delete_file(tree, &path)).await
+    };
+    drop(guard);
+    let res = match res {
+        Ok(res) => {
+            session.touch();
+            res
+        }
+        Err(_) => {
+            invalidate_session();
+            anyhow::bail!("smb delete sidecar timed out")
+        }
+    };
     Ok(res.is_ok())
 }
 
@@ -388,7 +523,20 @@ static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaph
 /// Get the persistent session, connecting on first use.
 async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
     if let Some(s) = SESSION.lock().unwrap().clone() {
-        return Ok(s);
+        // Only rotate an idle connection if nothing is currently flowing
+        // through the loopback proxy.  This keeps one stable SMB session for
+        // normal playback, but avoids paying a 12-second stale-socket timeout
+        // after the app has sat unused or backgrounded for a while.
+        if !s.has_been_idle_too_long() || !ACTIVE_STREAMS.lock().unwrap().is_empty() {
+            return Ok(s);
+        }
+        let mut cached = SESSION.lock().unwrap();
+        if cached
+            .as_ref()
+            .is_some_and(|current| std::sync::Arc::ptr_eq(current, &s))
+        {
+            *cached = None;
+        }
     }
     let _guard = SESSION_INIT.lock().await;
     // Re-check: another caller may have connected while we waited for the lock.
@@ -396,9 +544,7 @@ async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
         return Ok(s);
     }
     let (client, tree) = open(c).await?;
-    let s = std::sync::Arc::new(SmbSession {
-        inner: tokio::sync::Mutex::new(SmbSessionInner { client, tree }),
-    });
+    let s = std::sync::Arc::new(SmbSession::new(client, tree));
     *SESSION.lock().unwrap() = Some(s.clone());
     Ok(s)
 }
@@ -418,13 +564,23 @@ async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReade
                 continue;
             }
         };
-        let guard = sess.inner.lock().await;
+        let guard = match tokio::time::timeout(SETUP_TIMEOUT, sess.inner.lock()).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                last_error = Some(anyhow::anyhow!("smb session remained busy for too long"));
+                invalidate_session();
+                continue;
+            }
+        };
         let SmbSessionInner { client, tree } = &*guard;
         let open_result =
             tokio::time::timeout(SETUP_TIMEOUT, client.open_file_reader(tree, path)).await;
         drop(guard);
         match open_result {
-            Ok(Ok(reader)) => return Ok(reader),
+            Ok(Ok(reader)) => {
+                sess.touch();
+                return Ok(reader);
+            }
             Ok(Err(e)) => last_error = Some(e.into()),
             Err(_) => last_error = Some(anyhow::anyhow!("smb open file timed out")),
         }
@@ -455,6 +611,21 @@ static TOKEN_SEQ: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_STREAMS: Lazy<Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static STREAM_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// A loopback listener can disappear after an iOS background/foreground cycle
+/// or a runtime-level socket error.  `PROXY_PORT` is only a cached number, so
+/// verify that it still accepts connections before handing it to libmpv.
+fn proxy_is_alive(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250)).is_ok()
+}
+
+/// Clear the cached port only if it still refers to this exact listener.  An
+/// older accept task must never erase a newer listener that was started after
+/// it failed.
+fn clear_proxy_port(port: u16) {
+    let _ = PROXY_PORT.compare_exchange(port, 0, Ordering::AcqRel, Ordering::Acquire);
+}
 
 /// Ask every active stream to finish its async SMB close before it exits.
 /// Called whenever an episode token is released.
@@ -503,25 +674,38 @@ pub fn unregister_playable(url: &str) {
 /// its port. Synchronous: binds with std then hands the listener to `PROXY_RT`,
 /// so it never runs the accept/serve loop on the shared `RT`.
 fn ensure_proxy() -> Result<u16> {
-    let existing = PROXY_PORT.load(Ordering::Relaxed);
-    if existing != 0 {
+    let existing = PROXY_PORT.load(Ordering::Acquire);
+    if existing != 0 && proxy_is_alive(existing) {
         return Ok(existing);
+    }
+    if existing != 0 {
+        clear_proxy_port(existing);
     }
     let _guard = PROXY_INIT.lock().unwrap();
     // Re-check under the lock: another caller may have started it while we waited.
-    let existing = PROXY_PORT.load(Ordering::Relaxed);
-    if existing != 0 {
+    let existing = PROXY_PORT.load(Ordering::Acquire);
+    if existing != 0 && proxy_is_alive(existing) {
         return Ok(existing);
+    }
+    if existing != 0 {
+        clear_proxy_port(existing);
     }
     let std_listener = std::net::TcpListener::bind("127.0.0.1:0").context("bind proxy")?;
     std_listener
         .set_nonblocking(true)
         .context("proxy listener nonblocking")?;
     let port = std_listener.local_addr()?.port();
+    // Publish before spawning, so an immediately-failing task can reliably
+    // clear its own port.  The already-bound socket accepts a health probe even
+    // while Tokio is scheduling the accept loop.
+    PROXY_PORT.store(port, Ordering::Release);
     PROXY_RT.spawn(async move {
         let listener = match TcpListener::from_std(std_listener) {
             Ok(l) => l,
-            Err(_) => return,
+            Err(_) => {
+                clear_proxy_port(port);
+                return;
+            }
         };
         loop {
             match listener.accept().await {
@@ -538,11 +722,13 @@ fn ensure_proxy() -> Result<u16> {
                     drop(jh);
                     ACTIVE_STREAMS.lock().unwrap().insert(id, cancel_tx);
                 }
-                Err(_) => break,
+                Err(_) => {
+                    clear_proxy_port(port);
+                    break;
+                }
             }
         }
     });
-    PROXY_PORT.store(port, Ordering::Relaxed);
     Ok(port)
 }
 
@@ -838,7 +1024,22 @@ pub async fn download(
                 anyhow::bail!("下载已取消");
             }
             let want = CHUNK.min(total - off);
-            let data = reader.read_at(off, want).await.context("smb read")?;
+            let data = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                reader.read_at(off, want),
+            )
+            .await
+            {
+                Ok(Ok(data)) => data,
+                Ok(Err(error)) => {
+                    invalidate_session();
+                    return Err(error).context("smb read");
+                }
+                Err(_) => {
+                    invalidate_session();
+                    anyhow::bail!("smb download read timed out")
+                }
+            };
             if data.is_empty() {
                 break;
             }

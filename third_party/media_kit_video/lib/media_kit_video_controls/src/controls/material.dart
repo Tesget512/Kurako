@@ -5,8 +5,10 @@
 /// Use of this source code is governed by MIT license that can be found in the LICENSE file.
 // ignore_for_file: non_constant_identifier_names
 import 'dart:async';
+import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:media_kit_video/media_kit_video_controls/src/controls/extensions/duration.dart';
 import 'package:media_kit_video/media_kit_video_controls/src/controls/methods/video_state.dart';
@@ -133,6 +135,13 @@ class MaterialVideoControlsThemeData {
   /// Whether to allow gesture controls to work while controls are visible.
   /// NOTE: This option is ignored when gestures are false.
   final bool gesturesEnabledWhileControlsVisible;
+
+  /// Disables every built-in touch control and gesture while the embedding
+  /// application displays its own unlock affordance.  This is intentionally a
+  /// controls-theme option rather than an [IgnorePointer] around [Video], so
+  /// the video surface keeps rendering normally and the host can place an
+  /// unlock button above it.
+  final bool controlsLocked;
 
   /// Whether to enable double tap to seek on left or right side of the screen.
   final bool seekOnDoubleTap;
@@ -284,6 +293,7 @@ class MaterialVideoControlsThemeData {
     this.brightnessGesture = false,
     this.seekGesture = false,
     this.gesturesEnabledWhileControlsVisible = true,
+    this.controlsLocked = false,
     this.seekOnDoubleTap = false,
     this.seekOnDoubleTapEnabledWhileControlsVisible = true,
     this.seekOnDoubleTapLayoutTapsRatios = const [1, 1, 1],
@@ -345,6 +355,7 @@ class MaterialVideoControlsThemeData {
     bool? brightnessGesture,
     bool? seekGesture,
     bool? gesturesEnabledWhileControlsVisible,
+    bool? controlsLocked,
     bool? seekOnDoubleTap,
     bool? seekOnDoubleTapEnabledWhileControlsVisible,
     List<int>? seekOnDoubleTapLayoutTapsRatios,
@@ -396,6 +407,7 @@ class MaterialVideoControlsThemeData {
       gesturesEnabledWhileControlsVisible:
           gesturesEnabledWhileControlsVisible ??
               this.gesturesEnabledWhileControlsVisible,
+      controlsLocked: controlsLocked ?? this.controlsLocked,
       seekOnDoubleTap: seekOnDoubleTap ?? this.seekOnDoubleTap,
       seekOnDoubleTapEnabledWhileControlsVisible:
           seekOnDoubleTapEnabledWhileControlsVisible ??
@@ -543,10 +555,34 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
           ? _theme(context).buttonBarHeight
           : 0.0);
   Offset? _tapPosition;
+  bool _doubleTapWasMouse = false;
 
   void _handleDoubleTapDown(TapDownDetails details) {
     setState(() {
       _tapPosition = details.localPosition;
+      _doubleTapWasMouse = details.kind == PointerDeviceKind.mouse;
+    });
+  }
+
+  /// Make the compact touch-style controls behave naturally with a mouse too:
+  /// moving a pointer reveals the bars, while a mouse double-click keeps the
+  /// conventional play/pause meaning instead of turning into a touch seek.
+  void showControls() {
+    if (!visible) {
+      setState(() {
+        mount = true;
+        visible = true;
+      });
+      shiftSubtitle();
+    }
+    _timer?.cancel();
+    _timer = Timer(_theme(context).controlsHoverDuration, () {
+      if (mounted) {
+        setState(() {
+          visible = false;
+        });
+        unshiftSubtitle();
+      }
     });
   }
 
@@ -654,20 +690,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
 
   void onTap() {
     if (!visible) {
-      setState(() {
-        mount = true;
-        visible = true;
-      });
-      shiftSubtitle();
-      _timer?.cancel();
-      _timer = Timer(_theme(context).controlsHoverDuration, () {
-        if (mounted) {
-          setState(() {
-            visible = false;
-          });
-          unshiftSubtitle();
-        }
-      });
+      showControls();
     } else {
       setState(() {
         visible = false;
@@ -687,6 +710,42 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     setState(() {
       _mountSeekForwardButton = true;
     });
+  }
+
+  /// Shared keyboard behavior for iPad/Android hardware keyboards and desktop
+  /// PCs. It is intentionally attached to the same controls implementation as
+  /// touch, so switching input devices never switches the player's UI model.
+  KeyEventResult _handleKeyEvent(FocusNode _, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final player = controller(context).player;
+    final position = player.state.position;
+    final duration = player.state.duration;
+
+    Duration clampPosition(Duration value) {
+      if (value < Duration.zero) return Duration.zero;
+      if (duration > Duration.zero && value > duration) return duration;
+      return value;
+    }
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.space ||
+        key == LogicalKeyboardKey.mediaPlayPause) {
+      player.playOrPause();
+    } else if (key == LogicalKeyboardKey.arrowLeft ||
+        key == LogicalKeyboardKey.keyJ) {
+      player.seek(clampPosition(position - const Duration(seconds: 5)));
+    } else if (key == LogicalKeyboardKey.arrowRight ||
+        key == LogicalKeyboardKey.keyL) {
+      player.seek(clampPosition(position + const Duration(seconds: 5)));
+    } else if (key == LogicalKeyboardKey.arrowUp) {
+      player.setVolume((player.state.volume + 5.0).clamp(0.0, 100.0));
+    } else if (key == LogicalKeyboardKey.arrowDown) {
+      player.setVolume((player.state.volume - 5.0).clamp(0.0, 100.0));
+    } else {
+      return KeyEventResult.ignored;
+    }
+    showControls();
+    return KeyEventResult.handled;
   }
 
   void onHorizontalDragUpdate(DragUpdateDetails details) {
@@ -847,6 +906,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
 
   @override
   Widget build(BuildContext context) {
+    final controlsLocked = _theme(context).controlsLocked;
     var seekOnDoubleTapEnabledWhileControlsAreVisible =
         (_theme(context).seekOnDoubleTap &&
             _theme(context).seekOnDoubleTapEnabledWhileControlsVisible);
@@ -868,6 +928,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
         child: Focus(
           focusNode: videoViewParametersNotifier(context).value.focusNode,
           autofocus: true,
+          onKeyEvent: controlsLocked ? null : _handleKeyEvent,
           child: Material(
             elevation: 0.0,
             borderOnForeground: false,
@@ -882,7 +943,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                 // Controls:
                 AnimatedOpacity(
                   curve: Curves.easeInOut,
-                  opacity: visible ? 1.0 : 0.0,
+                  opacity: visible && !controlsLocked ? 1.0 : 0.0,
                   duration: _theme(context).controlsTransitionDuration,
                   onEnd: () {
                     setState(() {
@@ -907,89 +968,123 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                         top: 16.0,
                         right: 16.0,
                         bottom: 16.0 + subtitleVerticalShiftOffset,
-                        child: GestureDetector(
-                          // Let Flutter disambiguate a single tap from a
-                          // double tap. The old PointerDown listener showed
-                          // controls before the second tap arrived, making
-                          // every quick-seek non-immersive.
-                          onTap: onTap,
-                          onDoubleTapDown: _handleDoubleTapDown,
-                          onLongPress: _theme(context).speedUpOnLongPress
-                              ? _handleLongPress
-                              : null,
-                          onLongPressEnd: _theme(context).speedUpOnLongPress
-                              ? _handleLongPressEnd
-                              : null,
-                          onDoubleTap: () {
-                            if (_tapPosition == null) {
-                              return;
-                            }
-                            if (_isInRightSegment(_tapPosition!.dx)) {
-                              if ((!mount && _theme(context).seekOnDoubleTap) ||
-                                  seekOnDoubleTapEnabledWhileControlsAreVisible) {
-                                onDoubleTapSeekForward();
-                              }
-                            } else {
-                              if (_isInLeftSegment(_tapPosition!.dx)) {
-                                if ((!mount &&
-                                        _theme(context).seekOnDoubleTap) ||
-                                    seekOnDoubleTapEnabledWhileControlsAreVisible) {
-                                  onDoubleTapSeekBackward();
-                                }
-                              }
-                            }
-                          },
-                          onHorizontalDragUpdate: (details) {
-                            if ((!mount && _theme(context).seekGesture) ||
-                                (_theme(context).seekGesture &&
-                                    _theme(context)
-                                        .gesturesEnabledWhileControlsVisible)) {
-                              onHorizontalDragUpdate(details);
-                            }
-                          },
-                          onHorizontalDragEnd: (details) {
-                            onHorizontalDragEnd();
-                          },
-                          onVerticalDragUpdate: (e) async {
-                            final delta = e.delta.dy;
-                            final Offset position = e.localPosition;
+                        child: MouseRegion(
+                          onHover:
+                              controlsLocked ? null : (_) => showControls(),
+                          child: GestureDetector(
+                            // Let Flutter disambiguate a single tap from a
+                            // double tap. The old PointerDown listener showed
+                            // controls before the second tap arrived, making
+                            // every quick-seek non-immersive.
+                            onTap: controlsLocked ? null : onTap,
+                            onDoubleTapDown:
+                                controlsLocked ? null : _handleDoubleTapDown,
+                            onLongPress: !controlsLocked &&
+                                    _theme(context).speedUpOnLongPress
+                                ? _handleLongPress
+                                : null,
+                            onLongPressEnd: !controlsLocked &&
+                                    _theme(context).speedUpOnLongPress
+                                ? _handleLongPressEnd
+                                : null,
+                            onDoubleTap: controlsLocked
+                                ? null
+                                : () {
+                                    if (_tapPosition == null) {
+                                      return;
+                                    }
+                                    if (_doubleTapWasMouse) {
+                                      controller(context).player.playOrPause();
+                                      return;
+                                    }
+                                    // Mirror the touch layout used by PiliPlus:
+                                    // left quarter = seek back, central half =
+                                    // play/pause, right quarter = seek forward.  The
+                                    // upstream controls only acted on the outer two
+                                    // segments, so a double-tap in the centre did
+                                    // nothing at all.
+                                    if (_isInRightSegment(_tapPosition!.dx)) {
+                                      if ((!mount &&
+                                              _theme(context)
+                                                  .seekOnDoubleTap) ||
+                                          seekOnDoubleTapEnabledWhileControlsAreVisible) {
+                                        onDoubleTapSeekForward();
+                                      }
+                                    } else if (_isInLeftSegment(
+                                        _tapPosition!.dx)) {
+                                      if ((!mount &&
+                                              _theme(context)
+                                                  .seekOnDoubleTap) ||
+                                          seekOnDoubleTapEnabledWhileControlsAreVisible) {
+                                        onDoubleTapSeekBackward();
+                                      }
+                                    } else {
+                                      controller(context).player.playOrPause();
+                                    }
+                                  },
+                            onHorizontalDragUpdate: controlsLocked
+                                ? null
+                                : (details) {
+                                    if ((!mount &&
+                                            _theme(context).seekGesture) ||
+                                        (_theme(context).seekGesture &&
+                                            _theme(context)
+                                                .gesturesEnabledWhileControlsVisible)) {
+                                      onHorizontalDragUpdate(details);
+                                    }
+                                  },
+                            onHorizontalDragEnd: controlsLocked
+                                ? null
+                                : (details) {
+                                    onHorizontalDragEnd();
+                                  },
+                            onVerticalDragUpdate: controlsLocked
+                                ? null
+                                : (e) async {
+                                    final delta = e.delta.dy;
+                                    final Offset position = e.localPosition;
 
-                            if (position.dx <= widgetWidth(context) / 2) {
-                              // Left side of screen swiped
-                              if ((!mount &&
-                                      _theme(context).brightnessGesture) ||
-                                  (_theme(context).brightnessGesture &&
-                                      _theme(context)
-                                          .gesturesEnabledWhileControlsVisible)) {
-                                final brightness = _brightnessValue -
-                                    delta /
-                                        _theme(context)
-                                            .verticalGestureSensitivity;
-                                final result = brightness.clamp(0.0, 1.0);
-                                setBrightness(result);
-                              }
-                            } else {
-                              // Right side of screen swiped
+                                    if (position.dx <=
+                                        widgetWidth(context) / 2) {
+                                      // Left side of screen swiped
+                                      if ((!mount &&
+                                              _theme(context)
+                                                  .brightnessGesture) ||
+                                          (_theme(context).brightnessGesture &&
+                                              _theme(context)
+                                                  .gesturesEnabledWhileControlsVisible)) {
+                                        final brightness = _brightnessValue -
+                                            delta /
+                                                _theme(context)
+                                                    .verticalGestureSensitivity;
+                                        final result =
+                                            brightness.clamp(0.0, 1.0);
+                                        setBrightness(result);
+                                      }
+                                    } else {
+                                      // Right side of screen swiped
 
-                              if ((!mount && _theme(context).volumeGesture) ||
-                                  (_theme(context).volumeGesture &&
-                                      _theme(context)
-                                          .gesturesEnabledWhileControlsVisible)) {
-                                final volume = _volumeValue -
-                                    delta /
-                                        _theme(context)
-                                            .verticalGestureSensitivity;
-                                final result = volume.clamp(0.0, 1.0);
-                                setVolume(result);
-                              }
-                            }
-                          },
-                          child: Container(
-                            color: const Color(0x00000000),
+                                      if ((!mount &&
+                                              _theme(context).volumeGesture) ||
+                                          (_theme(context).volumeGesture &&
+                                              _theme(context)
+                                                  .gesturesEnabledWhileControlsVisible)) {
+                                        final volume = _volumeValue -
+                                            delta /
+                                                _theme(context)
+                                                    .verticalGestureSensitivity;
+                                        final result = volume.clamp(0.0, 1.0);
+                                        setVolume(result);
+                                      }
+                                    }
+                                  },
+                            child: Container(
+                              color: const Color(0x00000000),
+                            ),
                           ),
                         ),
                       ),
-                      if (mount)
+                      if (mount && !controlsLocked)
                         Padding(
                           padding: _theme(context).padding ??
                               (
@@ -1076,7 +1171,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                   ),
                 ),
                 // Double-Tap Seek Seek-Bar:
-                if (!mount)
+                if (!mount && !controlsLocked)
                   if (_mountSeekBackwardButton ||
                       _mountSeekForwardButton ||
                       showSwipeDuration)

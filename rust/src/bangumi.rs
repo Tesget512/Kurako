@@ -28,7 +28,7 @@ fn api_base() -> &'static str {
         BASE_OFFICIAL
     }
 }
-const USER_AGENT: &str = "KURAKO/1.0";
+const USER_AGENT: &str = "Kurako/1.0";
 
 // Bangumi OAuth application credentials. The real values live in the
 // git-ignored `secrets.rs` (copy `secrets.rs.example` → `secrets.rs`). A desktop
@@ -39,7 +39,13 @@ const USER_AGENT: &str = "KURAKO/1.0";
 mod secrets;
 pub use secrets::{OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET};
 /// Must match the "回调地址" registered on the developer console.
-pub const OAUTH_REDIRECT_URI: &str = "http://localhost:6420/callback";
+/// The single callback URL registered for the KURAKO OAuth application.
+///
+/// A loopback HTTP callback works on an active desktop process but is not
+/// reliable on iOS/iPadOS: launching the browser suspends the app that owns the
+/// temporary local server.  A custom scheme lets the OS hand the completed
+/// authorization straight back to the active authentication session instead.
+pub const OAUTH_REDIRECT_URI: &str = "kurako://oauth/callback";
 
 static TOKEN: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 /// Cached username of the logged-in user. The collection *read* endpoints
@@ -1234,11 +1240,11 @@ mod match_tests {
     }
 
     #[test]
-    fn oauth_authorize_url_keeps_encoded_loopback_redirect() {
-        let url = authorize_url("client id", "http://localhost:6420/callback");
+    fn oauth_authorize_url_keeps_encoded_custom_scheme_redirect() {
+        let url = authorize_url("client id", "kurako://oauth/callback");
         assert_eq!(
             url,
-            "https://bgm.tv/oauth/authorize?client_id=client%20id&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A6420%2Fcallback"
+            "https://bgm.tv/oauth/authorize?client_id=client%20id&response_type=code&redirect_uri=kurako%3A%2F%2Foauth%2Fcallback"
         );
     }
 

@@ -40,9 +40,9 @@ class _HomePageState extends ConsumerState<HomePage> {
       final n = await rust.refreshAllMetadata();
       if (!mounted || n <= 0) return;
       ref.invalidate(animeListProvider);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已自动更新 $n 部番剧的 Bangumi 元数据')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('已自动更新 $n 部番剧的 Bangumi 元数据')));
     } catch (_) {
       _metadataRefreshedThisRun = false;
     }
@@ -80,7 +80,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       return Scaffold(
         body: Column(
           children: [
-            const WindowCaption(title: 'KURAKO'),
+            const WindowCaption(title: 'Kurako'),
             Expanded(
               child: Row(
                 children: [
@@ -102,8 +102,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                             selectedIcon: settings.$2,
                             label: settings.$3,
                             selected: _index == settingsIndex,
-                            onTap: () =>
-                                setState(() => _index = settingsIndex),
+                            onTap: () => setState(() => _index = settingsIndex),
                           ),
                         ),
                       ),
@@ -122,7 +121,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     return Scaffold(
       body: Column(
         children: [
-          const WindowCaption(title: 'KURAKO'),
+          const WindowCaption(title: 'Kurako'),
           Expanded(child: body),
         ],
       ),
@@ -186,8 +185,8 @@ class _BottomRailButton extends StatelessWidget {
             Text(
               label,
               style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                    color: selected ? cs.onSurface : cs.onSurfaceVariant,
-                  ),
+                color: selected ? cs.onSurface : cs.onSurfaceVariant,
+              ),
             ),
           ],
         ),

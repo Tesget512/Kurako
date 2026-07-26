@@ -1,0 +1,93 @@
+name: Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      official_release:
+        description: Build an officially signed Release APK (repository secrets required)
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  development-apk:
+    name: Development APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - name: Use public OAuth build placeholders
+        run: cp rust/src/secrets.rs.example rust/src/secrets.rs
+      - run: flutter pub get
+      - run: flutter build apk --debug --split-per-abi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kurako-dev-apk
+          path: build/app/outputs/flutter-apk/*-debug.apk
+
+  official-release:
+    name: Official signed Release APK
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.official_release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - run: flutter pub get
+      - name: Require private signing secrets
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          BANGUMI_CLIENT_ID: ${{ secrets.BANGUMI_CLIENT_ID }}
+          BANGUMI_CLIENT_SECRET: ${{ secrets.BANGUMI_CLIENT_SECRET }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64"
+          test -n "$ANDROID_STORE_PASSWORD"
+          test -n "$ANDROID_KEY_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$BANGUMI_CLIENT_ID"
+          test -n "$BANGUMI_CLIENT_SECRET"
+      - name: Restore private signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          BANGUMI_CLIENT_ID: ${{ secrets.BANGUMI_CLIENT_ID }}
+          BANGUMI_CLIENT_SECRET: ${{ secrets.BANGUMI_CLIENT_SECRET }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/kurako-release.jks"
+          cat > android/key.properties <<EOF
+          storeFile=$RUNNER_TEMP/kurako-release.jks
+          storePassword=$ANDROID_STORE_PASSWORD
+          keyPassword=$ANDROID_KEY_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          EOF
+          cat > rust/src/secrets.rs <<EOF
+          pub const OAUTH_CLIENT_ID: &str = "$BANGUMI_CLIENT_ID";
+          pub const OAUTH_CLIENT_SECRET: &str = "$BANGUMI_CLIENT_SECRET";
+          EOF
+      - run: flutter build apk --release --split-per-abi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kurako-official-release-apk
+          path: build/app/outputs/flutter-apk/*-release.apk

@@ -1,3 +1,13 @@
+import java.util.Properties
+
+val signingProperties = Properties()
+val signingPropertiesFile = rootProject.file("key.properties")
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.inputStream().use(signingProperties::load)
+}
+val hasOfficialSigning = listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+    .all { !signingProperties.getProperty(it).isNullOrBlank() }
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -24,13 +34,45 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        manifestPlaceholders["appLabel"] = "Kurako"
+    }
+
+    signingConfigs {
+        if (hasOfficialSigning) {
+            create("officialRelease") {
+                storeFile = file(signingProperties.getProperty("storeFile"))
+                storePassword = signingProperties.getProperty("storePassword")
+                keyAlias = signingProperties.getProperty("keyAlias")
+                keyPassword = signingProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
+        getByName("debug") {
+            // Builds made by contributors can coexist with the official app;
+            // their debug key can never replace the official Release APK.
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Kurako Dev"
+        }
+        getByName("profile") {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            manifestPlaceholders["appLabel"] = "Kurako Dev"
+        }
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            if (hasOfficialSigning) {
+                signingConfig = signingConfigs.getByName("officialRelease")
+            } else {
+                // A source checkout without the private key must not create a
+                // misleading APK with the official package id. It remains a
+                // separately installable development build instead.
+                signingConfig = signingConfigs.getByName("debug")
+                applicationIdSuffix = ".dev"
+                versionNameSuffix = "-dev"
+                manifestPlaceholders["appLabel"] = "Kurako Dev"
+            }
         }
     }
 }
