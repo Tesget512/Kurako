@@ -76,28 +76,6 @@ pub struct ScannedFile {
     pub relative_parent: String,
 }
 
-/// An SMB server found on the current private IPv4 network. Discovery only
-/// proves that TCP/445 is reachable; authentication happens separately.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmbServer {
-    pub host: String,
-}
-
-/// A disk share exposed by an authenticated SMB server.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmbShare {
-    pub name: String,
-    pub comment: String,
-}
-
-/// A directory available below the currently authenticated SMB share.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmbDirectory {
-    /// Share-relative path, with `/` separators. Empty means the share root.
-    pub path: String,
-    pub name: String,
-}
-
 /// A Bangumi search candidate, shown in the manual-correction dialog.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BangumiSubject {

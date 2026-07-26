@@ -30,7 +30,17 @@ class _Chapter {
 
 /// Which panel the right-side drawer shows. All the player's secondary menus
 /// (previously bottom sheets / a broken popup) share one endDrawer.
-enum _Panel { menu, episodes, tracks, rate, seek, subDelay, info, chapters }
+enum _Panel {
+  menu,
+  episodes,
+  tracks,
+  rate,
+  seek,
+  subDelay,
+  superResolution,
+  info,
+  chapters,
+}
 
 class PlayerPage extends ConsumerStatefulWidget {
   /// The full playlist and the index to start at, so 上/下集 and autoplay work.
@@ -90,6 +100,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Timer? _saveTimer;
   bool _controlsLocked = false;
   bool _takingScreenshot = false;
+  bool _playTogglePending = false;
   bool _reportedSuperResolutionFailure = false;
   int _positionMs = 0;
   int _durationMs = 0;
@@ -297,17 +308,34 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // usable) so an enabled preference is never mistaken for the default off.
     await ref.read(settingsProvider.notifier).ready;
     if (seq != _openSeq) return;
-    final mode = ref.read(settingsProvider).superResolutionMode;
+    await _applySuperResolutionMode(
+      ref.read(settingsProvider).superResolutionMode,
+      seq: seq,
+    );
+  }
+
+  Future<void> _applySuperResolutionMode(String mode, {int? seq}) async {
     try {
+      if (seq != null && seq != _openSeq) return;
       final platform = _player.platform;
       if (platform is! NativePlayer) {
         throw StateError('当前播放器后端不支持 GLSL 着色器');
       }
-      if (mode == 'anime4k-lite') {
+      if (mode != 'off') {
         final directory = await Anime4kShaderAssets.ensureInstalled();
-        if (seq != _openSeq) return;
+        if (seq != null && seq != _openSeq) return;
         final separator = Platform.isWindows ? ';' : ':';
-        final shaderPaths = Anime4kShaderAssets.liteShaderOrder
+        final shaders = switch (mode) {
+          'anime4k-light' => Anime4kShaderAssets.lightShaderOrder,
+          'anime4k-balanced' ||
+          'anime4k-lite' => Anime4kShaderAssets.balancedShaderOrder,
+          _ => const <String>[],
+        };
+        if (shaders.isEmpty) {
+          await platform.command(['change-list', 'glsl-shaders', 'clr', '']);
+          return;
+        }
+        final shaderPaths = shaders
             .map((name) => p.join(directory.path, name))
             .join(separator);
         await platform.command([
@@ -323,9 +351,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Keep playback usable if a platform's libmpv build or its current GPU
       // renderer cannot compile GLSL. This covers renderers that use a
       // hardware overlay instead of an mpv GPU surface.
-      if (mode == 'anime4k-lite' &&
+      if (mode != 'off' &&
           mounted &&
-          seq == _openSeq &&
+          (seq == null || seq == _openSeq) &&
           !_reportedSuperResolutionFailure) {
         _reportedSuperResolutionFailure = true;
         ScaffoldMessenger.of(context).showSnackBar(
@@ -701,9 +729,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// separate optimistic boolean here made the first tap permanently display
   /// the wrong glyph on some mobile backends.
   Future<void> _togglePlaying() async {
+    if (_playTogglePending) return;
+    _playTogglePending = true;
     try {
-      await _player.playOrPause();
-    } catch (_) {}
+      if (_player.state.playing) {
+        await _player.pause();
+      } else {
+        await _player.play();
+      }
+    } catch (_) {
+    } finally {
+      _playTogglePending = false;
+    }
   }
 
   Future<void> _setSubDelay(double seconds) async {
@@ -836,6 +873,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _Panel.rate => (Icons.speed, '播放速度', _ratePanel()),
       _Panel.seek => (Icons.fast_forward, '快进时长', _seekPanel()),
       _Panel.subDelay => (Icons.more_time, '字幕延迟', _subDelayPanel()),
+      _Panel.superResolution => (
+        Icons.auto_fix_high,
+        'Anime4K 超分辨率',
+        _superResolutionPanel(),
+      ),
       _Panel.info => (Icons.info_outline, '播放信息', _infoPanel()),
       _Panel.chapters => (Icons.bookmarks, '章节', _chaptersPanel()),
     };
@@ -903,6 +945,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       children: [
         tile(Icons.subtitles_outlined, '字幕 / 音轨', _Panel.tracks),
         tile(Icons.more_time_outlined, '字幕延迟', _Panel.subDelay),
+        tile(Icons.auto_fix_high, 'Anime4K 超分辨率', _Panel.superResolution),
         tile(Icons.info_outline, '播放信息', _Panel.info),
         if (_chapters.isNotEmpty)
           tile(Icons.bookmarks_outlined, '章节', _Panel.chapters),
@@ -1186,22 +1229,27 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
-  /// Directional scrims keep the title, transport controls and progress text
-  /// legible over white subtitles/bright frames without reviving the old full
-  /// screen YouTube-style dimmer.
+  /// PiliPlus' control bars use an edge-to-transparent gradient inside the
+  /// same animated controls subtree. This makes the mask appear and disappear
+  /// with media_kit itself, without a second timer or an opaque rectangular
+  /// background behind the whole bar.
   Widget _readableBar({required Widget child, required bool top}) =>
       DecoratedBox(
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: top ? Alignment.topCenter : Alignment.bottomCenter,
             end: top ? Alignment.bottomCenter : Alignment.topCenter,
-            colors: const [Color(0xD9000000), Color(0xA6000000)],
+            // Same directional construction as PiliPlus AppBarAni: dark at
+            // the physical edge, then smoothly disappears into the picture.
+            colors: const [Color(0xBF000000), Color(0x00000000)],
           ),
-          boxShadow: const [
-            BoxShadow(color: Color(0x80000000), blurRadius: 10),
-          ],
         ),
-        child: child,
+        child: DefaultTextStyle.merge(
+          style: const TextStyle(
+            shadows: [Shadow(color: Color(0xBB000000), blurRadius: 4)],
+          ),
+          child: child,
+        ),
       );
 
   Widget _readableTopBar() => _readableBar(
@@ -1281,19 +1329,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Widget _touchTransportGroup() => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      StreamBuilder<bool>(
-        stream: _player.stream.playing,
-        initialData: _player.state.playing,
-        builder: (context, snapshot) {
-          final playing = snapshot.data ?? _player.state.playing;
-          return _compactTouchButton(
-            icon: playing ? Icons.pause : Icons.play_arrow,
-            iconSize: 29,
-            tooltip: playing ? '暂停' : '播放',
-            onTap: _togglePlaying,
-          );
-        },
-      ),
+      _PlayerPlayPauseButton(player: _player, onTap: _togglePlaying),
       const SizedBox(width: 3),
       const MaterialPositionIndicator(
         style: TextStyle(color: Colors.white, fontSize: 12, height: 1),
@@ -1462,6 +1498,49 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _superResolutionPanel() {
+    final cs = _cs;
+    final mode = ref.watch(settingsProvider).superResolutionMode;
+    const options = <(String, String, String)>[
+      ('off', '关闭', '不使用额外图像着色器，负载最低'),
+      ('anime4k-light', '轻度', '较少的修复与缩放着色器，适合手机和平板'),
+      ('anime4k-balanced', '标准', '更多修复与缩放着色器，GPU 负载、发热与耗电更高'),
+    ];
+    return ListView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+          child: Text(
+            '强度越高越可能增加耗电、发热与掉帧；播放不流畅时请改为轻度或关闭。切换会直接应用到当前视频，不会重新连接 SMB。',
+            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+          ),
+        ),
+        for (final option in options)
+          ListTile(
+            leading: option.$1 == mode
+                ? Icon(Icons.check_circle, color: cs.primary)
+                : const Icon(Icons.radio_button_unchecked),
+            title: Text(option.$2, style: TextStyle(color: cs.onSurface)),
+            subtitle: Text(
+              option.$3,
+              style: TextStyle(color: cs.onSurfaceVariant, fontSize: 12),
+            ),
+            selected: option.$1 == mode,
+            selectedTileColor: cs.secondaryContainer,
+            onTap: () async {
+              if (option.$1 == mode) return;
+              await ref
+                  .read(settingsProvider.notifier)
+                  .setSuperResolutionMode(option.$1);
+              await _applySuperResolutionMode(option.$1);
+              if (mounted) setState(() {});
+            },
+          ),
+      ],
     );
   }
 
@@ -1762,6 +1841,66 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (parts.isEmpty) return '轨道 $id';
     return parts.join(' · ');
   }
+}
+
+class _PlayerPlayPauseButton extends StatefulWidget {
+  final Player player;
+  final Future<void> Function() onTap;
+  const _PlayerPlayPauseButton({required this.player, required this.onTap});
+
+  @override
+  State<_PlayerPlayPauseButton> createState() => _PlayerPlayPauseButtonState();
+}
+
+class _PlayerPlayPauseButtonState extends State<_PlayerPlayPauseButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _animation;
+  late final StreamSubscription<bool> _subscription;
+  late bool _playing = widget.player.state.playing;
+
+  @override
+  void initState() {
+    super.initState();
+    _animation = AnimationController(
+      vsync: this,
+      value: _playing ? 1 : 0,
+      duration: const Duration(milliseconds: 200),
+    );
+    _subscription = widget.player.stream.playing.listen((playing) {
+      if (!mounted) return;
+      setState(() => _playing = playing);
+      playing ? _animation.forward() : _animation.reverse();
+    });
+  }
+
+  @override
+  void dispose() {
+    _subscription.cancel();
+    _animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: _playing ? '暂停' : '播放',
+    child: SizedBox(
+      width: 36,
+      height: 30,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => widget.onTap(),
+        child: Center(
+          child: AnimatedIcon(
+            icon: AnimatedIcons.play_pause,
+            progress: _animation,
+            color: Colors.white,
+            size: 27,
+            semanticLabel: _playing ? '暂停' : '播放',
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 /// Live playback-info panel: video/audio parameters, decoder state, and — for

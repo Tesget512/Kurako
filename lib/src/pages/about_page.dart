@@ -38,27 +38,66 @@ class AboutPage extends StatelessWidget {
           ).showSnackBar(const SnackBar(content: Text('GitHub 项目主页尚未配置'))),
         ),
         const Divider(height: 32),
-        const ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.favorite_outline),
-          title: Text('致谢'),
-          subtitle: Text(
-            '详情页设计参考 Kazumi（GPL-3.0）；\n'
-            '元数据来自 Bangumi 番组计划；镜像由 bangumi-proxy 提供。',
+        const _Acknowledgements(),
+      ],
+    ),
+  );
+}
+
+class _Acknowledgements extends StatelessWidget {
+  const _Acknowledgements();
+
+  @override
+  Widget build(BuildContext context) => const Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      ListTile(
+        contentPadding: EdgeInsets.zero,
+        leading: Icon(Icons.favorite_outline),
+        title: Text('致谢'),
+        subtitle: Text('Kurako 建立在开源软件与公共服务之上。'),
+      ),
+      _AcknowledgementGroup(
+        title: '应用与界面参考',
+        entries: ['Kazumi — 详情页布局灵感（GPL-3.0）', 'PiliPlus — 播放器交互参考（GPL-3.0）'],
+      ),
+      _AcknowledgementGroup(
+        title: '播放与图像',
+        entries: ['media_kit / mpv — 跨平台视频播放', 'Anime4K（bloc97）— 超分辨率着色器'],
+      ),
+      _AcknowledgementGroup(
+        title: '数据与网络服务',
+        entries: [
+          'Bangumi 番组计划 — 番剧元数据与评分',
+          'bangumi-proxy（Yuri-NagaSaki）— 大陆可达镜像',
+        ],
+      ),
+      _AcknowledgementGroup(
+        title: '跨平台基础',
+        entries: ['Flutter — 应用界面', 'Rust / flutter_rust_bridge — 跨平台核心与桥接'],
+      ),
+    ],
+  );
+}
+
+class _AcknowledgementGroup extends StatelessWidget {
+  final String title;
+  final List<String> entries;
+  const _AcknowledgementGroup({required this.title, required this.entries});
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 16),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        for (final entry in entries)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(entry),
           ),
-        ),
-        const Padding(
-          padding: EdgeInsets.only(top: 8),
-          child: Text(
-            '感谢以下开源项目与服务：\n\n'
-            '• Kazumi — 详情页布局灵感\n'
-            '• Bangumi 番组计划 — 番剧元数据与评分\n'
-            '• bangumi-proxy (Yuri-NagaSaki) — 大陆可达镜像\n'
-            '• Anime4K (bloc97) — 超分辨率着色器\n'
-            '• media_kit / mpv — 视频播放\n'
-            '• flutter_rust_bridge — Dart ↔ Rust 桥接',
-          ),
-        ),
       ],
     ),
   );

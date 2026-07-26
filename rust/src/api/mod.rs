@@ -1,7 +1,7 @@
 use crate::frb_generated::StreamSink;
 use crate::models::{
     Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode, LibraryFolder,
-    ScanProgress, SmbDirectory, SmbServer, SmbShare, SubtitleCandidate,
+    ScanProgress, SubtitleCandidate,
 };
 use crate::{bangumi, db, scan, sidecar, smb};
 use flutter_rust_bridge::frb;
@@ -279,29 +279,6 @@ fn smb_subdir_of(path: &str) -> String {
 }
 
 // ---- SMB network share ----
-
-/// Scan the current private LAN for hosts that accept SMB connections.
-pub fn smb_discover_servers() -> Vec<SmbServer> {
-    RT.block_on(async { smb::discover_servers().await })
-}
-
-/// List shares advertised by an authenticated SMB server. NAS devices that
-/// disable the standard srvsvc RPC may return an error; the UI then permits a
-/// manual share name.
-pub fn smb_list_shares(
-    host: String,
-    user: String,
-    password: String,
-) -> Result<Vec<SmbShare>, String> {
-    RT.block_on(async { smb::list_shares(&host, &user, &password).await })
-        .map_err(|e| e.to_string())
-}
-
-/// List child folders below an authenticated share for the multi-select picker.
-pub fn smb_list_directories(subdir: String) -> Result<Vec<SmbDirectory>, String> {
-    RT.block_on(async { smb::list_directories(&subdir).await })
-        .map_err(|e| e.to_string())
-}
 
 /// Test-connect an SMB share and cache the credentials. Returns Err with a
 /// human-readable message on failure so the UI can show it.

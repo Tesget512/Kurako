@@ -7,17 +7,15 @@
 //! through a local HTTP proxy (see the `proxy` section) because libmpv's bundled
 //! FFmpeg usually lacks the `smb://` protocol.
 
-use crate::models::{ScannedFile, SmbDirectory, SmbServer, SmbShare};
+use crate::models::ScannedFile;
 use anyhow::{Context, Result};
-use futures::stream::{self, StreamExt};
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, TcpStream};
 
 const VIDEO_EXTS: &[&str] = &[
     "mkv", "mp4", "avi", "mov", "wmv", "flv", "webm", "m4v", "ts", "m2ts", "rmvb", "rm", "mpg",
@@ -41,12 +39,6 @@ const SETUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 /// fresh session after this quiet period.  Continuous playback, downloads and
 /// scans keep using the same multiplexed session as before.
 const IDLE_SESSION_RECONNECT_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// Discovery is deliberately restricted to one private /24. This covers the
-/// overwhelmingly common home Wi-Fi/LAN layout without probing a routed VPN or
-/// a whole corporate subnet. NetBIOS broadcast responses are merged with the
-/// TCP/445 probe, so older Windows hosts and common NAS appliances both appear.
-const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(450);
 
 /// Cached SMB credentials, used to establish the shared connection on startup
 /// and after a genuine network failure.
@@ -150,176 +142,6 @@ fn normalize_addr(host: &str) -> String {
     } else {
         format!("{h}:445")
     }
-}
-
-fn private_ipv4(ip: Ipv4Addr) -> bool {
-    let octets = ip.octets();
-    octets[0] == 10
-        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
-        || (octets[0] == 192 && octets[1] == 168)
-}
-
-/// Ask the OS which local interface it would use for a normal Internet route.
-/// UDP `connect` does not send a packet; it only lets us read the chosen local
-/// address and avoids platform-specific Kotlin/Swift interface enumeration.
-async fn default_local_ipv4() -> Option<Ipv4Addr> {
-    let socket = UdpSocket::bind("0.0.0.0:0").await.ok()?;
-    socket.connect("1.1.1.1:53").await.ok()?;
-    match socket.local_addr().ok()?.ip() {
-        IpAddr::V4(ip) if private_ipv4(ip) => Some(ip),
-        _ => None,
-    }
-}
-
-fn netbios_wildcard_query() -> Vec<u8> {
-    // RFC 1002 first-level encoding for the wildcard NetBIOS name "*" padded
-    // to 15 characters, followed by the workstation suffix 0x00.
-    let mut name = [b' '; 16];
-    name[0] = b'*';
-    name[15] = 0;
-    let mut packet = Vec::with_capacity(50);
-    packet.extend_from_slice(&0x4B55u16.to_be_bytes());
-    packet.extend_from_slice(&0x0010u16.to_be_bytes()); // broadcast query
-    packet.extend_from_slice(&1u16.to_be_bytes());
-    packet.extend_from_slice(&0u16.to_be_bytes());
-    packet.extend_from_slice(&0u16.to_be_bytes());
-    packet.extend_from_slice(&0u16.to_be_bytes());
-    packet.push(32);
-    for byte in name {
-        packet.push(b'A' + ((byte >> 4) & 0x0F));
-        packet.push(b'A' + (byte & 0x0F));
-    }
-    packet.push(0);
-    packet.extend_from_slice(&0x0020u16.to_be_bytes()); // NB
-    packet.extend_from_slice(&0x0001u16.to_be_bytes()); // IN
-    packet
-}
-
-async fn netbios_broadcast_hosts(local: Ipv4Addr) -> Vec<Ipv4Addr> {
-    let Ok(socket) = UdpSocket::bind("0.0.0.0:0").await else {
-        return Vec::new();
-    };
-    if socket.set_broadcast(true).is_err() {
-        return Vec::new();
-    }
-    let mut octets = local.octets();
-    octets[3] = 255;
-    let _ = socket
-        .send_to(
-            &netbios_wildcard_query(),
-            SocketAddr::from((Ipv4Addr::from(octets), 137)),
-        )
-        .await;
-
-    let mut found = HashSet::new();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(900);
-    let mut buf = [0u8; 1024];
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        match tokio::time::timeout(remaining, socket.recv_from(&mut buf)).await {
-            Ok(Ok((_, SocketAddr::V4(addr)))) if private_ipv4(*addr.ip()) => {
-                found.insert(*addr.ip());
-            }
-            _ => break,
-        }
-    }
-    found.into_iter().collect()
-}
-
-/// Locate reachable SMB servers on the current LAN. A NetBIOS broadcast gives
-/// older Windows/NAS devices a chance to announce themselves; a bounded TCP
-/// probe of the local /24 also finds modern SMB2/3-only servers that suppress
-/// broadcast replies (including many NAS distributions).
-pub async fn discover_servers() -> Vec<SmbServer> {
-    let Some(local) = default_local_ipv4().await else {
-        return Vec::new();
-    };
-    let mut targets: HashSet<Ipv4Addr> = netbios_broadcast_hosts(local).await.into_iter().collect();
-    let [a, b, c, own] = local.octets();
-    for last in 1..=254 {
-        if last != own {
-            targets.insert(Ipv4Addr::new(a, b, c, last));
-        }
-    }
-    let mut found: Vec<SmbServer> = stream::iter(targets)
-        .map(|host| async move {
-            match tokio::time::timeout(
-                DISCOVERY_TIMEOUT,
-                TcpStream::connect(SocketAddr::from((host, 445))),
-            )
-            .await
-            {
-                Ok(Ok(_)) => Some(SmbServer {
-                    host: host.to_string(),
-                }),
-                _ => None,
-            }
-        })
-        .buffer_unordered(48)
-        .filter_map(|server| async move { server })
-        .collect()
-        .await;
-    found.sort_by(|a, b| a.host.cmp(&b.host));
-    found
-}
-
-/// List disk shares using SMB's srvsvc RPC. Some NAS devices intentionally
-/// disable this RPC; callers should retain a manual-share fallback for those.
-pub async fn list_shares(host: &str, user: &str, password: &str) -> Result<Vec<SmbShare>> {
-    let addr = normalize_addr(host);
-    let mut client = tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&addr, user, password))
-        .await
-        .context("smb connect timed out")?
-        .context("smb connect")?;
-    let shares = tokio::time::timeout(SETUP_TIMEOUT, client.list_shares())
-        .await
-        .context("smb share listing timed out")?
-        .context("smb share listing")?;
-    let mut out: Vec<SmbShare> = shares
-        .into_iter()
-        .map(|share| SmbShare {
-            name: share.name,
-            comment: share.comment,
-        })
-        .collect();
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    Ok(out)
-}
-
-/// Return child directories for the authenticated share, for a file-manager
-/// style folder picker. It deliberately reuses the one persistent session.
-pub async fn list_directories(subdir: &str) -> Result<Vec<SmbDirectory>> {
-    let c = creds().context("smb not connected")?;
-    let session = session(&c).await?;
-    let path = subdir.trim_matches('/').to_string();
-    let mut guard = tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock())
-        .await
-        .context("smb session remained busy for too long")?;
-    let entries = {
-        let SmbSessionInner { client, tree } = &mut *guard;
-        tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(tree, &path)).await
-    }
-    .context("smb directory listing timed out")?
-    .context("smb directory listing")?;
-    drop(guard);
-    session.touch();
-    let mut out: Vec<SmbDirectory> = entries
-        .into_iter()
-        .filter(|entry| entry.is_directory && entry.name != "." && entry.name != "..")
-        .map(|entry| SmbDirectory {
-            path: if path.is_empty() {
-                entry.name.clone()
-            } else {
-                format!("{path}/{}", entry.name)
-            },
-            name: entry.name,
-        })
-        .collect();
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-    Ok(out)
 }
 
 /// Open a client + connect the share using the given credentials.

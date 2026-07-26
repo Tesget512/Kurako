@@ -35,8 +35,6 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Kurako 需要访问本地网络，以发现并连接您的 Windows 或 NAS SMB 共享。</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Kurako 需要将播放器截图保存到您的系统相册。</string>
 	<key>UIApplicationSceneManifest</key>

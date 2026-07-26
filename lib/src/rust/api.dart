@@ -109,27 +109,6 @@ Stream<ScanProgress> scanFilesAndMatch({
   sourceType: sourceType,
 );
 
-/// Scan the current private LAN for hosts that accept SMB connections.
-Future<List<SmbServer>> smbDiscoverServers() =>
-    RustLib.instance.api.crateApiSmbDiscoverServers();
-
-/// List shares advertised by an authenticated SMB server. NAS devices that
-/// disable the standard srvsvc RPC may return an error; the UI then permits a
-/// manual share name.
-Future<List<SmbShare>> smbListShares({
-  required String host,
-  required String user,
-  required String password,
-}) => RustLib.instance.api.crateApiSmbListShares(
-  host: host,
-  user: user,
-  password: password,
-);
-
-/// List child folders below an authenticated share for the multi-select picker.
-Future<List<SmbDirectory>> smbListDirectories({required String subdir}) =>
-    RustLib.instance.api.crateApiSmbListDirectories(subdir: subdir);
-
 /// Test-connect an SMB share and cache the credentials. Returns Err with a
 /// human-readable message on failure so the UI can show it.
 Future<void> smbConnect({

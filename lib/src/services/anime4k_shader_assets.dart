@@ -777,7 +777,13 @@ const Map<String, String> _compressedAnime4kShaders = {
 /// small, compressed bundle is expanded into the private application-support
 /// directory once. Existing files are preserved to avoid work on every launch.
 class Anime4kShaderAssets {
-  static const List<String> liteShaderOrder = [
+  static const List<String> lightShaderOrder = [
+    'Anime4K_Clamp_Highlights.glsl',
+    'Anime4K_Restore_CNN_S.glsl',
+    'Anime4K_Upscale_CNN_x2_S.glsl',
+  ];
+
+  static const List<String> balancedShaderOrder = [
     'Anime4K_Clamp_Highlights.glsl',
     'Anime4K_Restore_CNN_M.glsl',
     'Anime4K_Restore_CNN_S.glsl',
@@ -786,6 +792,9 @@ class Anime4kShaderAssets {
     'Anime4K_AutoDownscalePre_x4.glsl',
     'Anime4K_Upscale_CNN_x2_S.glsl',
   ];
+
+  // Compatibility with preferences saved by earlier builds.
+  static const List<String> liteShaderOrder = balancedShaderOrder;
 
   static Future<Directory> ensureInstalled() async {
     final support = await getApplicationSupportDirectory();

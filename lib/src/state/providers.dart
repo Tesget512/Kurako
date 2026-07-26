@@ -575,7 +575,9 @@ class SettingsNotifier extends StateNotifier<Settings> {
       bangumiToken: prefs.getString('bangumi_token') ?? '',
       bangumiRefreshToken: prefs.getString('bangumi_refresh_token') ?? '',
       bangumiTokenExpiresAt: prefs.getInt('bangumi_token_expires_at') ?? 0,
-      superResolutionMode: prefs.getString('super_resolution_mode') ?? 'off',
+      superResolutionMode: _normalizeSuperResolutionMode(
+        prefs.getString('super_resolution_mode') ?? 'off',
+      ),
     );
     // Push any existing access token into Rust and refresh if near expiry.
     if (state.bangumiToken.isNotEmpty) {
@@ -597,10 +599,17 @@ class SettingsNotifier extends StateNotifier<Settings> {
   }
 
   Future<void> setSuperResolutionMode(String value) async {
+    value = _normalizeSuperResolutionMode(value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('super_resolution_mode', value);
     state = state.copyWith(superResolutionMode: value);
   }
+
+  static String _normalizeSuperResolutionMode(String value) => switch (value) {
+    'anime4k-lite' => 'anime4k-balanced',
+    'anime4k-light' || 'anime4k-balanced' || 'off' => value,
+    _ => 'off',
+  };
 
   /// Persist a freshly obtained OAuth session (access + refresh + expiry).
   Future<void> setOAuthSession({
