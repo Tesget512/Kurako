@@ -193,14 +193,11 @@ class MaterialVideoControlsThemeData {
   /// Color of backdrop that comes up when controls are visible.
   final Color? backdropColor;
 
-  /// Optional edge shading drawn by the controls layer itself.
+  /// The start color for the top/bottom readability shades.
   ///
-  /// Unlike a gradient placed inside a top/bottom button bar, this builder is
-  /// laid out against the complete [Video] viewport.  It is therefore useful
-  /// for readable controls over letterboxed video without leaving the physical
-  /// screen edges untreated.  It shares the exact visibility animation of the
-  /// built-in controls.
-  final Widget Function(BuildContext)? edgeShadeBuilder;
+  /// The gradients are painted directly by the root controls stack, therefore
+  /// they always share its visibility animation and physical viewport.
+  final Color? edgeShadeColor;
 
   // GENERIC
 
@@ -315,7 +312,7 @@ class MaterialVideoControlsThemeData {
     this.verticalGestureSensitivity = 100,
     this.horizontalGestureSensitivity = 1000,
     this.backdropColor = const Color(0x66000000),
-    this.edgeShadeBuilder,
+    this.edgeShadeColor,
     this.padding,
     this.controlsHoverDuration = const Duration(seconds: 3),
     this.controlsTransitionDuration = const Duration(milliseconds: 300),
@@ -378,7 +375,7 @@ class MaterialVideoControlsThemeData {
     double? verticalGestureSensitivity,
     double? horizontalGestureSensitivity,
     Color? backdropColor,
-    Widget Function(BuildContext)? edgeShadeBuilder,
+    Color? edgeShadeColor,
     Duration? controlsHoverDuration,
     Duration? controlsTransitionDuration,
     Widget Function(BuildContext)? bufferingIndicatorBuilder,
@@ -439,7 +436,7 @@ class MaterialVideoControlsThemeData {
       horizontalGestureSensitivity:
           horizontalGestureSensitivity ?? this.horizontalGestureSensitivity,
       backdropColor: backdropColor ?? this.backdropColor,
-      edgeShadeBuilder: edgeShadeBuilder ?? this.edgeShadeBuilder,
+      edgeShadeColor: edgeShadeColor ?? this.edgeShadeColor,
       controlsHoverDuration:
           controlsHoverDuration ?? this.controlsHoverDuration,
       controlsTransitionDuration:
@@ -973,15 +970,65 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                           color: _theme(context).backdropColor,
                         ),
                       ),
-                      // This belongs to the root controls stack instead of a
-                      // button bar.  Consequently it spans the complete video
-                      // viewport (including letterbox/pillarbox space) and
-                      // fades in and out together with these controls.
-                      if (_theme(context).edgeShadeBuilder != null)
+                      // These two gradients intentionally live in the same
+                      // root stack as AnimatedOpacity.  A bar-local gradient
+                      // is clipped by its layout width and may not meet the
+                      // physical top/bottom screen boundaries.
+                      if (_theme(context).edgeShadeColor != null)
                         Positioned.fill(
                           child: IgnorePointer(
-                            child: Builder(
-                              builder: _theme(context).edgeShadeBuilder!,
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Align(
+                                  alignment: Alignment.topCenter,
+                                  child: FractionallySizedBox(
+                                    widthFactor: 1.0,
+                                    heightFactor: 0.22,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            _theme(context).edgeShadeColor!,
+                                            Color.lerp(
+                                              _theme(context).edgeShadeColor!,
+                                              Colors.transparent,
+                                              0.62,
+                                            )!,
+                                            Colors.transparent,
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                Align(
+                                  alignment: Alignment.bottomCenter,
+                                  child: FractionallySizedBox(
+                                    widthFactor: 1.0,
+                                    heightFactor: 0.26,
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        gradient: LinearGradient(
+                                          begin: Alignment.bottomCenter,
+                                          end: Alignment.topCenter,
+                                          colors: [
+                                            _theme(context).edgeShadeColor!,
+                                            Color.lerp(
+                                              _theme(context).edgeShadeColor!,
+                                              Colors.transparent,
+                                              0.62,
+                                            )!,
+                                            Colors.transparent,
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),

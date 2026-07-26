@@ -105,7 +105,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   int _positionMs = 0;
   int _durationMs = 0;
   bool _resumed = false;
-  bool _tracksHandled = false;
+  // media_kit first publishes placeholder `auto` / `no` tracks while a media
+  // is opening. Embedded subtitle & audio preferences are therefore applied
+  // independently, only after each real track list has arrived.
+  bool _subtitlePreferenceApplied = false;
+  bool _audioPreferenceApplied = false;
   double _rate = 1.0;
   double _subDelay = 0; // seconds
   StreamSubscription? _positionSub;
@@ -117,10 +121,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   List<SubtitleCandidate> _extSubs = const [];
   // The uri of the currently-active external subtitle, if any.
   String? _activeExtSub;
-  // media_kit may keep state.track.subtitle at `auto` briefly after mpv has
-  // accepted an automatically selected embedded track. Keep the applied ID so
-  // the subtitle panel immediately reflects what is actually being shown.
-  String? _selectedSubtitleId;
+  // The subtitle panel is an endDrawer route and may stay mounted separately
+  // from this page's normal rebuilds. Drive its checkmark with a notifier that
+  // is updated once an explicit media_kit selection command has completed.
+  // This represents embedded, external & disabled states without polling mpv.
+  final ValueNotifier<SubtitleTrack> _selectedSubtitle =
+      ValueNotifier<SubtitleTrack>(SubtitleTrack.auto());
   // Chapters parsed from mpv's chapter-list after open (empty = none).
   List<_Chapter> _chapters = const [];
   // Active dark color scheme for the player UI (seeded from the app theme).
@@ -238,11 +244,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Future<void> _openCurrent() async {
     final seq = ++_openSeq;
     _resumed = false;
-    _tracksHandled = false;
+    _subtitlePreferenceApplied = false;
+    _audioPreferenceApplied = false;
     _subDelay = 0;
     _extSubs = const [];
     _activeExtSub = null;
-    _selectedSubtitleId = null;
+    _selectedSubtitle.value = SubtitleTrack.auto();
     _chapters = const [];
     // Release the previous episode's handle (SAF fd / SMB proxy token) BEFORE
     // resolving the next, so a rapid switch doesn't leave two SMB streams (and
@@ -448,17 +455,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   Future<void> _loadExtSub(SubtitleCandidate sub) async {
+    final seq = _openSeq;
+    final previous = _activeExtSub;
+    // Mark the external choice as pending before sub-add. That command itself
+    // updates media_kit's track-list; without this guard the track-list listener
+    // can mistake the newly-added sidecar for an embedded track and run the
+    // automatic language picker against it a second time.
+    _activeExtSub = sub.uri;
     try {
-      await _player.setSubtitleTrack(
-        SubtitleTrack.uri(sub.uri, title: sub.fileName),
-      );
-      if (mounted) {
-        setState(() {
-          _activeExtSub = sub.uri;
-          _selectedSubtitleId = null;
-        });
+      final track = SubtitleTrack.uri(sub.uri, title: sub.fileName);
+      await _player.setSubtitleTrack(track);
+      if (!mounted || seq != _openSeq) return;
+      _selectedSubtitle.value = track;
+    } catch (_) {
+      if (seq == _openSeq && _activeExtSub == sub.uri) {
+        _activeExtSub = previous;
       }
-    } catch (_) {}
+    }
   }
 
   /// Read embedded chapter markers via mpv (media_kit has no chapters state).
@@ -510,10 +523,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     });
     _tracksSub = _player.stream.tracks.listen((tracks) {
       if (!mounted) return;
-      if (_tracksHandled) return;
-      if (tracks.subtitle.isEmpty && tracks.audio.isEmpty) return;
-      _tracksHandled = true;
-      _applyTrackPreference(tracks);
+      final realSubtitles = tracks.subtitle.any(
+        (track) => track.id != 'auto' && track.id != 'no',
+      );
+      final realAudio = tracks.audio.any(
+        (track) => track.id != 'auto' && track.id != 'no',
+      );
+      final applySubtitles = realSubtitles && !_subtitlePreferenceApplied;
+      final applyAudio = realAudio && !_audioPreferenceApplied;
+      if (!applySubtitles && !applyAudio) return;
+      if (applySubtitles) _subtitlePreferenceApplied = true;
+      if (applyAudio) _audioPreferenceApplied = true;
+      unawaited(
+        _applyTrackPreference(
+          tracks,
+          applySubtitles: applySubtitles,
+          applyAudio: applyAudio,
+          seq: _openSeq,
+        ),
+      );
     });
     // Autoplay the next episode when one finishes.
     _completedSub = _player.stream.completed.listen((done) {
@@ -527,8 +555,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   String get _subPrefKey => 'sub_pref_${_ep.animeId}';
   String get _audioPrefKey => 'audio_pref_${_ep.animeId}';
 
-  Future<void> _applyTrackPreference(Tracks tracks) async {
+  Future<void> _applyTrackPreference(
+    Tracks tracks, {
+    required bool applySubtitles,
+    required bool applyAudio,
+    required int seq,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted || seq != _openSeq) return;
     final savedSub = prefs.getString(_subPrefKey);
     final savedAudio = prefs.getString(_audioPrefKey);
 
@@ -537,7 +571,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         .toList();
     // Skip embedded-subtitle auto-pick when an external sidecar file already
     // loaded — external subs usually exist because the embedded ones don't fit.
-    if (subs.isNotEmpty && _activeExtSub == null) {
+    if (applySubtitles && subs.isNotEmpty && _activeExtSub == null) {
       // Prefer a remembered manual choice (matched by title), else language.
       SubtitleTrack? pick;
       if (savedSub != null) {
@@ -557,18 +591,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               ))
               .first;
       await _player.setSubtitleTrack(pick);
-      _selectedSubtitleId = pick.id;
-      if (mounted) setState(() {});
-      // media_kit exposes the preferred track list before mpv has committed
-      // the actual `sid`.  Re-read it after the native selection settles, so
-      // the drawer marks the subtitle that is really being rendered.
-      unawaited(_syncSelectedSubtitleTrack());
+      if (!mounted || seq != _openSeq) return;
+      // A sidecar subtitle may have finished loading while the embedded
+      // command was in flight. In that case the sidecar is the newer explicit
+      // choice and must keep ownership of the panel checkmark.
+      if (_activeExtSub == null) _selectedSubtitle.value = pick;
     }
 
     final audios = tracks.audio
         .where((t) => t.id != 'auto' && t.id != 'no')
         .toList();
-    if (audios.isNotEmpty) {
+    if (applyAudio && audios.isNotEmpty) {
       AudioTrack? pick;
       if (savedAudio != null) {
         for (final t in audios) {
@@ -586,47 +619,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 ).compareTo(_langScore(a.language, a.title)),
               ))
               .first;
-      _player.setAudioTrack(pick);
-    }
-  }
-
-  String _trackIdKey(Object? value) =>
-      '${value ?? ''}'.trim().toLowerCase().replaceFirst(RegExp(r'\.0$'), '');
-
-  bool _sameTrackId(Object? a, Object? b) {
-    final left = _trackIdKey(a);
-    final right = _trackIdKey(b);
-    if (left.isEmpty || right.isEmpty) return false;
-    if (left == right) return true;
-    final leftNumber = int.tryParse(left);
-    final rightNumber = int.tryParse(right);
-    return leftNumber != null &&
-        rightNumber != null &&
-        leftNumber == rightNumber;
-  }
-
-  /// Resolve the selected subtitle from libmpv's authoritative `sid` value.
-  /// The Dart state may remain on `auto` for a short time after automatic
-  /// language selection, which otherwise leaves the active row unmarked.
-  Future<void> _syncSelectedSubtitleTrack() async {
-    if (_activeExtSub != null) return;
-    try {
-      final raw = await (_player.platform as dynamic)?.getProperty('sid');
-      if (!mounted || _activeExtSub != null) return;
-      final sid = _trackIdKey(raw);
-      if (sid.isEmpty || sid == 'auto' || sid == 'no') return;
-      final match = _player.state.tracks.subtitle
-          .cast<SubtitleTrack?>()
-          .firstWhere(
-            (track) => track != null && _sameTrackId(track.id, sid),
-            orElse: () => null,
-          );
-      if (match != null && _selectedSubtitleId != match.id) {
-        setState(() => _selectedSubtitleId = match.id);
-      }
-    } catch (_) {
-      // Some platform backends do not expose arbitrary mpv properties.  The
-      // local selected ID remains the fallback in that case.
+      await _player.setAudioTrack(pick);
     }
   }
 
@@ -814,6 +807,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _durationSub?.cancel();
     _tracksSub?.cancel();
     _completedSub?.cancel();
+    _selectedSubtitle.dispose();
     _episodeScrollController?.dispose();
     _save();
     _player.dispose();
@@ -914,9 +908,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _episodeScrollController = ScrollController(
         initialScrollOffset: target < 0 ? 0 : target,
       );
-    }
-    if (panel == _Panel.tracks) {
-      unawaited(_syncSelectedSubtitleTrack());
     }
     setState(() => _drawerPanel = panel);
     _scaffoldKey.currentState?.openEndDrawer();
@@ -1255,8 +1246,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Keep the picture visible, while taking a little glare off very bright
       // scenes.  The stronger, directional shading lives under the top/bottom
       // bars below instead of covering the middle of the video.
-      backdropColor: const Color(0x12000000),
-      edgeShadeBuilder: _controlsEdgeShade,
+      backdropColor: Colors.transparent,
+      edgeShadeColor: const Color(0x66000000),
       // A compact two-row bottom bar derived from PiliPlus: the progress line
       // sits just above the transport row, rather than floating high above it.
       seekBarThumbColor: _cs.primary,
@@ -1288,62 +1279,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       bottomButtonBar: [Expanded(child: _readableBottomBar())],
     );
   }
-
-  /// The edge shade is painted by the vendored controls at their root, so it
-  /// meets the physical top/bottom bounds and follows the screen's width.
-  /// Only vertical gradients are drawn — there is deliberately no left/right
-  /// side shading. It has no independent visibility timer: the controls own
-  /// the opacity and this widget is a child of that very animation.
-  Widget _controlsEdgeShade(BuildContext context) => LayoutBuilder(
-    builder: (context, constraints) {
-      final height = constraints.maxHeight;
-      final topHeight = (height * 0.22).clamp(110.0, 200.0).toDouble();
-      final bottomHeight = (height * 0.26).clamp(130.0, 230.0).toDouble();
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          Align(
-            alignment: Alignment.topCenter,
-            child: SizedBox(
-              height: topHeight,
-              child: const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Color(0x66000000),
-                      Color(0x26000000),
-                      Color(0x00000000),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Align(
-            alignment: Alignment.bottomCenter,
-            child: SizedBox(
-              height: bottomHeight,
-              child: const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
-                    colors: [
-                      Color(0x66000000),
-                      Color(0x26000000),
-                      Color(0x00000000),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      );
-    },
-  );
 
   Widget _readableBar({required Widget child}) => DefaultTextStyle.merge(
     style: const TextStyle(
@@ -1716,90 +1651,104 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   Widget _tracksPanel() {
     final cs = _cs;
-    final tracks = _player.state.tracks;
-    final current = _player.state.track;
-    // External subtitle files (loaded via mpv sub-add) also surface in
-    // tracks.subtitle with their filename as the title — skip those in the
-    // embedded list so each file shows once (in the 外部字幕 section below).
-    final extNames = _extSubs.map((s) => s.fileName).toSet();
-    final embeddedSubs = tracks.subtitle
-        .where(
-          (t) =>
-              t.id != 'auto' &&
-              t.id != 'no' &&
-              !(t.title != null && extNames.contains(t.title)),
-        )
-        .toList();
-    // Audio can arrive with duplicate entries over the SMB proxy — dedup by a
-    // composite key, and add an index when several share one label.
-    final audios = tracks.audio
-        .where((t) => t.id != 'auto' && t.id != 'no')
-        .toList();
-    final seenAudio = <String>{};
-    final uniqueAudio = <AudioTrack>[];
-    for (final t in audios) {
-      final key = '${t.id}|${t.title}|${t.language}|${t.codec}';
-      if (seenAudio.add(key)) uniqueAudio.add(t);
-    }
-    return SingleChildScrollView(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _trackHeader(Icons.subtitles, '字幕'),
-          _trackTile(
-            '关闭字幕',
-            current.subtitle == SubtitleTrack.no() &&
-                _selectedSubtitleId == null,
-            () {
-              _activeExtSub = null;
-              _selectedSubtitleId = null;
-              _player.setSubtitleTrack(SubtitleTrack.no());
-            },
-          ),
-          for (final t in embeddedSubs)
-            _trackTile(
-              _trackLabel(t.title, t.language, t.id),
-              _activeExtSub == null &&
-                  (_selectedSubtitleId == t.id || current.subtitle.id == t.id),
-              () {
-                _activeExtSub = null;
-                _selectedSubtitleId = t.id;
-                _player.setSubtitleTrack(t);
-                _rememberSub(t);
-              },
-            ),
-          if (_extSubs.isNotEmpty) ...[
-            _trackHeader(Icons.folder_open, '外部字幕'),
-            for (final s in _extSubs)
+    // Scaffold's endDrawer has its own mounted subtree while open. A page-level
+    // setState is not a dependable way to repaint that route, so the selection
+    // rows listen to the completed subtitle command directly.
+    return ValueListenableBuilder<SubtitleTrack>(
+      valueListenable: _selectedSubtitle,
+      builder: (context, selectedSubtitle, _) {
+        final tracks = _player.state.tracks;
+        // External subtitle files (loaded via mpv sub-add) also surface in
+        // tracks.subtitle with their filename as the title — skip those in the
+        // embedded list so each file shows once (in the 外部字幕 section below).
+        final extNames = _extSubs.map((s) => s.fileName).toSet();
+        final embeddedSubs = tracks.subtitle
+            .where(
+              (track) =>
+                  track.id != 'auto' &&
+                  track.id != 'no' &&
+                  !(track.title != null && extNames.contains(track.title)),
+            )
+            .toList();
+        // Audio can arrive with duplicate entries over the SMB proxy — dedup
+        // by a composite key, and add an index for identical labels.
+        final audios = tracks.audio
+            .where((track) => track.id != 'auto' && track.id != 'no')
+            .toList();
+        final seenAudio = <String>{};
+        final uniqueAudio = <AudioTrack>[];
+        for (final track in audios) {
+          final key =
+              '${track.id}|${track.title}|${track.language}|${track.codec}';
+          if (seenAudio.add(key)) uniqueAudio.add(track);
+        }
+        return SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _trackHeader(Icons.subtitles, '字幕'),
               _trackTile(
-                s.fileName,
-                _activeExtSub == s.uri,
-                () => _loadExtSub(s),
+                '关闭字幕',
+                selectedSubtitle == SubtitleTrack.no(),
+                () async {
+                  final disabled = SubtitleTrack.no();
+                  await _player.setSubtitleTrack(disabled);
+                  if (!mounted) return;
+                  setState(() => _activeExtSub = null);
+                  _selectedSubtitle.value = disabled;
+                },
               ),
-          ],
-          ListTile(
-            dense: true,
-            leading: Icon(Icons.file_open_outlined, color: cs.onSurfaceVariant),
-            title: Text('浏览字幕文件…', style: TextStyle(color: cs.onSurface)),
-            onTap: () async {
-              Navigator.pop(context);
-              await _pickSubtitleFile();
-            },
+              for (final subtitle in embeddedSubs)
+                _trackTile(
+                  _trackLabel(subtitle.title, subtitle.language, subtitle.id),
+                  !selectedSubtitle.uri &&
+                      !selectedSubtitle.data &&
+                      selectedSubtitle == subtitle,
+                  () async {
+                    await _player.setSubtitleTrack(subtitle);
+                    if (!mounted) return;
+                    setState(() => _activeExtSub = null);
+                    _selectedSubtitle.value = subtitle;
+                    unawaited(_rememberSub(subtitle));
+                  },
+                ),
+              if (_extSubs.isNotEmpty) ...[
+                _trackHeader(Icons.folder_open, '外部字幕'),
+                for (final subtitle in _extSubs)
+                  _trackTile(
+                    subtitle.fileName,
+                    selectedSubtitle.uri && selectedSubtitle.id == subtitle.uri,
+                    () => _loadExtSub(subtitle),
+                  ),
+              ],
+              ListTile(
+                dense: true,
+                leading: Icon(
+                  Icons.file_open_outlined,
+                  color: cs.onSurfaceVariant,
+                ),
+                title: Text('浏览字幕文件…', style: TextStyle(color: cs.onSurface)),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _pickSubtitleFile();
+                },
+              ),
+              Divider(color: cs.outlineVariant, height: 1),
+              _trackHeader(Icons.audiotrack, '音轨'),
+              for (var i = 0; i < uniqueAudio.length; i++)
+                _trackTile(
+                  _audioLabel(uniqueAudio, i),
+                  _player.state.track.audio.id == uniqueAudio[i].id,
+                  () {
+                    _player.setAudioTrack(uniqueAudio[i]);
+                    _rememberAudio(uniqueAudio[i]);
+                  },
+                ),
+              const SizedBox(height: 8),
+            ],
           ),
-          Divider(color: cs.outlineVariant, height: 1),
-          _trackHeader(Icons.audiotrack, '音轨'),
-          for (var i = 0; i < uniqueAudio.length; i++)
-            _trackTile(
-              _audioLabel(uniqueAudio, i),
-              current.audio.id == uniqueAudio[i].id,
-              () {
-                _player.setAudioTrack(uniqueAudio[i]);
-                _rememberAudio(uniqueAudio[i]);
-              },
-            ),
-          const SizedBox(height: 8),
-        ],
-      ),
+        );
+      },
     );
   }
 
