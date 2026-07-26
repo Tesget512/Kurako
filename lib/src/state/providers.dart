@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart' show Color;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -351,7 +353,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   DownloadManager(this._ref) : super(const []);
 
   final Ref _ref;
-  final _subs = <String, dynamic>{};
+  final _subs = <String, StreamSubscription<DownloadProgress>>{};
 
   bool isDownloading(String smbUri) =>
       state.any((t) => t.smbUri == smbUri && t.active);
@@ -395,8 +397,11 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   }
 
   Future<void> cancel(String smbUri) async {
+    // Cancel the progress subscription FIRST: a late event from the old stream
+    // must not resurrect the task we're about to remove, or pollute a
+    // re-download of the same episode started right afterwards.
+    await _subs.remove(smbUri)?.cancel();
     await rust.smbCancelDownload(smbUri: smbUri);
-    _subs.remove(smbUri);
     state = state.where((t) => t.smbUri != smbUri).toList();
   }
 
@@ -432,7 +437,17 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
 final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((
   ref,
 ) async {
-  ref.watch(downloadManagerProvider);
+  // Only membership and completion/failure transitions matter for the badge.
+  // Watching the whole task list would re-run rust.listDownloads() on every
+  // per-second progress tick of every active download — select a fingerprint
+  // that ignores bytesDone so ticks don't trigger a DB re-query storm.
+  ref.watch(
+    downloadManagerProvider.select(
+      (tasks) => tasks
+          .map((t) => '${t.smbUri}|${t.done}|${t.error != null}')
+          .join('\n'),
+    ),
+  );
   final list = await rust.listDownloads();
   return list.map((d) => d.smbUri).toSet();
 });

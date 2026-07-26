@@ -259,7 +259,16 @@ class SmbMediaSource extends MediaSource {
       // Validate the exact loopback route through iOS' own network stack before
       // giving it to libmpv. This turns the old endless spinner into a concrete
       // SMB/proxy error and also warms the authenticated SMB session.
-      await _verifyIosLoopbackStream(url);
+      try {
+        await _verifyIosLoopbackStream(url);
+      } catch (_) {
+        // smbPlayableUrl already registered the proxy token; no PlayableHandle
+        // is ever constructed on this path, so release it here or it leaks.
+        try {
+          await rust.smbRelease(url: url);
+        } catch (_) {}
+        rethrow;
+      }
     }
     return PlayableHandle(url, smb: true);
   }

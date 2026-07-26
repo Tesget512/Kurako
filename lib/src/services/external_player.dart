@@ -68,7 +68,13 @@ Future<String> _smbUrlWithCreds(String smbUri) async {
       .split('/')
       .map(Uri.encodeComponent)
       .join('/');
-  if (host.contains(':445')) host = host.replaceFirst(':445', '');
+  // Drop only an exact default :445 port. Split at the LAST colon and compare
+  // the whole port — a substring match would corrupt a custom port like
+  // `host:4455` (stripping ":445" out of the middle of it).
+  final colon = host.lastIndexOf(':');
+  if (colon >= 0 && host.substring(colon + 1) == '445') {
+    host = host.substring(0, colon);
+  }
   if (creds.user.isEmpty) return 'smb://$host$pathPart';
   final u = Uri.encodeComponent(creds.user);
   final p = Uri.encodeComponent(creds.password);
@@ -144,21 +150,36 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
 
   final path = playerPath.trim();
   if (path.isNotEmpty) {
+    // A macOS player is a .app bundle — a directory, which Process.start can't
+    // exec directly; `open -a` launches the bundle with the locator as its
+    // document (works for file paths and the proxy's http URL alike).
+    if (Platform.isMacOS && path.endsWith('.app')) {
+      await Process.start('open', [
+        '-a',
+        path,
+        locator,
+      ], mode: ProcessStartMode.detached);
+      return;
+    }
     // Detached so the child owns no stdio pipes and the Dart side never waits on
     // it (piped mode could hang the UI if the player didn't drain stdout).
     await Process.start(path, [locator], mode: ProcessStartMode.detached);
     return;
   }
   // No configured player.
+  // An http proxy URL (SMB stream) has no media file association — handing it
+  // to the OS shell (rundll32 / open / xdg-open) lands in the default
+  // *browser* (the "web player" bug), on every desktop platform alike. Windows
+  // normally never hits this (SMB resolves to UNC there), but macOS/Linux use
+  // the proxy fallback, so guard before the platform branches. Release the
+  // just-registered proxy token first: this error path is the only holder.
+  if (locator.startsWith('http')) {
+    try {
+      await rust.smbRelease(url: locator);
+    } catch (_) {}
+    throw Exception('未配置外置播放器。请在 设置 → 播放器 中选择播放器程序（SMB 流播放需要）');
+  }
   if (Platform.isWindows) {
-    // An http proxy URL (SMB stream) has no file association — opening it via
-    // the shell lands in the default *browser* (the "web player" bug). SMB now
-    // resolves to a UNC path on Windows, which HAS a normal file association, so
-    // it opens in the default video player like any local file — no forced
-    // program choice. Only the (macOS/Linux-only) proxy fallback stays http.
-    if (locator.startsWith('http')) {
-      throw Exception('未配置外置播放器。请在 设置 → 播放器 中选择播放器程序（SMB 流播放需要）');
-    }
     await Process.start('rundll32', [
       'url.dll,FileProtocolHandler',
       locator,

@@ -687,10 +687,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _pickPlayer() async {
-    final result = await FilePicker.platform.pickFiles(
-      type: FileType.custom,
-      allowedExtensions: ['exe'],
-    );
+    // Windows players are .exe; macOS players are .app bundles (the open panel
+    // treats a bundle as a single pickable file when its extension is allowed);
+    // Linux executables have no extension at all, so no filter there.
+    final result = Platform.isLinux
+        ? await FilePicker.platform.pickFiles(type: FileType.any)
+        : await FilePicker.platform.pickFiles(
+            type: FileType.custom,
+            allowedExtensions: [Platform.isWindows ? 'exe' : 'app'],
+          );
     final path = result?.files.single.path;
     if (path == null) return;
     _playerPathController.text = path;

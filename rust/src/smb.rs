@@ -522,7 +522,11 @@ static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaph
 
 /// Get the persistent session, connecting on first use.
 async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
-    if let Some(s) = SESSION.lock().unwrap().clone() {
+    // Clone out of the mutex in its own statement: an `if let` on the guard
+    // keeps the temporary MutexGuard alive for the whole block (edition 2021),
+    // and the re-lock below would self-deadlock inside frb's block_on.
+    let cached_session = SESSION.lock().unwrap().clone();
+    if let Some(s) = cached_session {
         // Only rotate an idle connection if nothing is currently flowing
         // through the loopback proxy.  This keeps one stable SMB session for
         // normal playback, but avoids paying a 12-second stale-socket timeout
@@ -712,6 +716,12 @@ fn ensure_proxy() -> Result<u16> {
                 Ok((stream, _)) => {
                     let id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
                     let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+                    // Insert BEFORE spawning: a short-lived serve task (e.g. a
+                    // health probe that connects and disconnects immediately)
+                    // can otherwise run to completion — including its remove —
+                    // before this insert, leaving the entry in the map forever
+                    // and keeping is_empty() false for the idle-rotation check.
+                    ACTIVE_STREAMS.lock().unwrap().insert(id, cancel_tx);
                     // serve() runs on PROXY_RT (current runtime), isolated from RT.
                     let jh = tokio::spawn(async move {
                         let _ = serve(stream, cancel_rx).await;
@@ -720,7 +730,6 @@ fn ensure_proxy() -> Result<u16> {
                     // Keep the task detached: it must be allowed to close the
                     // remote reader after receiving a cancellation signal.
                     drop(jh);
-                    ACTIVE_STREAMS.lock().unwrap().insert(id, cancel_tx);
                 }
                 Err(_) => {
                     clear_proxy_port(port);
@@ -766,7 +775,7 @@ async fn serve(
         .unwrap_or("/")
         .trim_start_matches('/')
         .to_string();
-    let mut range: Option<(u64, Option<u64>)> = None;
+    let mut range: Option<ByteRange> = None;
     for line in lines {
         if let Some(v) = line
             .strip_prefix("Range:")
@@ -823,16 +832,28 @@ async fn serve(
         return Ok(());
     }
 
+    // Resolve the range against the file size (total > 0 checked above).
+    // An inverted range (`bytes=500-100`) is syntactically invalid per RFC
+    // 7233, and MUST be ignored, so the whole file is served as 200 — the old
+    // clamping produced 206 + Content-Length:1 with an empty body, hanging the
+    // client on a byte that never came. A suffix range asks for the last n
+    // bytes; n == 0 resolves to start == total and falls into the 416 below.
+    if let Some(ByteRange::FromTo(s, Some(e))) = range {
+        if e < s {
+            range = None;
+        }
+    }
     let (start, end) = match range {
-        Some((s, Some(e))) => (s, e.min(total.saturating_sub(1))),
-        Some((s, None)) => (s, total.saturating_sub(1)),
-        None => (0, total.saturating_sub(1)),
+        Some(ByteRange::FromTo(s, e)) => (s, e.unwrap_or(u64::MAX).min(total - 1)),
+        Some(ByteRange::Suffix(n)) => (total.saturating_sub(n), total - 1),
+        None => (0, total - 1),
     };
     if start >= total {
         let _ = reader.close().await;
-        let _ = stream
-            .write_all(b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-            .await;
+        let response = format!(
+            "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
         return Ok(());
     }
     let len = end.saturating_sub(start) + 1;
@@ -942,18 +963,34 @@ fn mime_for_path(path: &str) -> &'static str {
     }
 }
 
-/// Parse a `bytes=start-end` Range header value into (start, Option<end>).
-fn parse_range(v: &str) -> Option<(u64, Option<u64>)> {
+/// A parsed `Range` header value.
+#[derive(Clone, Copy)]
+enum ByteRange {
+    /// `bytes=start-` / `bytes=start-end`.
+    FromTo(u64, Option<u64>),
+    /// `bytes=-n`: the last n bytes of the file.
+    Suffix(u64),
+}
+
+/// Parse a `bytes=...` Range header value, including the suffix form `bytes=-n`
+/// (mpv uses it to probe an mp4's trailing moov atom — failing to parse it
+/// silently degraded to a 200 full-file response, pulling the whole file
+/// through the share before playback could start).
+fn parse_range(v: &str) -> Option<ByteRange> {
     let v = v.strip_prefix("bytes=")?;
     let (s, e) = v.split_once('-')?;
-    let start: u64 = s.trim().parse().ok()?;
-    let end = e.trim();
-    let end = if end.is_empty() {
+    let s = s.trim();
+    let e = e.trim();
+    if s.is_empty() {
+        return Some(ByteRange::Suffix(e.parse().ok()?));
+    }
+    let start: u64 = s.parse().ok()?;
+    let end = if e.is_empty() {
         None
     } else {
-        Some(end.parse().ok()?)
+        Some(e.parse().ok()?)
     };
-    Some((start, end))
+    Some(ByteRange::FromTo(start, end))
 }
 
 // ---- Download to local ----

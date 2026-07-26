@@ -556,6 +556,10 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       ValueNotifier<Duration>(Duration.zero);
 
   final List<StreamSubscription> subscriptions = [];
+  /// The screen-brightness change subscription — kept out of [subscriptions]
+  /// because it is created from an async microtask that may complete after
+  /// dispose() has already iterated that list.
+  StreamSubscription<double>? _brightnessSubscription;
 
   double get subtitleVerticalShiftOffset =>
       (_theme(context).padding?.bottom ?? 0.0) +
@@ -662,7 +666,11 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       subscription.cancel();
     }
     // --------------------------------------------------
+    // package:volume_controller
+    _volumeController.removeListener();
+    // --------------------------------------------------
     // package:screen_brightness
+    _brightnessSubscription?.cancel();
     Future.microtask(() async {
       try {
         await ScreenBrightnessPlatform.instance
@@ -670,8 +678,12 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       } catch (_) {}
     });
     // --------------------------------------------------
+    _timer?.cancel();
+    _volumeTimer?.cancel();
+    _brightnessTimer?.cancel();
     _timerSeekBackwardButton?.cancel();
     _timerSeekForwardButton?.cancel();
+    _seekBarDeltaValueNotifier.dispose();
     super.dispose();
   }
 
@@ -841,6 +853,10 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       try {
         _volumeController.showSystemUI = false;
         _volumeValue = await _volumeController.getVolume();
+        // The awaits above can outlive this State: never register a listener
+        // on the already-disposed instance (dispose's removeListener would
+        // have run before this microtask got here).
+        if (!mounted) return;
         _volumeController.addListener((value) {
           if (mounted && !_volumeInterceptEventStream) {
             setState(() {
@@ -856,7 +872,9 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     Future.microtask(() async {
       try {
         _brightnessValue = await ScreenBrightnessPlatform.instance.application;
-        ScreenBrightnessPlatform.instance.onApplicationScreenBrightnessChanged
+        if (!mounted) return;
+        _brightnessSubscription = ScreenBrightnessPlatform
+            .instance.onApplicationScreenBrightnessChanged
             .listen((value) {
           if (mounted) {
             setState(() {

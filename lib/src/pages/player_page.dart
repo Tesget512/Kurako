@@ -246,7 +246,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _resumed = false;
     _subtitlePreferenceApplied = false;
     _audioPreferenceApplied = false;
-    _subDelay = 0;
+    // sub-delay is a player-level mpv property that survives loadfile: reset
+    // it in mpv too, not just the Dart field, or the previous episode's
+    // adjustment silently keeps applying while the UI shows 0.
+    if (_subDelay != 0) unawaited(_setSubDelay(0));
     _extSubs = const [];
     _activeExtSub = null;
     _selectedSubtitle.value = SubtitleTrack.auto();
@@ -261,8 +264,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (seq != _openSeq) return;
 
     for (var attempt = 1; attempt <= _maxOpenAttempts; attempt++) {
+      PlayableHandle? handle;
       try {
-        final handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
+        handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
         if (seq != _openSeq) {
           // Superseded during resolve — release what we just acquired and bail.
           await handle.release();
@@ -296,6 +300,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         await Future.delayed(_openRetryGap);
         if (seq != _openSeq) return;
       } catch (e) {
+        // open() can throw after the handle (SAF fd / SMB proxy token) was
+        // resolved and assigned — release it before the next attempt
+        // overwrites _handle, or every failed attempt leaks one. Only if it
+        // is still ours: a newer _openCurrent may have taken _handle over
+        // (and already released this one) while we awaited.
+        if (handle != null && identical(_handle, handle)) {
+          _handle = null;
+          await handle.release();
+        }
         if (attempt == _maxOpenAttempts) {
           if (mounted && seq == _openSeq) {
             ScaffoldMessenger.of(
@@ -729,6 +742,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// only opens the final target, avoiding the SMB connection pile-up the NAS
   /// throttles. See [_switchDebounce].
   void _scheduleOpen() {
+    // The old video keeps playing (and emitting events) until the new open
+    // lands — SMB debounce + retries + watchdog can stretch that to seconds.
+    // Clear the progress snapshot NOW, synchronously with the index change,
+    // so nothing pairs the new _ep.id with the old episode's numbers: the 5s
+    // _save() tick would write the old position into the new episode (marking
+    // it watched at an episode boundary), the resume listener would seek the
+    // old video to the new episode's lastPosition, and the completed listener
+    // would auto-advance a second time if the old episode finishes while the
+    // switch is still pending.
+    _positionMs = 0;
+    _durationMs = 0;
+    _resumed = false;
     if (_ep.sourceType != 'smb') {
       _openCurrent();
       return;
