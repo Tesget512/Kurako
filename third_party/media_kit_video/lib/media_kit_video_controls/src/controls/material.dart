@@ -193,6 +193,15 @@ class MaterialVideoControlsThemeData {
   /// Color of backdrop that comes up when controls are visible.
   final Color? backdropColor;
 
+  /// Optional edge shading drawn by the controls layer itself.
+  ///
+  /// Unlike a gradient placed inside a top/bottom button bar, this builder is
+  /// laid out against the complete [Video] viewport.  It is therefore useful
+  /// for readable controls over letterboxed video without leaving the physical
+  /// screen edges untreated.  It shares the exact visibility animation of the
+  /// built-in controls.
+  final Widget Function(BuildContext)? edgeShadeBuilder;
+
   // GENERIC
 
   /// Padding around the controls.
@@ -306,6 +315,7 @@ class MaterialVideoControlsThemeData {
     this.verticalGestureSensitivity = 100,
     this.horizontalGestureSensitivity = 1000,
     this.backdropColor = const Color(0x66000000),
+    this.edgeShadeBuilder,
     this.padding,
     this.controlsHoverDuration = const Duration(seconds: 3),
     this.controlsTransitionDuration = const Duration(milliseconds: 300),
@@ -368,6 +378,7 @@ class MaterialVideoControlsThemeData {
     double? verticalGestureSensitivity,
     double? horizontalGestureSensitivity,
     Color? backdropColor,
+    Widget Function(BuildContext)? edgeShadeBuilder,
     Duration? controlsHoverDuration,
     Duration? controlsTransitionDuration,
     Widget Function(BuildContext)? bufferingIndicatorBuilder,
@@ -428,6 +439,7 @@ class MaterialVideoControlsThemeData {
       horizontalGestureSensitivity:
           horizontalGestureSensitivity ?? this.horizontalGestureSensitivity,
       backdropColor: backdropColor ?? this.backdropColor,
+      edgeShadeBuilder: edgeShadeBuilder ?? this.edgeShadeBuilder,
       controlsHoverDuration:
           controlsHoverDuration ?? this.controlsHoverDuration,
       controlsTransitionDuration:
@@ -961,6 +973,18 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                           color: _theme(context).backdropColor,
                         ),
                       ),
+                      // This belongs to the root controls stack instead of a
+                      // button bar.  Consequently it spans the complete video
+                      // viewport (including letterbox/pillarbox space) and
+                      // fades in and out together with these controls.
+                      if (_theme(context).edgeShadeBuilder != null)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: Builder(
+                              builder: _theme(context).edgeShadeBuilder!,
+                            ),
+                          ),
+                        ),
                       // We are adding 16.0 boundary around the actual controls (which contain the vertical drag gesture detectors).
                       // This will make the hit-test on edges (e.g. swiping to: show status-bar, show navigation-bar, go back in navigation) not activate the swipe gesture annoyingly.
                       Positioned.fill(

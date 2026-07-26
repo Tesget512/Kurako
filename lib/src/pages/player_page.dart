@@ -117,6 +117,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   List<SubtitleCandidate> _extSubs = const [];
   // The uri of the currently-active external subtitle, if any.
   String? _activeExtSub;
+  // media_kit may keep state.track.subtitle at `auto` briefly after mpv has
+  // accepted an automatically selected embedded track. Keep the applied ID so
+  // the subtitle panel immediately reflects what is actually being shown.
+  String? _selectedSubtitleId;
   // Chapters parsed from mpv's chapter-list after open (empty = none).
   List<_Chapter> _chapters = const [];
   // Active dark color scheme for the player UI (seeded from the app theme).
@@ -238,6 +242,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _subDelay = 0;
     _extSubs = const [];
     _activeExtSub = null;
+    _selectedSubtitleId = null;
     _chapters = const [];
     // Release the previous episode's handle (SAF fd / SMB proxy token) BEFORE
     // resolving the next, so a rapid switch doesn't leave two SMB streams (and
@@ -447,7 +452,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       await _player.setSubtitleTrack(
         SubtitleTrack.uri(sub.uri, title: sub.fileName),
       );
-      if (mounted) setState(() => _activeExtSub = sub.uri);
+      if (mounted) {
+        setState(() {
+          _activeExtSub = sub.uri;
+          _selectedSubtitleId = null;
+        });
+      }
     } catch (_) {}
   }
 
@@ -546,7 +556,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                 ).compareTo(_langScore(a.language, a.title)),
               ))
               .first;
-      _player.setSubtitleTrack(pick);
+      await _player.setSubtitleTrack(pick);
+      _selectedSubtitleId = pick.id;
+      if (mounted) setState(() {});
+      // media_kit exposes the preferred track list before mpv has committed
+      // the actual `sid`.  Re-read it after the native selection settles, so
+      // the drawer marks the subtitle that is really being rendered.
+      unawaited(_syncSelectedSubtitleTrack());
     }
 
     final audios = tracks.audio
@@ -571,6 +587,46 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
               ))
               .first;
       _player.setAudioTrack(pick);
+    }
+  }
+
+  String _trackIdKey(Object? value) =>
+      '${value ?? ''}'.trim().toLowerCase().replaceFirst(RegExp(r'\.0$'), '');
+
+  bool _sameTrackId(Object? a, Object? b) {
+    final left = _trackIdKey(a);
+    final right = _trackIdKey(b);
+    if (left.isEmpty || right.isEmpty) return false;
+    if (left == right) return true;
+    final leftNumber = int.tryParse(left);
+    final rightNumber = int.tryParse(right);
+    return leftNumber != null &&
+        rightNumber != null &&
+        leftNumber == rightNumber;
+  }
+
+  /// Resolve the selected subtitle from libmpv's authoritative `sid` value.
+  /// The Dart state may remain on `auto` for a short time after automatic
+  /// language selection, which otherwise leaves the active row unmarked.
+  Future<void> _syncSelectedSubtitleTrack() async {
+    if (_activeExtSub != null) return;
+    try {
+      final raw = await (_player.platform as dynamic)?.getProperty('sid');
+      if (!mounted || _activeExtSub != null) return;
+      final sid = _trackIdKey(raw);
+      if (sid.isEmpty || sid == 'auto' || sid == 'no') return;
+      final match = _player.state.tracks.subtitle
+          .cast<SubtitleTrack?>()
+          .firstWhere(
+            (track) => track != null && _sameTrackId(track.id, sid),
+            orElse: () => null,
+          );
+      if (match != null && _selectedSubtitleId != match.id) {
+        setState(() => _selectedSubtitleId = match.id);
+      }
+    } catch (_) {
+      // Some platform backends do not expose arbitrary mpv properties.  The
+      // local selected ID remains the fallback in that case.
     }
   }
 
@@ -858,6 +914,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _episodeScrollController = ScrollController(
         initialScrollOffset: target < 0 ? 0 : target,
       );
+    }
+    if (panel == _Panel.tracks) {
+      unawaited(_syncSelectedSubtitleTrack());
     }
     setState(() => _drawerPanel = panel);
     _scaffoldKey.currentState?.openEndDrawer();
@@ -1196,7 +1255,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Keep the picture visible, while taking a little glare off very bright
       // scenes.  The stronger, directional shading lives under the top/bottom
       // bars below instead of covering the middle of the video.
-      backdropColor: const Color(0x16000000),
+      backdropColor: const Color(0x12000000),
+      edgeShadeBuilder: _controlsEdgeShade,
       // A compact two-row bottom bar derived from PiliPlus: the progress line
       // sits just above the transport row, rather than floating high above it.
       seekBarThumbColor: _cs.primary,
@@ -1205,10 +1265,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       seekBarBufferColor: Colors.white,
       seekBarHeight: 5.5,
       seekBarThumbSize: 13,
-      seekBarMargin: const EdgeInsets.fromLTRB(20, 0, 20, 54),
+      seekBarMargin: const EdgeInsets.fromLTRB(20, 0, 20, 60),
       seekBarContainerHeight: 32,
-      buttonBarHeight: 38,
-      buttonBarButtonSize: 24,
+      buttonBarHeight: 42,
+      buttonBarButtonSize: 26,
       topButtonBarMargin: const EdgeInsets.fromLTRB(10, 4, 10, 0),
       bottomButtonBarMargin: const EdgeInsets.only(
         left: 10,
@@ -1229,31 +1289,70 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
-  /// PiliPlus' control bars use an edge-to-transparent gradient inside the
-  /// same animated controls subtree. This makes the mask appear and disappear
-  /// with media_kit itself, without a second timer or an opaque rectangular
-  /// background behind the whole bar.
-  Widget _readableBar({required Widget child, required bool top}) =>
-      DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: top ? Alignment.topCenter : Alignment.bottomCenter,
-            end: top ? Alignment.bottomCenter : Alignment.topCenter,
-            // Same directional construction as PiliPlus AppBarAni: dark at
-            // the physical edge, then smoothly disappears into the picture.
-            colors: const [Color(0xBF000000), Color(0x00000000)],
+  /// The edge shade is painted by the vendored controls at their root, so it
+  /// meets the physical top/bottom bounds and follows the screen's width.
+  /// Only vertical gradients are drawn — there is deliberately no left/right
+  /// side shading. It has no independent visibility timer: the controls own
+  /// the opacity and this widget is a child of that very animation.
+  Widget _controlsEdgeShade(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final height = constraints.maxHeight;
+      final topHeight = (height * 0.22).clamp(110.0, 200.0).toDouble();
+      final bottomHeight = (height * 0.26).clamp(130.0, 230.0).toDouble();
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              height: topHeight,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0x66000000),
+                      Color(0x26000000),
+                      Color(0x00000000),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
-        child: DefaultTextStyle.merge(
-          style: const TextStyle(
-            shadows: [Shadow(color: Color(0xBB000000), blurRadius: 4)],
+          Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              height: bottomHeight,
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
+                    colors: [
+                      Color(0x66000000),
+                      Color(0x26000000),
+                      Color(0x00000000),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-          child: child,
-        ),
+        ],
       );
+    },
+  );
+
+  Widget _readableBar({required Widget child}) => DefaultTextStyle.merge(
+    style: const TextStyle(
+      shadows: [Shadow(color: Color(0xBB000000), blurRadius: 4)],
+    ),
+    child: child,
+  );
 
   Widget _readableTopBar() => _readableBar(
-    top: true,
     child: Row(
       children: [
         MaterialCustomButton(
@@ -1293,11 +1392,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           ),
           onPressed: () => setState(() => _controlsLocked = !_controlsLocked),
         ),
-        if (widget.episodes.length > 1)
-          MaterialCustomButton(
-            icon: const Icon(Icons.playlist_play, color: Colors.white),
-            onPressed: () => _openPanel(_Panel.episodes),
-          ),
         MaterialCustomButton(
           icon: const Icon(Icons.tune, color: Colors.white),
           onPressed: () => _openPanel(_Panel.menu),
@@ -1308,7 +1402,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   );
 
   Widget _readableBottomBar() => _readableBar(
-    top: false,
     child: Row(
       children: [
         _touchTransportGroup(),
@@ -1653,16 +1746,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _trackHeader(Icons.subtitles, '字幕'),
-          _trackTile('关闭字幕', current.subtitle == SubtitleTrack.no(), () {
-            _activeExtSub = null;
-            _player.setSubtitleTrack(SubtitleTrack.no());
-          }),
+          _trackTile(
+            '关闭字幕',
+            current.subtitle == SubtitleTrack.no() &&
+                _selectedSubtitleId == null,
+            () {
+              _activeExtSub = null;
+              _selectedSubtitleId = null;
+              _player.setSubtitleTrack(SubtitleTrack.no());
+            },
+          ),
           for (final t in embeddedSubs)
             _trackTile(
               _trackLabel(t.title, t.language, t.id),
-              _activeExtSub == null && current.subtitle.id == t.id,
+              _activeExtSub == null &&
+                  (_selectedSubtitleId == t.id || current.subtitle.id == t.id),
               () {
                 _activeExtSub = null;
+                _selectedSubtitleId = t.id;
                 _player.setSubtitleTrack(t);
                 _rememberSub(t);
               },
