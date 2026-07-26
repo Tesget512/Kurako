@@ -501,6 +501,63 @@ class ScannedFile {
           relativeParent == other.relativeParent;
 }
 
+/// A directory available below the currently authenticated SMB share.
+class SmbDirectory {
+  /// Share-relative path, with `/` separators. Empty means the share root.
+  final String path;
+  final String name;
+
+  const SmbDirectory({required this.path, required this.name});
+
+  @override
+  int get hashCode => path.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmbDirectory &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          name == other.name;
+}
+
+/// An SMB server found on the current private IPv4 network. Discovery only
+/// proves that TCP/445 is reachable; authentication happens separately.
+class SmbServer {
+  final String host;
+
+  const SmbServer({required this.host});
+
+  @override
+  int get hashCode => host.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmbServer &&
+          runtimeType == other.runtimeType &&
+          host == other.host;
+}
+
+/// A disk share exposed by an authenticated SMB server.
+class SmbShare {
+  final String name;
+  final String comment;
+
+  const SmbShare({required this.name, required this.comment});
+
+  @override
+  int get hashCode => name.hashCode ^ comment.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmbShare &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          comment == other.comment;
+}
+
 /// An external subtitle file found next to a video. `uri` is what mpv should
 /// load: a local absolute path (local sources) or a loopback proxy URL (SMB).
 class SubtitleCandidate {

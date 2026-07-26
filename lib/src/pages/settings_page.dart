@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
+import '../rust/models.dart' show SmbDirectory, SmbServer, SmbShare;
 import '../services/bangumi_oauth.dart';
 import '../services/external_player.dart';
 import '../services/media_source.dart';
@@ -644,28 +645,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _addSmbFolder() async {
-    final creds = await showDialog<SmbCredentials>(
+    final setup = await showDialog<_SmbSetupResult>(
       context: context,
       builder: (_) => const _SmbDialog(),
     );
-    if (creds == null) return;
+    if (setup == null) return;
     if (!mounted) return;
-    // Test-connect, then persist credentials + add as a library folder.
-    _snack('正在连接 SMB…');
     try {
-      await rust.smbConnect(
-        host: creds.host,
-        share: creds.share,
-        user: creds.user,
-        password: creds.password,
-      );
-      await creds.save();
-      final path = 'smb://${creds.host}/${creds.share}';
-      await rust.addLibraryFolder(path: path, sourceType: 'smb');
+      if (setup.remember) await setup.credentials.save();
+      final root = 'smb://${setup.credentials.host}/${setup.credentials.share}';
+      for (final subdir in setup.selectedDirectories) {
+        final path = subdir.isEmpty ? root : '$root/$subdir';
+        await rust.addLibraryFolder(path: path, sourceType: 'smb');
+      }
       ref.invalidate(foldersProvider);
-      _snack('SMB 共享已添加，去番剧库扫描');
+      _snack('已添加 ${setup.selectedDirectories.length} 个 SMB 文件夹，去番剧库扫描');
     } catch (e) {
-      _snack('SMB 连接失败：$e');
+      _snack('添加 SMB 文件夹失败：$e');
     }
   }
 
@@ -681,7 +677,20 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 }
 
-/// Dialog collecting SMB share credentials. Returns [SmbCredentials] on submit.
+class _SmbSetupResult {
+  final SmbCredentials credentials;
+  final List<String> selectedDirectories;
+  final bool remember;
+  const _SmbSetupResult({
+    required this.credentials,
+    required this.selectedDirectories,
+    required this.remember,
+  });
+}
+
+/// SMB setup remains a Flutter/Rust flow: Rust discovers hosts, enumerates
+/// shares and browses folders; this dialog only presents the file-manager-like
+/// selection UI.
 class _SmbDialog extends StatefulWidget {
   const _SmbDialog();
 
@@ -694,6 +703,15 @@ class _SmbDialogState extends State<_SmbDialog> {
   final _share = TextEditingController();
   final _user = TextEditingController();
   final _password = TextEditingController();
+  final Set<String> _selectedDirectories = <String>{};
+  List<SmbServer> _servers = const [];
+  List<SmbShare> _shares = const [];
+  List<SmbDirectory> _directories = const [];
+  String _currentDirectory = '';
+  String? _error;
+  bool _busy = false;
+  bool _remember = true;
+  int _step = 0;
 
   @override
   void initState() {
@@ -717,61 +735,362 @@ class _SmbDialogState extends State<_SmbDialog> {
     super.dispose();
   }
 
+  SmbCredentials get _credentials => SmbCredentials(
+    host: _host.text.trim(),
+    share: _share.text.trim(),
+    user: _user.text,
+    password: _password.text,
+  );
+
+  Future<void> _discover() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final servers = await rust.smbDiscoverServers();
+      if (!mounted) return;
+      setState(() => _servers = servers);
+    } catch (e) {
+      if (mounted) setState(() => _error = '局域网扫描失败：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _loadShares() async {
+    if (_host.text.trim().isEmpty) {
+      setState(() => _error = '请选择或填写 SMB 主机地址');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final shares = await rust.smbListShares(
+        host: _host.text.trim(),
+        user: _user.text,
+        password: _password.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _shares = shares;
+        _step = 1;
+      });
+    } catch (e) {
+      // srvsvc share listing is often disabled on privacy-hardened NASes. The
+      // next screen keeps a manual share field, so this is not a dead end.
+      if (mounted) {
+        setState(() {
+          _step = 1;
+          _error = '无法自动列出共享：$e。可手动填写共享名后继续。';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openShare() async {
+    if (_share.text.trim().isEmpty) {
+      setState(() => _error = '请选择或填写共享名');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await rust.smbConnect(
+        host: _host.text.trim(),
+        share: _share.text.trim(),
+        user: _user.text,
+        password: _password.text,
+      );
+      final directories = await rust.smbListDirectories(subdir: '');
+      if (!mounted) return;
+      setState(() {
+        _currentDirectory = '';
+        _directories = directories;
+        _step = 2;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = '无法打开共享：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openDirectory(String path) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final directories = await rust.smbListDirectories(subdir: path);
+      if (!mounted) return;
+      setState(() {
+        _currentDirectory = path;
+        _directories = directories;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _error = '无法读取文件夹：$e');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _goUp() {
+    if (_currentDirectory.isEmpty) return;
+    final slash = _currentDirectory.lastIndexOf('/');
+    _openDirectory(slash < 0 ? '' : _currentDirectory.substring(0, slash));
+  }
+
+  void _toggleDirectory(String path, bool selected) {
+    setState(() {
+      if (selected) {
+        _selectedDirectories.add(path);
+      } else {
+        _selectedDirectories.remove(path);
+      }
+    });
+  }
+
+  List<String> get _normalizedSelection {
+    final sorted = _selectedDirectories.toList()
+      ..sort((a, b) => a.length.compareTo(b.length));
+    return [
+      for (final path in sorted)
+        if (!sorted.any(
+          (parent) =>
+              parent != path && (parent.isEmpty || path.startsWith('$parent/')),
+        ))
+          path,
+    ];
+  }
+
+  Widget _connectionStep() => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      TextField(
+        controller: _host,
+        decoration: const InputDecoration(
+          labelText: 'SMB 主机',
+          hintText: '扫描下方局域网服务，或填写 IP / 主机名',
+        ),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton.icon(
+        onPressed: _busy ? null : _discover,
+        icon: const Icon(Icons.radar_outlined),
+        label: Text(_busy ? '正在扫描局域网…' : '扫描当前局域网的 SMB 服务'),
+      ),
+      if (_servers.isNotEmpty) ...[
+        const SizedBox(height: 6),
+        const Text('发现的 SMB 主机'),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 132),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final server in _servers)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.dns_outlined),
+                  title: Text(server.host),
+                  onTap: () => setState(() => _host.text = server.host),
+                ),
+            ],
+          ),
+        ),
+      ],
+      TextField(
+        controller: _user,
+        decoration: const InputDecoration(labelText: '用户名'),
+      ),
+      TextField(
+        controller: _password,
+        obscureText: true,
+        decoration: const InputDecoration(labelText: '密码（可留空）'),
+      ),
+      CheckboxListTile(
+        contentPadding: EdgeInsets.zero,
+        value: _remember,
+        onChanged: (value) => setState(() => _remember = value ?? true),
+        title: const Text('保存登录凭证'),
+        subtitle: const Text('下次添加 SMB 时自动带入这组凭证'),
+      ),
+    ],
+  );
+
+  Widget _shareStep() => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text('服务器：${_host.text.trim()}'),
+      const SizedBox(height: 8),
+      if (_shares.isNotEmpty) ...[
+        const Text('选择共享'),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 220),
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              for (final share in _shares)
+                ListTile(
+                  dense: true,
+                  selected: _share.text.trim() == share.name,
+                  onTap: _busy
+                      ? null
+                      : () => setState(() => _share.text = share.name),
+                  leading: Icon(
+                    _share.text.trim() == share.name
+                        ? Icons.check_circle
+                        : Icons.folder_shared_outlined,
+                  ),
+                  title: Text(share.name),
+                  subtitle: share.comment.isEmpty ? null : Text(share.comment),
+                ),
+            ],
+          ),
+        ),
+      ],
+      TextField(
+        controller: _share,
+        decoration: const InputDecoration(
+          labelText: '共享名',
+          hintText: '自动列出失败时可手动填写，例如 Anime',
+        ),
+      ),
+    ],
+  );
+
+  Widget _folderStep() {
+    final shownPath = _currentDirectory.isEmpty
+        ? '共享根目录'
+        : '/$_currentDirectory';
+    return SizedBox(
+      width: 520,
+      height: 420,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              IconButton(
+                tooltip: '上一级',
+                onPressed: _currentDirectory.isEmpty || _busy ? null : _goUp,
+                icon: const Icon(Icons.arrow_upward),
+              ),
+              Expanded(child: Text(shownPath, overflow: TextOverflow.ellipsis)),
+            ],
+          ),
+          CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            value: _selectedDirectories.contains(_currentDirectory),
+            onChanged: _busy
+                ? null
+                : (selected) =>
+                      _toggleDirectory(_currentDirectory, selected ?? false),
+            title: const Text('读取当前文件夹及其子文件夹'),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: _busy
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                    children: [
+                      for (final directory in _directories)
+                        ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.folder_outlined),
+                          title: Text(directory.name),
+                          onTap: () => _openDirectory(directory.path),
+                          trailing: Checkbox(
+                            value: _selectedDirectories.contains(
+                              directory.path,
+                            ),
+                            onChanged: (selected) => _toggleDirectory(
+                              directory.path,
+                              selected ?? false,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+          ),
+          Text(
+            '已选择 ${_normalizedSelection.length} 个文件夹',
+            textAlign: TextAlign.end,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('添加 SMB 网络共享'),
+      title: Text(switch (_step) {
+        0 => '添加 SMB 网络共享',
+        1 => '选择共享',
+        _ => '选择番剧文件夹',
+      }),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(
-              controller: _host,
-              decoration: const InputDecoration(
-                labelText: '主机',
-                hintText: '192.168.1.100 或 192.168.1.100:445',
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ),
-            ),
-            TextField(
-              controller: _share,
-              decoration: const InputDecoration(
-                labelText: '共享名',
-                hintText: 'Anime',
-              ),
-            ),
-            TextField(
-              controller: _user,
-              decoration: const InputDecoration(labelText: '用户名'),
-            ),
-            TextField(
-              controller: _password,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: '密码'),
-            ),
+            if (_step == 0) _connectionStep(),
+            if (_step == 1) _shareStep(),
+            if (_step == 2) _folderStep(),
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context),
+          onPressed: _busy ? null : () => Navigator.pop(context),
           child: const Text('取消'),
         ),
         FilledButton(
-          onPressed: () {
-            final host = _host.text.trim();
-            final share = _share.text.trim();
-            if (host.isEmpty || share.isEmpty) return;
-            Navigator.pop(
-              context,
-              SmbCredentials(
-                host: host,
-                share: share,
-                user: _user.text,
-                password: _password.text,
-              ),
-            );
-          },
-          child: const Text('连接'),
+          onPressed: _busy
+              ? null
+              : () {
+                  if (_step == 0) {
+                    _loadShares();
+                  } else if (_step == 1) {
+                    _openShare();
+                  } else {
+                    final selected = _normalizedSelection;
+                    if (selected.isEmpty) {
+                      setState(() => _error = '请选择至少一个需要读取的文件夹');
+                      return;
+                    }
+                    Navigator.pop(
+                      context,
+                      _SmbSetupResult(
+                        credentials: _credentials,
+                        selectedDirectories: selected,
+                        remember: _remember,
+                      ),
+                    );
+                  }
+                },
+          child: Text(switch (_step) {
+            0 => '登录并获取共享',
+            1 => '打开共享',
+            _ => '添加所选文件夹',
+          }),
         ),
       ],
     );

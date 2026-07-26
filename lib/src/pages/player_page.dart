@@ -95,16 +95,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   int _durationMs = 0;
   bool _resumed = false;
   bool _tracksHandled = false;
-  // media_kit retains its controls subtree while the page rebuilds.  Keep the
-  // transport icon on a notifier of its own, so an authoritative native state
-  // event can update that one button without relying on a theme rebuild.
-  final ValueNotifier<bool> _playing = ValueNotifier(false);
   double _rate = 1.0;
   double _subDelay = 0; // seconds
   StreamSubscription? _positionSub;
   StreamSubscription? _durationSub;
   StreamSubscription? _tracksSub;
-  StreamSubscription? _playingSub;
   StreamSubscription? _completedSub;
   // External subtitle files next to the video (auto-loaded; listed in the
   // track sheet so the user can switch between them).
@@ -461,7 +456,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   }
 
   void _listen() {
-    _playing.value = _player.state.playing;
     _positionSub = _player.stream.position.listen((pos) {
       if (!mounted) return;
       _positionMs = pos.inMilliseconds;
@@ -482,9 +476,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       if (tracks.subtitle.isEmpty && tracks.audio.isEmpty) return;
       _tracksHandled = true;
       _applyTrackPreference(tracks);
-    });
-    _playingSub = _player.stream.playing.listen((playing) {
-      if (_playing.value != playing) _playing.value = playing;
     });
     // Autoplay the next episode when one finishes.
     _completedSub = _player.stream.completed.listen((done) {
@@ -705,22 +696,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     await _player.seek(_durationMs > 0 && target > max ? max : target);
   }
 
-  /// Toggle from the state currently rendered to the user.  This avoids the
-  /// native player's initial stream event racing the very first press: the
-  /// button updates immediately, then the authoritative playing stream keeps
-  /// it in sync once mpv confirms the command.
+  /// Delegate the decision to mpv, whose pause state is authoritative.  The
+  /// touch icon below listens to [Player.stream.playing] directly; keeping a
+  /// separate optimistic boolean here made the first tap permanently display
+  /// the wrong glyph on some mobile backends.
   Future<void> _togglePlaying() async {
-    final shouldPlay = !_playing.value;
-    _playing.value = shouldPlay;
     try {
-      if (shouldPlay) {
-        await _player.play();
-      } else {
-        await _player.pause();
-      }
-    } catch (_) {
-      _playing.value = _player.state.playing;
-    }
+      await _player.playOrPause();
+    } catch (_) {}
   }
 
   Future<void> _setSubDelay(double seconds) async {
@@ -737,7 +720,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _positionSub?.cancel();
     _durationSub?.cancel();
     _tracksSub?.cancel();
-    _playingSub?.cancel();
     _completedSub?.cancel();
     _episodeScrollController?.dispose();
     _save();
@@ -752,7 +734,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       windowManager.setFullScreen(false);
     }
     _fullscreen.dispose();
-    _playing.dispose();
     super.dispose();
   }
 
@@ -1104,10 +1085,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
                   const SizedBox(width: 2),
                   Text(
                     '${_seekSec}s',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 11,
-                    ),
+                    style: const TextStyle(color: Colors.white, fontSize: 11),
                   ),
                 ],
               ),
@@ -1172,19 +1150,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // button so the two gestures are independent.
       seekOnDoubleTapBackwardDuration: const Duration(seconds: 10),
       seekOnDoubleTapForwardDuration: const Duration(seconds: 10),
-      // Keep playback unobstructed when the user calls up controls.  The
-      // previous full-screen dimmer + three large centre buttons resembled a
-      // YouTube-style overlay and made an ordinary pause or episode change feel
-      // needlessly disruptive on touch devices.
-      backdropColor: Colors.transparent,
+      // Keep the picture visible, while taking a little glare off very bright
+      // scenes.  The stronger, directional shading lives under the top/bottom
+      // bars below instead of covering the middle of the video.
+      backdropColor: const Color(0x16000000),
       // A compact two-row bottom bar derived from PiliPlus: the progress line
       // sits just above the transport row, rather than floating high above it.
       seekBarThumbColor: _cs.primary,
-      seekBarColor: Colors.white54,
+      seekBarColor: Colors.white70,
       seekBarPositionColor: _cs.primary,
-      seekBarBufferColor: Colors.white70,
-      seekBarHeight: 4.5,
-      seekBarThumbSize: 12,
+      seekBarBufferColor: Colors.white,
+      seekBarHeight: 5.5,
+      seekBarThumbSize: 13,
       seekBarMargin: const EdgeInsets.fromLTRB(20, 0, 20, 54),
       seekBarContainerHeight: 32,
       buttonBarHeight: 38,
@@ -1209,18 +1186,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     );
   }
 
-  /// Small, local backdrops make labels and the seek area legible on bright
-  /// video without putting a dim layer over the entire picture.
-  Widget _readableBar({required Widget child}) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: const Color(0x9C000000),
-      borderRadius: BorderRadius.circular(5),
-      boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 8)],
-    ),
-    child: child,
-  );
+  /// Directional scrims keep the title, transport controls and progress text
+  /// legible over white subtitles/bright frames without reviving the old full
+  /// screen YouTube-style dimmer.
+  Widget _readableBar({required Widget child, required bool top}) =>
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: top ? Alignment.topCenter : Alignment.bottomCenter,
+            end: top ? Alignment.bottomCenter : Alignment.topCenter,
+            colors: const [Color(0xD9000000), Color(0xA6000000)],
+          ),
+          boxShadow: const [
+            BoxShadow(color: Color(0x80000000), blurRadius: 10),
+          ],
+        ),
+        child: child,
+      );
 
   Widget _readableTopBar() => _readableBar(
+    top: true,
     child: Row(
       children: [
         MaterialCustomButton(
@@ -1275,6 +1260,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   );
 
   Widget _readableBottomBar() => _readableBar(
+    top: false,
     child: Row(
       children: [
         _touchTransportGroup(),
@@ -1295,14 +1281,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   Widget _touchTransportGroup() => Row(
     mainAxisSize: MainAxisSize.min,
     children: [
-      ValueListenableBuilder<bool>(
-        valueListenable: _playing,
-        builder: (context, playing, _) => _compactTouchButton(
-          icon: playing ? Icons.pause : Icons.play_arrow,
-          iconSize: 29,
-          tooltip: playing ? '暂停' : '播放',
-          onTap: _togglePlaying,
-        ),
+      StreamBuilder<bool>(
+        stream: _player.stream.playing,
+        initialData: _player.state.playing,
+        builder: (context, snapshot) {
+          final playing = snapshot.data ?? _player.state.playing;
+          return _compactTouchButton(
+            icon: playing ? Icons.pause : Icons.play_arrow,
+            iconSize: 29,
+            tooltip: playing ? '暂停' : '播放',
+            onTap: _togglePlaying,
+          );
+        },
       ),
       const SizedBox(width: 3),
       const MaterialPositionIndicator(

@@ -110,6 +110,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ScannedFile> dco_decode_list_scanned_file(dynamic raw);
 
   @protected
+  List<SmbDirectory> dco_decode_list_smb_directory(dynamic raw);
+
+  @protected
+  List<SmbServer> dco_decode_list_smb_server(dynamic raw);
+
+  @protected
+  List<SmbShare> dco_decode_list_smb_share(dynamic raw);
+
+  @protected
   List<SubtitleCandidate> dco_decode_list_subtitle_candidate(dynamic raw);
 
   @protected
@@ -132,6 +141,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ScannedFile dco_decode_scanned_file(dynamic raw);
+
+  @protected
+  SmbDirectory dco_decode_smb_directory(dynamic raw);
+
+  @protected
+  SmbServer dco_decode_smb_server(dynamic raw);
+
+  @protected
+  SmbShare dco_decode_smb_share(dynamic raw);
 
   @protected
   SubtitleCandidate dco_decode_subtitle_candidate(dynamic raw);
@@ -247,6 +265,17 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<ScannedFile> sse_decode_list_scanned_file(SseDeserializer deserializer);
 
   @protected
+  List<SmbDirectory> sse_decode_list_smb_directory(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<SmbServer> sse_decode_list_smb_server(SseDeserializer deserializer);
+
+  @protected
+  List<SmbShare> sse_decode_list_smb_share(SseDeserializer deserializer);
+
+  @protected
   List<SubtitleCandidate> sse_decode_list_subtitle_candidate(
     SseDeserializer deserializer,
   );
@@ -271,6 +300,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ScannedFile sse_decode_scanned_file(SseDeserializer deserializer);
+
+  @protected
+  SmbDirectory sse_decode_smb_directory(SseDeserializer deserializer);
+
+  @protected
+  SmbServer sse_decode_smb_server(SseDeserializer deserializer);
+
+  @protected
+  SmbShare sse_decode_smb_share(SseDeserializer deserializer);
 
   @protected
   SubtitleCandidate sse_decode_subtitle_candidate(SseDeserializer deserializer);
@@ -420,6 +458,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_smb_directory(
+    List<SmbDirectory> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_smb_server(
+    List<SmbServer> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_smb_share(List<SmbShare> self, SseSerializer serializer);
+
+  @protected
   void sse_encode_list_subtitle_candidate(
     List<SubtitleCandidate> self,
     SseSerializer serializer,
@@ -448,6 +501,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_scanned_file(ScannedFile self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_smb_directory(SmbDirectory self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_smb_server(SmbServer self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_smb_share(SmbShare self, SseSerializer serializer);
 
   @protected
   void sse_encode_subtitle_candidate(
