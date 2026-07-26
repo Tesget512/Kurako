@@ -275,11 +275,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         _handle = handle;
         await _player.open(Media(handle.uri));
         if (seq != _openSeq) return;
-        final loaded = await _player.stream.duration
-            .firstWhere((d) => d > Duration.zero)
-            .timeout(_openWatchdog)
-            .then((_) => true)
-            .catchError((_) => false);
+        final loaded = await _waitForLoadedDuration(_openWatchdog);
         if (seq != _openSeq) return;
         if (loaded) {
           await _applyConfiguredSuperResolution(seq);
@@ -490,13 +486,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// Read embedded chapter markers via mpv (media_kit has no chapters state).
   Future<void> _loadChapters(int seq) async {
     // chapter-list only fills once the file is loaded; wait for a duration.
-    try {
-      await _player.stream.duration
-          .firstWhere((d) => d > Duration.zero)
-          .timeout(const Duration(seconds: 15));
-    } catch (_) {
-      return;
-    }
+    if (!await _waitForLoadedDuration(const Duration(seconds: 15))) return;
     if (seq != _openSeq) return;
     try {
       final raw =
@@ -516,6 +506,34 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
     } catch (_) {
       // No chapters or malformed JSON — the button just stays hidden.
+    }
+  }
+
+  /// Wait for media_kit to expose a real duration without losing an event from
+  /// its broadcast stream. The state checks handle events published before the
+  /// subscription; the second check closes the subscribe/check race itself.
+  Future<bool> _waitForLoadedDuration(Duration timeout) async {
+    if (_player.state.duration > Duration.zero) return true;
+
+    final result = Completer<bool>();
+    final subscription = _player.stream.duration.listen((duration) {
+      if (duration > Duration.zero && !result.isCompleted) {
+        result.complete(true);
+      }
+    });
+    if (_player.state.duration > Duration.zero && !result.isCompleted) {
+      result.complete(true);
+    }
+    final timer = Timer(timeout, () {
+      if (!result.isCompleted) {
+        result.complete(_player.state.duration > Duration.zero);
+      }
+    });
+    try {
+      return await result.future;
+    } finally {
+      timer.cancel();
+      await subscription.cancel();
     }
   }
 

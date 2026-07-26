@@ -543,6 +543,13 @@ static PROXY_RT: Lazy<tokio::runtime::Runtime> = Lazy::new(|| {
 /// while keeping a small SMB server's open-handle queue under control.
 static SMB_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaphore::new(2));
 
+/// Downloads get their own single-permit pool. A whole-file transfer holds its
+/// permit for minutes; sharing [SMB_CONN] with playback meant one active
+/// download halved the playback read pool (every seek queued behind it) and
+/// two downloads starved playback entirely. The persistent session multiplexes
+/// requests, so one extra long-lived read stream is fine for the NAS.
+static SMB_DL_CONN: Lazy<tokio::sync::Semaphore> = Lazy::new(|| tokio::sync::Semaphore::new(1));
+
 /// Get the persistent session, connecting on first use.
 async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
     // Clone out of the mutex in its own statement: an `if let` on the guard
@@ -1062,6 +1069,18 @@ fn is_cancelled(smb_uri: &str) -> bool {
     DOWNLOAD_CANCELLED.lock().unwrap().contains(smb_uri)
 }
 
+async fn acquire_download_permit(smb_uri: &str) -> Result<tokio::sync::SemaphorePermit<'static>> {
+    loop {
+        match tokio::time::timeout(std::time::Duration::from_millis(300), SMB_DL_CONN.acquire())
+            .await
+        {
+            Ok(permit) => return Ok(permit.expect("smb download semaphore closed")),
+            Err(_) if is_cancelled(smb_uri) => anyhow::bail!("下载已取消"),
+            Err(_) => {}
+        }
+    }
+}
+
 /// Download an SMB file into `dest_dir`, reporting progress via `progress`.
 /// Writes to `<name>.part` and renames on completion so an interrupted download
 /// never masquerades as a finished file. Returns the final local path.
@@ -1077,18 +1096,6 @@ pub async fn download(
     // Downloads used to establish a second TCP/authenticated SMB session even
     // while the proxy was playing. Many NASes limit sessions or open handles
     // per client; reuse the same multiplexed session as the proxy instead.
-    let _permit = SMB_CONN.acquire().await;
-    let (reader, sess) = open_session_reader(&c, &path).await?;
-    let total = reader.size();
-
-    // A zero-length video is never a valid completed download. Previously the
-    // loop below was skipped and a zero-byte file was recorded as successful,
-    // which is exactly the "instant completion but no file" symptom on iOS.
-    if total == 0 {
-        let _ = reader.close().await;
-        anyhow::bail!("SMB reported this video as 0 bytes; download was not saved");
-    }
-
     tokio::fs::create_dir_all(dest_dir)
         .await
         .context("create download dir")?;
@@ -1100,9 +1107,32 @@ pub async fn download(
             .and_then(|e| e.to_str())
             .unwrap_or("bin")
     ));
-    let mut out = tokio::fs::File::create(&part_path)
-        .await
-        .context("create .part file")?;
+
+    // Queue among downloads only (playback has its own pool — [SMB_CONN]),
+    // and poll the cancel flag while waiting so a still-queued download reacts
+    // to 取消 immediately instead of only once it finally gets the permit.
+    let _permit = acquire_download_permit(smb_uri).await?;
+    if is_cancelled(smb_uri) {
+        anyhow::bail!("下载已取消");
+    }
+    let (reader, sess) = open_session_reader(&c, &path).await?;
+    let total = reader.size();
+
+    // A zero-length video is never a valid completed download. Previously the
+    // loop below was skipped and a zero-byte file was recorded as successful,
+    // which is exactly the "instant completion but no file" symptom on iOS.
+    if total == 0 {
+        let _ = reader.close().await;
+        anyhow::bail!("SMB reported this video as 0 bytes; download was not saved");
+    }
+
+    let mut out = match tokio::fs::File::create(&part_path).await {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = reader.close().await;
+            return Err(error).context("create .part file");
+        }
+    };
 
     const CHUNK: u64 = 1024 * 1024;
     let mut off: u64 = 0;
@@ -1155,4 +1185,33 @@ pub async fn download(
         .await
         .context("rename .part")?;
     Ok(final_path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn queued_download_slot_can_be_cancelled() {
+        let held = SMB_DL_CONN.acquire().await.unwrap();
+        let uri = "smb://test/queued-download".to_string();
+        DOWNLOAD_CANCELLED.lock().unwrap().remove(&uri);
+
+        let cancel_uri = uri.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            cancel_download(&cancel_uri);
+        });
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            acquire_download_permit(&uri),
+        )
+        .await
+        .expect("queued download ignored cancellation");
+        assert!(result.is_err());
+
+        DOWNLOAD_CANCELLED.lock().unwrap().remove(&uri);
+        drop(held);
+    }
 }
