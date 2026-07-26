@@ -916,7 +916,12 @@ fn persist_match(file_path: &str, bangumi_id: i64) {
         }
         sidecar::Source::Smb => {
             let wrote = RT.block_on(async {
-                let mut map = smb::read_sidecar(&parent).await.unwrap_or_default();
+                // A failed read must NOT degrade to an empty map: writing that
+                // back would overwrite the sidecar and wipe every existing
+                // manual match in the folder. read_sidecar only returns an
+                // empty map for a confirmed-absent file; on transport errors
+                // it fails, and this match lands in the app fallback below.
+                let mut map = smb::read_sidecar(&parent).await?;
                 map.insert(name, bangumi_id);
                 smb::write_sidecar(&parent, &map).await
             });

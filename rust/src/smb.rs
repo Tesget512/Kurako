@@ -235,7 +235,7 @@ async fn walk(
     let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
         Ok(guard) => guard,
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(session);
             anyhow::bail!("smb session remained busy for too long")
         }
     };
@@ -250,12 +250,12 @@ async fn walk(
         }
         Ok(Err(error)) => {
             drop(guard);
-            invalidate_session();
+            invalidate_session_if(session);
             return Err(error).with_context(|| format!("smb list {smb_path}"));
         }
         Err(_) => {
             drop(guard);
-            invalidate_session();
+            invalidate_session_if(session);
             anyhow::bail!("smb list {smb_path} timed out")
         }
     };
@@ -323,7 +323,7 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
     let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
         Ok(guard) => guard,
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb session remained busy for too long")
         }
     };
@@ -338,12 +338,12 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
         }
         Ok(Err(error)) => {
             drop(guard);
-            invalidate_session();
+            invalidate_session_if(&session);
             return Err(error).with_context(|| format!("smb list {dir}"));
         }
         Err(_) => {
             drop(guard);
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb list {dir} timed out")
         }
     };
@@ -361,6 +361,12 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
         };
         let sub_uri = format!("smb://{}/{}/{}", c.addr, c.share, sub_path);
         let url = register_playable(&sub_uri).await?;
+        // Subtitle tokens live exactly as long as the video they were listed
+        // for: remember them so releasing the video clears them too (only one
+        // episode plays at a time, so a flat list is enough).
+        if let Some(token) = url.rsplit('/').next() {
+            SUBTITLE_TOKENS.lock().unwrap().push(token.to_string());
+        }
         out.push(crate::models::SubtitleCandidate {
             file_name: e.name,
             uri: url,
@@ -385,7 +391,7 @@ pub async fn read_sidecar(folder_uri: &str) -> Result<crate::sidecar::SidecarMap
     let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
         Ok(guard) => guard,
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb session remained busy for too long")
         }
     };
@@ -394,19 +400,31 @@ pub async fn read_sidecar(folder_uri: &str) -> Result<crate::sidecar::SidecarMap
         tokio::time::timeout(SETUP_TIMEOUT, client.read_file(tree, &path)).await
     };
     drop(guard);
-    let bytes = match bytes {
-        Ok(bytes) => {
+    match bytes {
+        Ok(Ok(bytes)) => {
             session.touch();
-            bytes
+            Ok(crate::sidecar::parse(&bytes))
+        }
+        // A confirmed-absent sidecar is the normal case for folders the user
+        // never corrected — only THIS may become an empty map.
+        Ok(Err(error)) if error.kind() == smb2::ErrorKind::NotFound => {
+            session.touch();
+            Ok(Default::default())
+        }
+        // Transport-level failure (dead session, network blip): invalidate so
+        // the next attempt reconnects, and surface the error. Treating it as
+        // "no sidecar" made a rescan over a dead session silently skip every
+        // manual match in the folder — and let the manual-match writer
+        // overwrite a populated sidecar with a single entry.
+        Ok(Err(error)) => {
+            invalidate_session_if(&session);
+            Err(error).context("smb read sidecar")
         }
         Err(_) => {
-            invalidate_session();
-            return Err(anyhow::anyhow!("smb read sidecar timed out"));
+            invalidate_session_if(&session);
+            Err(anyhow::anyhow!("smb read sidecar timed out"))
         }
-    };
-    // A read failure here is almost always "file not found" (no sidecar in this
-    // folder), which is normal — treat it as an empty map, not an error.
-    Ok(bytes.map(|b| crate::sidecar::parse(&b)).unwrap_or_default())
+    }
 }
 
 /// Write (create or overwrite) the `.kurako-match.json` sidecar in the SMB
@@ -425,7 +443,7 @@ pub async fn write_sidecar(folder_uri: &str, map: &crate::sidecar::SidecarMap) -
     let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
         Ok(guard) => guard,
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb session remained busy for too long")
         }
     };
@@ -440,7 +458,7 @@ pub async fn write_sidecar(folder_uri: &str, map: &crate::sidecar::SidecarMap) -
             res
         }
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb write sidecar timed out")
         }
     };
@@ -463,7 +481,7 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
     let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, session.inner.lock()).await {
         Ok(guard) => guard,
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb session remained busy for too long")
         }
     };
@@ -478,7 +496,7 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
             res
         }
         Err(_) => {
-            invalidate_session();
+            invalidate_session_if(&session);
             anyhow::bail!("smb delete sidecar timed out")
         }
     };
@@ -495,6 +513,11 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
 
 /// token -> smb share-relative path. Registered by `register_playable`.
 static PLAYABLE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+/// Tokens registered for the current video's external subtitle files
+/// (`list_subtitles`). Dart only ever releases the *video* token, so these are
+/// remembered here and dropped together with it in [unregister_playable] —
+/// otherwise every playback leaked one PLAYABLE entry per subtitle file.
+static SUBTITLE_TOKENS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
 /// The port the proxy bound to (0 = not started yet).
 static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 
@@ -534,13 +557,7 @@ async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
         if !s.has_been_idle_too_long() || !ACTIVE_STREAMS.lock().unwrap().is_empty() {
             return Ok(s);
         }
-        let mut cached = SESSION.lock().unwrap();
-        if cached
-            .as_ref()
-            .is_some_and(|current| std::sync::Arc::ptr_eq(current, &s))
-        {
-            *cached = None;
-        }
+        invalidate_session_if(&s);
     }
     let _guard = SESSION_INIT.lock().await;
     // Re-check: another caller may have connected while we waited for the lock.
@@ -557,14 +574,23 @@ async fn session(c: &SmbCreds) -> Result<std::sync::Arc<SmbSession>> {
 /// otherwise-idle SMB session without notifying the client; retrying once with
 /// a newly authenticated session makes that recoverable instead of surfacing
 /// a spurious HTTP 500 to the iOS loopback player.
-async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReader> {
+/// Returns the reader together with the session it was opened on, so a later
+/// read failure can invalidate exactly that session (see
+/// [invalidate_session_if]) instead of whatever happens to be cached by then.
+async fn open_session_reader(
+    c: &SmbCreds,
+    path: &str,
+) -> Result<(smb2::FileReader, std::sync::Arc<SmbSession>)> {
     let mut last_error = None;
     for attempt in 0..2 {
         let sess = match session(c).await {
             Ok(s) => s,
             Err(e) => {
+                // session() failed to CREATE a session, so there is nothing of
+                // ours to invalidate — and a concurrent caller may have cached
+                // a fresh healthy one in the meantime, which a blanket clear
+                // here would needlessly kill.
                 last_error = Some(e);
-                invalidate_session();
                 continue;
             }
         };
@@ -572,7 +598,7 @@ async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReade
             Ok(guard) => guard,
             Err(_) => {
                 last_error = Some(anyhow::anyhow!("smb session remained busy for too long"));
-                invalidate_session();
+                invalidate_session_if(&sess);
                 continue;
             }
         };
@@ -583,12 +609,12 @@ async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReade
         match open_result {
             Ok(Ok(reader)) => {
                 sess.touch();
-                return Ok(reader);
+                return Ok((reader, sess));
             }
             Ok(Err(e)) => last_error = Some(e.into()),
             Err(_) => last_error = Some(anyhow::anyhow!("smb open file timed out")),
         }
-        invalidate_session();
+        invalidate_session_if(&sess);
         if attempt == 0 {
             continue;
         }
@@ -596,13 +622,28 @@ async fn open_session_reader(c: &SmbCreds, path: &str) -> Result<smb2::FileReade
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("smb open file failed")))
 }
 
-/// Drop the cached session. Called on a read/open failure (the connection is
-/// presumed dead — NAS idle-closed it, network blip, credentials changed) so
-/// the *next* request reconnects instead of repeatedly failing against a dead
-/// handle. In-flight `FileReader`s are unaffected (each owns its own cloned
-/// connection handle once opened).
+/// Unconditionally drop the cached session. Reserved for explicit
+/// reconfiguration (credentials changed / user-initiated reconnect), where any
+/// cached session must not survive regardless of which task created it.
+/// Failure paths must use [invalidate_session_if] instead.
 fn invalidate_session() {
     *SESSION.lock().unwrap() = None;
+}
+
+/// Drop the cached session only if it is still `failed` — the session whose
+/// operation actually errored (presumed dead: NAS idle-closed it, network
+/// blip). An unconditional clear here would let an old stream failing late
+/// tear down the healthy replacement another task just paid a handshake for,
+/// triggering a reconnect storm. In-flight `FileReader`s are unaffected (each
+/// owns its own cloned connection handle once opened).
+fn invalidate_session_if(failed: &std::sync::Arc<SmbSession>) {
+    let mut cached = SESSION.lock().unwrap();
+    if cached
+        .as_ref()
+        .is_some_and(|current| std::sync::Arc::ptr_eq(current, failed))
+    {
+        *cached = None;
+    }
 }
 
 /// Serializes proxy start-up so two concurrent `register_playable` calls don't
@@ -665,6 +706,15 @@ pub async fn register_playable(smb_uri: &str) -> Result<String> {
 pub fn unregister_playable(url: &str) {
     if let Some(token) = url.rsplit('/').next() {
         PLAYABLE.lock().unwrap().remove(token);
+    }
+    // The video's external-subtitle tokens die with it (only one episode plays
+    // at a time; a switch or stop invalidates the old episode's subs too).
+    let subs = std::mem::take(&mut *SUBTITLE_TOKENS.lock().unwrap());
+    if !subs.is_empty() {
+        let mut playable = PLAYABLE.lock().unwrap();
+        for token in &subs {
+            playable.remove(token);
+        }
     }
     // Release is called at the *start* of a switch (before the next file opens),
     // so tear down every lingering stream from the file we're leaving. This is
@@ -812,7 +862,7 @@ async fn serve(
     // the session (it's presumed dead) and answer with a real HTTP 500, so
     // libmpv sees a clean failure — and the *next* request reconnects — instead
     // of spinning forever or repeatedly failing against a stale handle.
-    let reader = match open_session_reader(&c, &path).await {
+    let (reader, sess) = match open_session_reader(&c, &path).await {
         Ok(r) => r,
         Err(e) => {
             write_http_error(&mut stream, "500 SMB Open Failed", &format!("{e:#}")).await;
@@ -913,7 +963,8 @@ async fn serve(
                 // Read failed/timed out on the shared session — assume the
                 // connection died (NAS idle-closed it, network blip) so the
                 // next request reconnects instead of repeating the same error.
-                invalidate_session();
+                // Only invalidate OUR session: a newer one may already exist.
+                invalidate_session_if(&sess);
                 break;
             }
         };
@@ -1027,7 +1078,7 @@ pub async fn download(
     // while the proxy was playing. Many NASes limit sessions or open handles
     // per client; reuse the same multiplexed session as the proxy instead.
     let _permit = SMB_CONN.acquire().await;
-    let reader = open_session_reader(&c, &path).await?;
+    let (reader, sess) = open_session_reader(&c, &path).await?;
     let total = reader.size();
 
     // A zero-length video is never a valid completed download. Previously the
@@ -1069,11 +1120,11 @@ pub async fn download(
             {
                 Ok(Ok(data)) => data,
                 Ok(Err(error)) => {
-                    invalidate_session();
+                    invalidate_session_if(&sess);
                     return Err(error).context("smb read");
                 }
                 Err(_) => {
-                    invalidate_session();
+                    invalidate_session_if(&sess);
                     anyhow::bail!("smb download read timed out")
                 }
             };
