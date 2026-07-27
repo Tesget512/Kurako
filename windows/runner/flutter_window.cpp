@@ -1,8 +1,10 @@
 #include "flutter_window.h"
 
 #include <optional>
+#include <string>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "oauth_callback.h"
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
@@ -25,6 +27,11 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  oauth_callback_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          kKurakoOAuthCallbackChannel,
+          &flutter::StandardMethodCodec::GetInstance());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -40,6 +47,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  oauth_callback_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -51,6 +59,25 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_COPYDATA) {
+    const auto* callback_data =
+        reinterpret_cast<const COPYDATASTRUCT*>(lparam);
+    if (callback_data != nullptr &&
+        callback_data->dwData == kKurakoOAuthCallbackMessage &&
+        callback_data->lpData != nullptr && callback_data->cbData > 1) {
+      const auto* bytes = static_cast<const char*>(callback_data->lpData);
+      size_t length = callback_data->cbData;
+      if (bytes[length - 1] == '\0') --length;
+      const std::string url(bytes, length);
+      if (oauth_callback_channel_) {
+        oauth_callback_channel_->InvokeMethod(
+            "onOAuthCallback",
+            std::make_unique<flutter::EncodableValue>(url));
+      }
+      return 0;
+    }
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

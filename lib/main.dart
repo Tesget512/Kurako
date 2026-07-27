@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:desktop_webview_window/desktop_webview_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
@@ -15,18 +14,8 @@ import 'src/app.dart';
 import 'src/state/providers.dart';
 import 'src/services/proxy.dart';
 
-Future<void> main(List<String> args) async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
-  // flutter_web_auth_2 opens a second Flutter engine to draw the title bar of
-  // its Windows/Linux WebView. It must be dispatched before media, Rust, DB or
-  // main-window initialization; otherwise that helper process starts another
-  // full Kurako instance and OAuth cannot complete reliably.
-  if ((Platform.isWindows || Platform.isLinux) &&
-      runWebViewTitleBarWidget(args)) {
-    return;
-  }
-
   MediaKit.ensureInitialized();
 
   // Cap the decoded-image cache. Covers are downsampled at the widget level

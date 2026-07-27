@@ -21,9 +21,8 @@ Installation
 Requirements
 
 - 64-bit Windows 10 or Windows 11.
-- Bangumi login requires Microsoft Edge WebView2 Runtime. It is normally
-  included with Windows 11. On Windows 10, install the Evergreen WebView2
-  Runtime from Microsoft if Kurako reports that it is unavailable.
+- Bangumi login uses the default browser and returns to Kurako through the
+  kurako:// callback. If the browser asks whether it may open Kurako, allow it.
 - SMB features require network access to the Windows or NAS share and valid
   share credentials.
 

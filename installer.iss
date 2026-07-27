@@ -70,6 +70,11 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: startmenuico
 Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"; Tasks: startmenuicon
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
 
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\kurako"; ValueType: string; ValueName: ""; ValueData: "URL:Kurako OAuth Callback"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\kurako"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\kurako\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""
+
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 Filename: "{app}\docs\安装说明.txt"; Description: "查看安装说明"; Flags: postinstall shellexec skipifsilent unchecked; Languages: cn

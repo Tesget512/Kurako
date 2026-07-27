@@ -13,7 +13,7 @@ Kurako 是一款面向本地番剧收藏的跨平台媒体库与视频播放器�
 运行要求
 
 - 64 位 Windows 10 或 Windows 11。
-- 使用 Bangumi 登录需要 Microsoft Edge WebView2 Runtime。Windows 11 通常已经预装；Windows 10 若提示缺失，请从微软官方网站安装 Evergreen WebView2 Runtime 后重新打开 Kurako。
+- Bangumi 登录会使用系统默认浏览器，并在授权完成后通过 kurako:// 回到 Kurako。浏览器首次回调时如询问是否打开 Kurako，请选择允许。
 - SMB 功能需要设备能够访问同一局域网中的 Windows 或 NAS 共享，并拥有有效的共享账号与权限。
 
 本安装包不会捆绑修改浏览器、系统代理或其他无关软件。
