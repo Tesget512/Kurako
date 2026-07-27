@@ -167,7 +167,7 @@ Stream<DownloadProgress> smbDownload({
 }) =>
     RustLib.instance.api.crateApiSmbDownload(smbUri: smbUri, destDir: destDir);
 
-/// Cancel one in-flight download by its SMB URI (checked between 1MB chunks;
+/// Cancel one in-flight download by its SMB URI (checked between transfer chunks;
 /// other concurrent downloads are unaffected).
 Future<void> smbCancelDownload({required String smbUri}) =>
     RustLib.instance.api.crateApiSmbCancelDownload(smbUri: smbUri);

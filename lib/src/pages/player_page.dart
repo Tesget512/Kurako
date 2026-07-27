@@ -96,6 +96,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   late int _index = widget.initialIndex;
   Episode get _ep => widget.episodes[_index];
+  late final ValueNotifier<int> _episodeIndex;
 
   Timer? _saveTimer;
   bool _controlsLocked = false;
@@ -105,6 +106,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   int _positionMs = 0;
   int _durationMs = 0;
   bool _resumed = false;
+  // Ignore events from the old media between an index change and the matching
+  // player.open. Without this gate, the old stream can resume/complete using
+  // the newly-selected episode's id during the SMB debounce window.
+  bool _acceptPlaybackEvents = false;
   // media_kit first publishes placeholder `auto` / `no` tracks while a media
   // is opening. Embedded subtitle & audio preferences are therefore applied
   // independently, only after each real track list has arrived.
@@ -138,11 +143,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // Open SAF file descriptor for the current episode (Android); released when
   // switching episodes or closing so the fd doesn't leak.
   PlayableHandle? _handle;
-  // Monotonic open counter. Each _openCurrent() call takes the next value;
+  // Monotonic open counter. Each scheduled target takes the next value;
   // after an await it checks it's still the newest, so rapid episode switches
   // (especially SMB, which registers a proxy token + opens a stream) don't race
   // two overlapping opens into a deadlock.
   int _openSeq = 0;
+  // Lets duration watchdogs finish immediately when a newer switch supersedes
+  // them, instead of leaving each obsolete attempt alive for seven seconds.
+  final ValueNotifier<int> _openGeneration = ValueNotifier<int>(0);
+  // media_kit exposes async stop/open/dispose operations on one Player. Keep
+  // them in a single pipeline so a superseded open can finish its cleanup
+  // before the final debounced target starts touching the same mpv instance.
+  Future<void> _playerLifecycle = Future<void>.value();
   // Debounce for rapid episode switching (next/prev/list-tap) over SMB — same
   // logic on every platform. Fixes "快速连续切集，视频几秒加载不出来": a burst
   // of N taps used to hammer N SMB file opens at the NAS at once (Windows via
@@ -175,8 +187,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   // a plain setState.
   final ValueNotifier<bool> _fullscreen = ValueNotifier<bool>(false);
 
-  // Quick-seek jump (seconds), read from [seekDurationProvider] each build.
+  // Quick-seek jump (seconds), kept in sync with [seekDurationProvider].
   int _seekSec = 10;
+  String _superResolutionMode = 'off';
+  ProviderSubscription<int>? _seekDurationSubscription;
+  ProviderSubscription<ThemeSettings>? _themeSubscription;
+  ProviderSubscription<Settings>? _settingsSubscription;
 
   // Android picture-in-picture entry point. enterPipMode() works through the
   // plugin's method channel with a plain FlutterActivity; the enter/exit
@@ -195,6 +211,42 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   @override
   void initState() {
     super.initState();
+    _episodeIndex = ValueNotifier<int>(_index);
+    _seekSec = ref.read(seekDurationProvider);
+    _superResolutionMode = ref.read(settingsProvider).superResolutionMode;
+    _cs = ColorScheme.fromSeed(
+      seedColor: ref.read(themeProvider).seedColor,
+      brightness: Brightness.dark,
+    );
+    // Close these ourselves at the start of dispose. Riverpod 2.6.1 otherwise
+    // closes Consumer dependencies after StatefulElement.unmount, leaving a
+    // short window where an async preference load can rebuild a defunct page.
+    _seekDurationSubscription = ref.listenManual<int>(seekDurationProvider, (
+      _,
+      next,
+    ) {
+      if (mounted && next != _seekSec) setState(() => _seekSec = next);
+    });
+    _themeSubscription = ref.listenManual<ThemeSettings>(themeProvider, (
+      _,
+      next,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        _cs = ColorScheme.fromSeed(
+          seedColor: next.seedColor,
+          brightness: Brightness.dark,
+        );
+      });
+    });
+    _settingsSubscription = ref.listenManual<Settings>(settingsProvider, (
+      _,
+      next,
+    ) {
+      if (mounted && next.superResolutionMode != _superResolutionMode) {
+        setState(() => _superResolutionMode = next.superResolutionMode);
+      }
+    });
     if (_isMobile) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
       SystemChrome.setPreferredOrientations([
@@ -207,7 +259,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       _pip = SimplePip();
     }
     _listen();
-    _openCurrent();
+    _scheduleOpen(debounceSmb: false);
   }
 
   /// Toggle native OS fullscreen (desktop only). No-op on real mobile, which is
@@ -241,8 +293,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   static const Duration _openWatchdog = Duration(seconds: 7);
   static const Duration _openRetryGap = Duration(seconds: 3);
 
-  Future<void> _openCurrent() async {
-    final seq = ++_openSeq;
+  Future<void> _openEpisode(int seq, Episode episode) async {
+    if (!mounted || seq != _openSeq) return;
     _resumed = false;
     _subtitlePreferenceApplied = false;
     _audioPreferenceApplied = false;
@@ -254,19 +306,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _activeExtSub = null;
     _selectedSubtitle.value = SubtitleTrack.auto();
     _chapters = const [];
-    // Release the previous episode's handle (SAF fd / SMB proxy token) BEFORE
-    // resolving the next, so a rapid switch doesn't leave two SMB streams (and
-    // proxy connections) contending on the small Rust runtime.
+    // Tell mpv to unload the URL before unregistering its proxy token. Releasing
+    // first truncates the HTTP body while libavformat is still parsing it (the
+    // EBML-header errors seen in the device log).
     final old = _handle;
     _handle = null;
-    await old?.release();
-    // A newer open superseded us while releasing — abandon this one.
+    if (old != null) {
+      try {
+        await _player.stop();
+      } catch (_) {}
+      await old.release();
+    }
     if (seq != _openSeq) return;
 
     for (var attempt = 1; attempt <= _maxOpenAttempts; attempt++) {
       PlayableHandle? handle;
       try {
-        handle = await MediaSource.forEpisode(_ep).resolvePlayable(_ep);
+        // Capture [episode] when the generation is created. Reading the mutable
+        // [_ep] after an await made an old task open the newly-selected episode
+        // once, followed by the debounced task opening it a second time.
+        handle = await MediaSource.forEpisode(episode).resolvePlayable(episode);
         if (seq != _openSeq) {
           // Superseded during resolve — release what we just acquired and bail.
           await handle.release();
@@ -274,17 +333,39 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         }
         _handle = handle;
         await _player.open(Media(handle.uri));
-        if (seq != _openSeq) return;
-        final loaded = await _waitForLoadedDuration(_openWatchdog);
-        if (seq != _openSeq) return;
+        if (seq != _openSeq) {
+          if (identical(_handle, handle)) _handle = null;
+          try {
+            await _player.stop();
+          } catch (_) {}
+          await handle.release();
+          return;
+        }
+        // Player.open has synchronously stopped/reset the previous media before
+        // returning; events arriving from here belong to this generation.
+        _acceptPlaybackEvents = true;
+        final loaded = await _waitForLoadedDuration(_openWatchdog, seq: seq);
+        if (seq != _openSeq) {
+          if (identical(_handle, handle)) _handle = null;
+          try {
+            await _player.stop();
+          } catch (_) {}
+          await handle.release();
+          return;
+        }
         if (loaded) {
           await _applyConfiguredSuperResolution(seq);
-          _loadExternalSubtitles(seq);
+          if (seq != _openSeq) return;
+          _loadExternalSubtitles(seq, episode);
           _loadChapters(seq);
           break;
         }
-        await _handle?.release();
-        _handle = null;
+        _acceptPlaybackEvents = false;
+        try {
+          await _player.stop();
+        } catch (_) {}
+        if (identical(_handle, handle)) _handle = null;
+        await handle.release();
         if (attempt == _maxOpenAttempts) {
           if (mounted && seq == _openSeq) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -296,10 +377,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         await Future.delayed(_openRetryGap);
         if (seq != _openSeq) return;
       } catch (e) {
+        if (seq == _openSeq) {
+          _acceptPlaybackEvents = false;
+          try {
+            await _player.stop();
+          } catch (_) {}
+        }
         // open() can throw after the handle (SAF fd / SMB proxy token) was
         // resolved and assigned — release it before the next attempt
         // overwrites _handle, or every failed attempt leaks one. Only if it
-        // is still ours: a newer _openCurrent may have taken _handle over
+        // is still ours: a newer _openEpisode may have taken _handle over
         // (and already released this one) while we awaited.
         if (handle != null && identical(_handle, handle)) {
           _handle = null;
@@ -439,14 +526,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// Find sidecar subtitle files (video.sc.ass etc.) and auto-load the best
   /// one. mpv can't discover them itself for SMB (http proxy URL) or SAF
   /// (fd://) sources, and even locally auto-load needs matching filenames only.
-  Future<void> _loadExternalSubtitles(int seq) async {
+  Future<void> _loadExternalSubtitles(int seq, Episode episode) async {
     List<SubtitleCandidate> subs;
     try {
-      subs = await MediaSource.forEpisode(_ep).listSubtitles(_ep);
+      subs = await MediaSource.forEpisode(episode).listSubtitles(episode);
     } catch (_) {
       return;
     }
-    if (!mounted || subs.isEmpty || seq != _openSeq) return;
+    if (!mounted || seq != _openSeq) {
+      await _releaseUnusedSubtitleCandidates(subs);
+      return;
+    }
+    if (subs.isEmpty) return;
     setState(() => _extSubs = subs);
     // Prefer whichever Chinese script (simplified/traditional) matches the
     // system language — see _scriptScore — falling back to the first entry if
@@ -461,6 +552,17 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
     }
     await _loadExtSub(best);
+  }
+
+  Future<void> _releaseUnusedSubtitleCandidates(
+    List<SubtitleCandidate> candidates,
+  ) async {
+    for (final candidate in candidates) {
+      if (!candidate.uri.startsWith('http://127.0.0.1:')) continue;
+      try {
+        await rust.smbRelease(url: candidate.uri);
+      } catch (_) {}
+    }
   }
 
   Future<void> _loadExtSub(SubtitleCandidate sub) async {
@@ -486,7 +588,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// Read embedded chapter markers via mpv (media_kit has no chapters state).
   Future<void> _loadChapters(int seq) async {
     // chapter-list only fills once the file is loaded; wait for a duration.
-    if (!await _waitForLoadedDuration(const Duration(seconds: 15))) return;
+    if (!await _waitForLoadedDuration(const Duration(seconds: 15), seq: seq)) {
+      return;
+    }
     if (seq != _openSeq) return;
     try {
       final raw =
@@ -512,34 +616,47 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// Wait for media_kit to expose a real duration without losing an event from
   /// its broadcast stream. The state checks handle events published before the
   /// subscription; the second check closes the subscribe/check race itself.
-  Future<bool> _waitForLoadedDuration(Duration timeout) async {
+  Future<bool> _waitForLoadedDuration(
+    Duration timeout, {
+    required int seq,
+  }) async {
+    bool isCurrent() => mounted && seq == _openSeq;
+    if (!isCurrent()) return false;
     if (_player.state.duration > Duration.zero) return true;
 
     final result = Completer<bool>();
+    void cancelIfSuperseded() {
+      if (!isCurrent() && !result.isCompleted) result.complete(false);
+    }
+
+    _openGeneration.addListener(cancelIfSuperseded);
     final subscription = _player.stream.duration.listen((duration) {
-      if (duration > Duration.zero && !result.isCompleted) {
+      if (isCurrent() && duration > Duration.zero && !result.isCompleted) {
         result.complete(true);
       }
     });
-    if (_player.state.duration > Duration.zero && !result.isCompleted) {
+    if (isCurrent() &&
+        _player.state.duration > Duration.zero &&
+        !result.isCompleted) {
       result.complete(true);
     }
     final timer = Timer(timeout, () {
       if (!result.isCompleted) {
-        result.complete(_player.state.duration > Duration.zero);
+        result.complete(isCurrent() && _player.state.duration > Duration.zero);
       }
     });
     try {
       return await result.future;
     } finally {
       timer.cancel();
+      _openGeneration.removeListener(cancelIfSuperseded);
       await subscription.cancel();
     }
   }
 
   void _listen() {
     _positionSub = _player.stream.position.listen((pos) {
-      if (!mounted) return;
+      if (!mounted || !_acceptPlaybackEvents) return;
       _positionMs = pos.inMilliseconds;
       if (!_resumed &&
           _durationMs > 0 &&
@@ -550,10 +667,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       }
     });
     _durationSub = _player.stream.duration.listen((d) {
-      if (mounted) _durationMs = d.inMilliseconds;
+      if (mounted && _acceptPlaybackEvents) _durationMs = d.inMilliseconds;
     });
     _tracksSub = _player.stream.tracks.listen((tracks) {
-      if (!mounted) return;
+      if (!mounted || !_acceptPlaybackEvents) return;
       final realSubtitles = tracks.subtitle.any(
         (track) => track.id != 'auto' && track.id != 'no',
       );
@@ -576,7 +693,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     });
     // Autoplay the next episode when one finishes.
     _completedSub = _player.stream.completed.listen((done) {
-      if (done && _durationMs > 0) _playNext(auto: true);
+      if (_acceptPlaybackEvents && done && _durationMs > 0) {
+        _playNext(auto: true);
+      }
     });
     _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) => _save());
   }
@@ -759,7 +878,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
   /// SMB sources debounce (same on every platform) so a burst of rapid switches
   /// only opens the final target, avoiding the SMB connection pile-up the NAS
   /// throttles. See [_switchDebounce].
-  void _scheduleOpen() {
+  void _scheduleOpen({bool debounceSmb = true}) {
     // The old video keeps playing (and emitting events) until the new open
     // lands — SMB debounce + retries + watchdog can stretch that to seconds.
     // Clear the progress snapshot NOW, synchronously with the index change,
@@ -772,20 +891,40 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _positionMs = 0;
     _durationMs = 0;
     _resumed = false;
-    if (_ep.sourceType != 'smb') {
-      _openCurrent();
+    _acceptPlaybackEvents = false;
+    _switchDebounce?.cancel();
+    final seq = ++_openSeq;
+    _openGeneration.value = seq;
+    final episode = _ep;
+    if (!debounceSmb || episode.sourceType != 'smb') {
+      _enqueueOpen(seq, episode);
       return;
     }
-    _switchDebounce?.cancel();
     _switchDebounce = Timer(const Duration(milliseconds: 400), () {
-      if (mounted) _openCurrent();
+      if (mounted && seq == _openSeq) {
+        _enqueueOpen(seq, episode);
+      }
     });
+  }
+
+  void _enqueueOpen(int seq, Episode episode) {
+    final queued = _playerLifecycle.then((_) => _openEpisode(seq, episode));
+    _playerLifecycle = queued.catchError((Object error, StackTrace stackTrace) {
+      debugPrint('Player lifecycle operation failed: $error\n$stackTrace');
+    });
+  }
+
+  void _selectEpisode(int index) {
+    if (index < 0 || index >= widget.episodes.length || index == _index) return;
+    setState(() => _index = index);
+    _episodeIndex.value = index;
   }
 
   Future<void> _playPrev() async {
     if (!_hasPrev) return;
     await _save();
-    setState(() => _index--);
+    if (!mounted || !_hasPrev) return;
+    _selectEpisode(_index - 1);
     _scheduleOpen();
   }
 
@@ -799,7 +938,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       return;
     }
     await _save();
-    setState(() => _index++);
+    if (!mounted || !_hasNext) return;
+    _selectEpisode(_index + 1);
     _scheduleOpen();
   }
 
@@ -844,6 +984,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   @override
   void dispose() {
+    _seekDurationSubscription?.close();
+    _themeSubscription?.close();
+    _settingsSubscription?.close();
+    _acceptPlaybackEvents = false;
+    _openGeneration.value = ++_openSeq;
     _saveTimer?.cancel();
     _switchDebounce?.cancel();
     _positionSub?.cancel();
@@ -851,10 +996,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _tracksSub?.cancel();
     _completedSub?.cancel();
     _selectedSubtitle.dispose();
+    _episodeIndex.dispose();
     _episodeScrollController?.dispose();
     _save();
-    _player.dispose();
-    _handle?.release();
+    final handle = _handle;
+    _handle = null;
+    final disposePlayer = _playerLifecycle.then(
+      (_) => _disposePlayback(handle),
+    );
+    _playerLifecycle = disposePlayer.catchError((
+      Object error,
+      StackTrace stackTrace,
+    ) {
+      debugPrint('Player disposal failed: $error\n$stackTrace');
+    });
     // Restore portrait orientation + system UI when leaving the player.
     if (_isMobile) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
@@ -867,16 +1022,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     super.dispose();
   }
 
+  Future<void> _disposePlayback(PlayableHandle? handle) async {
+    try {
+      await _player.dispose();
+    } catch (_) {
+    } finally {
+      await handle?.release();
+      // The serialized open pipeline has now drained, so no duration watchdog
+      // can still be removing a listener from this notifier.
+      _openGeneration.dispose();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Live values from providers: quick-seek duration (also feeds double-tap).
-    _seekSec = ref.watch(seekDurationProvider);
-    // The player lives over a black video surface, so its UI is always dark —
-    // seed a dark MD3 scheme from the active theme color so controls, the seek
-    // bar and bottom sheets are all on-brand regardless of app light/dark mode.
-    final seed = ref.watch(themeProvider).seedColor;
-    _cs = ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark);
-
     // One control model for every platform: touch gestures remain available on
     // phones/tablets, while the same surface also understands mouse hover,
     // mouse double-click and hardware-keyboard shortcuts. This avoids giving
@@ -1080,7 +1239,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             Navigator.of(context).pop();
             if (i == _index) return;
             await _save();
-            setState(() => _index = i);
+            if (!mounted) return;
+            _selectEpisode(i);
             _scheduleOpen();
           },
         );
@@ -1151,16 +1311,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         // Dragging the title moves the frameless window (double-click to
         // maximize) — otherwise there's no way to reposition it while the
         // player fills the route. No-op on mobile.
-        Expanded(
-          child: WindowDragArea(
-            child: Text(
-              _ep.fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
-        ),
+        Expanded(child: WindowDragArea(child: _episodeTitleText())),
         MaterialDesktopCustomButton(
           icon: const Icon(Icons.subtitles_outlined),
           onPressed: () => _openPanel(_Panel.tracks),
@@ -1188,20 +1339,30 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Under the seek bar: pure playback controls — prev/play/next, rate,
       // quick-seek, volume, position, fullscreen.
       bottomButtonBar: [
-        MaterialDesktopCustomButton(
-          icon: Icon(
-            Icons.skip_previous,
-            color: _hasPrev ? Colors.white : Colors.white30,
+        ValueListenableBuilder<int>(
+          valueListenable: _episodeIndex,
+          builder: (context, index, _) => MaterialDesktopCustomButton(
+            icon: Icon(
+              Icons.skip_previous,
+              color: index > 0 ? Colors.white : Colors.white30,
+            ),
+            onPressed: index > 0 ? _playPrev : () {},
           ),
-          onPressed: _hasPrev ? _playPrev : () {},
         ),
         const MaterialDesktopPlayOrPauseButton(),
-        MaterialDesktopCustomButton(
-          icon: Icon(
-            Icons.skip_next,
-            color: _hasNext ? Colors.white : Colors.white30,
+        ValueListenableBuilder<int>(
+          valueListenable: _episodeIndex,
+          builder: (context, index, _) => MaterialDesktopCustomButton(
+            icon: Icon(
+              Icons.skip_next,
+              color: index < widget.episodes.length - 1
+                  ? Colors.white
+                  : Colors.white30,
+            ),
+            onPressed: index < widget.episodes.length - 1
+                ? () => _playNext()
+                : () {},
           ),
-          onPressed: _hasNext ? () => _playNext() : () {},
         ),
         _desktopRateButton(),
         // Quick-seek: click jumps; right-click / long-press sets the duration.
@@ -1337,16 +1498,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: _popSelf,
         ),
-        Expanded(
-          child: WindowDragArea(
-            child: Text(
-              _ep.fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white, fontSize: 14),
-            ),
-          ),
-        ),
+        Expanded(child: WindowDragArea(child: _episodeTitleText())),
         _seekButton(),
         if (Platform.isAndroid)
           MaterialCustomButton(
@@ -1394,6 +1546,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     ),
   );
 
+  Widget _episodeTitleText() => ValueListenableBuilder<int>(
+    valueListenable: _episodeIndex,
+    builder: (context, index, _) => Text(
+      widget.episodes[index].fileName,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(color: Colors.white, fontSize: 14),
+    ),
+  );
+
   /// Compact touch transport group modelled after PiliPlus:
   /// play/pause → time → previous → next.  Keeping this as one Row makes the
   /// placement deterministic on phones, iPads and narrow Stage Manager panes.
@@ -1406,17 +1568,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
         style: TextStyle(color: Colors.white, fontSize: 12, height: 1),
       ),
       const SizedBox(width: 7),
-      _compactTouchButton(
-        icon: Icons.skip_previous,
-        tooltip: '上一集',
-        enabled: _hasPrev,
-        onTap: _playPrev,
+      ValueListenableBuilder<int>(
+        valueListenable: _episodeIndex,
+        builder: (context, index, _) => _compactTouchButton(
+          icon: Icons.skip_previous,
+          tooltip: '上一集',
+          enabled: index > 0,
+          onTap: _playPrev,
+        ),
       ),
-      _compactTouchButton(
-        icon: Icons.skip_next,
-        tooltip: '下一集',
-        enabled: _hasNext,
-        onTap: () => _playNext(),
+      ValueListenableBuilder<int>(
+        valueListenable: _episodeIndex,
+        builder: (context, index, _) => _compactTouchButton(
+          icon: Icons.skip_next,
+          tooltip: '下一集',
+          enabled: index < widget.episodes.length - 1,
+          onTap: () => _playNext(),
+        ),
       ),
     ],
   );
@@ -1574,7 +1742,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   Widget _superResolutionPanel() {
     final cs = _cs;
-    final mode = ref.watch(settingsProvider).superResolutionMode;
+    final mode = _superResolutionMode;
     const options = <(String, String, String)>[
       ('off', '关闭', '不使用额外图像着色器，负载最低'),
       ('anime4k-light', '轻度', '较少的修复与缩放着色器，适合手机和平板'),

@@ -365,7 +365,7 @@ pub fn smb_download(
     Ok(local)
 }
 
-/// Cancel one in-flight download by its SMB URI (checked between 1MB chunks;
+/// Cancel one in-flight download by its SMB URI (checked between transfer chunks;
 /// other concurrent downloads are unaffected).
 pub fn smb_cancel_download(smb_uri: String) {
     smb::cancel_download(&smb_uri);

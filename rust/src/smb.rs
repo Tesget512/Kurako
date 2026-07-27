@@ -10,10 +10,10 @@
 use crate::models::ScannedFile;
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -361,11 +361,16 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
         };
         let sub_uri = format!("smb://{}/{}/{}", c.addr, c.share, sub_path);
         let url = register_playable(&sub_uri).await?;
-        // Subtitle tokens live exactly as long as the video they were listed
-        // for: remember them so releasing the video clears them too (only one
-        // episode plays at a time, so a flat list is enough).
+        // Associate subtitle tokens with their video path. A superseded open
+        // may release late, after the next episode has already listed its own
+        // subtitles; a process-wide flat list would delete those new tokens.
         if let Some(token) = url.rsplit('/').next() {
-            SUBTITLE_TOKENS.lock().unwrap().push(token.to_string());
+            SUBTITLE_TOKENS
+                .lock()
+                .unwrap()
+                .entry(path.clone())
+                .or_default()
+                .push(token.to_string());
         }
         out.push(crate::models::SubtitleCandidate {
             file_name: e.name,
@@ -513,11 +518,11 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
 
 /// token -> smb share-relative path. Registered by `register_playable`.
 static PLAYABLE: Lazy<Mutex<HashMap<String, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-/// Tokens registered for the current video's external subtitle files
-/// (`list_subtitles`). Dart only ever releases the *video* token, so these are
-/// remembered here and dropped together with it in [unregister_playable] —
-/// otherwise every playback leaked one PLAYABLE entry per subtitle file.
-static SUBTITLE_TOKENS: Lazy<Mutex<Vec<String>>> = Lazy::new(|| Mutex::new(Vec::new()));
+/// Tokens registered for external subtitles. Dart releases only video tokens,
+/// so subtitle tokens are grouped by the source video's share-relative path and
+/// dropped with the last video token registered for that path.
+static SUBTITLE_TOKENS: Lazy<Mutex<HashMap<String, Vec<String>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 /// The port the proxy bound to (0 = not started yet).
 static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 
@@ -657,10 +662,18 @@ fn invalidate_session_if(failed: &std::sync::Arc<SmbSession>) {
 /// both bind a listener.
 static PROXY_INIT: Mutex<()> = Mutex::new(());
 static TOKEN_SEQ: AtomicU64 = AtomicU64::new(1);
-/// Cancellation senders for in-flight proxy streams, keyed by a stream id.
-/// Do not abort a task directly: `FileReader` needs async `close()` to release
-/// its remote SMB handle, and forced task abort skips that cleanup.
-static ACTIVE_STREAMS: Lazy<Mutex<HashMap<u64, tokio::sync::watch::Sender<bool>>>> =
+/// One in-flight loopback request. Keeping its token is essential: a late
+/// release from a superseded Dart open must cancel only that old URL, never the
+/// new episode which may already be reading through the same proxy.
+struct ActiveStream {
+    token: String,
+    cancellation: tokio::sync::watch::Sender<bool>,
+    started_at: Instant,
+}
+
+/// Active proxy streams keyed by request id. Do not abort tasks directly:
+/// `FileReader` needs async `close()` to release its remote SMB handle.
+static ACTIVE_STREAMS: Lazy<Mutex<HashMap<u64, ActiveStream>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static STREAM_SEQ: AtomicU64 = AtomicU64::new(1);
 
@@ -679,15 +692,41 @@ fn clear_proxy_port(port: u16) {
     let _ = PROXY_PORT.compare_exchange(port, 0, Ordering::AcqRel, Ordering::Acquire);
 }
 
-/// Ask every active stream to finish its async SMB close before it exits.
-/// Called whenever an episode token is released.
-pub fn abort_all_streams() {
+/// Ask only streams belonging to [tokens] to finish their async SMB close.
+/// Global cancellation made rapid switches nondeterministic: releasing an old
+/// handle after the next URL started would truncate the new HTTP body too.
+fn cancel_streams_for_tokens(tokens: &HashSet<String>) {
     let cancellations: Vec<tokio::sync::watch::Sender<bool>> = {
-        let mut m = ACTIVE_STREAMS.lock().unwrap();
-        m.drain().map(|(_, h)| h).collect()
+        let mut streams = ACTIVE_STREAMS.lock().unwrap();
+        let ids: Vec<u64> = streams
+            .iter()
+            .filter_map(|(id, stream)| tokens.contains(&stream.token).then_some(*id))
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| streams.remove(&id).map(|stream| stream.cancellation))
+            .collect()
     };
     for cancellation in cancellations {
         let _ = cancellation.send(true);
+    }
+}
+
+fn playback_download_yield() -> Option<Duration> {
+    const STARTUP_PRIORITY_WINDOW: Duration = Duration::from_secs(3);
+    const STARTUP_YIELD: Duration = Duration::from_millis(60);
+    const STEADY_YIELD: Duration = Duration::from_millis(15);
+
+    let streams = ACTIVE_STREAMS.lock().unwrap();
+    if streams.is_empty() {
+        return None;
+    }
+    if streams
+        .values()
+        .any(|stream| stream.started_at.elapsed() < STARTUP_PRIORITY_WINDOW)
+    {
+        Some(STARTUP_YIELD)
+    } else {
+        Some(STEADY_YIELD)
     }
 }
 /// Total bytes streamed to clients since process start. Dart polls this and
@@ -711,24 +750,42 @@ pub async fn register_playable(smb_uri: &str) -> Result<String> {
 
 /// Drop a previously registered token (called when playback ends).
 pub fn unregister_playable(url: &str) {
-    if let Some(token) = url.rsplit('/').next() {
-        PLAYABLE.lock().unwrap().remove(token);
+    let mut released_tokens = HashSet::new();
+    let video_path = url.rsplit('/').next().and_then(|token| {
+        released_tokens.insert(token.to_string());
+        PLAYABLE.lock().unwrap().remove(token)
+    });
+    // Keep the sidecars while another attempt for the same video is registered.
+    // This covers a late release from a superseded retry of the same episode.
+    if let Some(video_path) = video_path {
+        let same_video_still_registered = PLAYABLE
+            .lock()
+            .unwrap()
+            .values()
+            .any(|path| path == &video_path);
+        if !same_video_still_registered {
+            if let Some(subs) = SUBTITLE_TOKENS.lock().unwrap().remove(&video_path) {
+                released_tokens.extend(subs);
+            }
+        }
     }
-    // The video's external-subtitle tokens die with it (only one episode plays
-    // at a time; a switch or stop invalidates the old episode's subs too).
-    let subs = std::mem::take(&mut *SUBTITLE_TOKENS.lock().unwrap());
-    if !subs.is_empty() {
+    // A stale Dart subtitle-list operation may release a sidecar URL directly
+    // after its owning video token has already gone. Remove that token from any
+    // pending ownership list as well, so the bookkeeping cannot leak forever.
+    {
+        let mut subtitle_tokens = SUBTITLE_TOKENS.lock().unwrap();
+        for tokens in subtitle_tokens.values_mut() {
+            tokens.retain(|token| !released_tokens.contains(token));
+        }
+        subtitle_tokens.retain(|_, tokens| !tokens.is_empty());
+    }
+    if !released_tokens.is_empty() {
         let mut playable = PLAYABLE.lock().unwrap();
-        for token in &subs {
+        for token in &released_tokens {
             playable.remove(token);
         }
     }
-    // Release is called at the *start* of a switch (before the next file opens),
-    // so tear down every lingering stream from the file we're leaving. This is
-    // the active fix for the cross-folder freeze: don't wait for old connections
-    // to drain (a passive timeout) — close them now so the next open has free
-    // NAS sessions to work with.
-    abort_all_streams();
+    cancel_streams_for_tokens(&released_tokens);
 }
 
 /// Start the loopback HTTP server once (on the dedicated `PROXY_RT`); returns
@@ -772,16 +829,9 @@ fn ensure_proxy() -> Result<u16> {
             match listener.accept().await {
                 Ok((stream, _)) => {
                     let id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
-                    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-                    // Insert BEFORE spawning: a short-lived serve task (e.g. a
-                    // health probe that connects and disconnects immediately)
-                    // can otherwise run to completion — including its remove —
-                    // before this insert, leaving the entry in the map forever
-                    // and keeping is_empty() false for the idle-rotation check.
-                    ACTIVE_STREAMS.lock().unwrap().insert(id, cancel_tx);
                     // serve() runs on PROXY_RT (current runtime), isolated from RT.
                     let jh = tokio::spawn(async move {
-                        let _ = serve(stream, cancel_rx).await;
+                        let _ = serve(stream, id).await;
                         ACTIVE_STREAMS.lock().unwrap().remove(&id);
                     });
                     // Keep the task detached: it must be allowed to close the
@@ -799,17 +849,16 @@ fn ensure_proxy() -> Result<u16> {
 }
 
 /// Handle one HTTP request: parse the token + optional Range, stream the file.
-async fn serve(
-    mut stream: TcpStream,
-    mut cancelled: tokio::sync::watch::Receiver<bool>,
-) -> Result<()> {
+async fn serve(mut stream: TcpStream, stream_id: u64) -> Result<()> {
     // Read headers (until CRLFCRLF). Video requests are tiny, 8KB is plenty.
     let mut buf = Vec::new();
     let mut tmp = [0u8; 4096];
     loop {
-        let n = tokio::select! {
-            _ = cancelled.changed() => return Ok(()),
-            n = stream.read(&mut tmp) => n?,
+        let n = match tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut tmp))
+            .await
+        {
+            Ok(result) => result?,
+            Err(_) => return Ok(()),
         };
         if n == 0 {
             return Ok(());
@@ -849,6 +898,23 @@ async fn serve(
             .await;
         return Ok(());
     };
+
+    // Register only after the token has been parsed, so releases can target the
+    // correct request. Recheck PLAYABLE after insertion to close the tiny race
+    // where the token is released between the first lookup and this insert.
+    let (cancel_tx, mut cancelled) = tokio::sync::watch::channel(false);
+    ACTIVE_STREAMS.lock().unwrap().insert(
+        stream_id,
+        ActiveStream {
+            token: token.clone(),
+            cancellation: cancel_tx,
+            started_at: Instant::now(),
+        },
+    );
+    if !PLAYABLE.lock().unwrap().contains_key(&token) {
+        ACTIVE_STREAMS.lock().unwrap().remove(&stream_id);
+        return Ok(());
+    }
 
     let Some(c) = creds() else {
         write_http_error(&mut stream, "500 No SMB", "SMB credentials are unavailable").await;
@@ -1134,12 +1200,18 @@ pub async fn download(
         }
     };
 
-    const CHUNK: u64 = 1024 * 1024;
+    // Smaller requests keep the shared SMB2 connection responsive to libmpv.
+    // While a proxy stream is active, each background chunk yields briefly so
+    // a whole-file transfer cannot monopolize server credits or Wi-Fi airtime.
+    const CHUNK: u64 = 256 * 1024;
     let mut off: u64 = 0;
     let transfer_result: Result<()> = async {
         while off < total {
             if is_cancelled(smb_uri) {
                 anyhow::bail!("下载已取消");
+            }
+            if let Some(delay) = playback_download_yield() {
+                tokio::time::sleep(delay).await;
             }
             let want = CHUNK.min(total - off);
             let data = match tokio::time::timeout(
@@ -1213,5 +1285,48 @@ mod tests {
 
         DOWNLOAD_CANCELLED.lock().unwrap().remove(&uri);
         drop(held);
+    }
+
+    #[test]
+    fn unregistering_one_token_does_not_cancel_another_stream() {
+        let first_id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
+        let second_id = STREAM_SEQ.fetch_add(1, Ordering::Relaxed);
+        let first_token = format!("test-old-{first_id}");
+        let second_token = format!("test-new-{second_id}");
+        let (first_tx, first_rx) = tokio::sync::watch::channel(false);
+        let (second_tx, second_rx) = tokio::sync::watch::channel(false);
+        {
+            let mut playable = PLAYABLE.lock().unwrap();
+            playable.insert(first_token.clone(), "old/video.mkv".to_string());
+            playable.insert(second_token.clone(), "new/video.mkv".to_string());
+        }
+        {
+            let mut streams = ACTIVE_STREAMS.lock().unwrap();
+            streams.insert(
+                first_id,
+                ActiveStream {
+                    token: first_token.clone(),
+                    cancellation: first_tx,
+                    started_at: Instant::now(),
+                },
+            );
+            streams.insert(
+                second_id,
+                ActiveStream {
+                    token: second_token.clone(),
+                    cancellation: second_tx,
+                    started_at: Instant::now(),
+                },
+            );
+        }
+
+        unregister_playable(&format!("http://127.0.0.1:1/{first_token}"));
+
+        assert_eq!(*first_rx.borrow(), true);
+        assert_eq!(*second_rx.borrow(), false);
+        let mut streams = ACTIVE_STREAMS.lock().unwrap();
+        assert!(!streams.contains_key(&first_id));
+        assert!(streams.remove(&second_id).is_some());
+        PLAYABLE.lock().unwrap().remove(&second_token);
     }
 }

@@ -54,17 +54,21 @@ abstract class MediaSource {
 /// SMB registers a proxy token — both must be released after playback.
 class PlayableHandle {
   final String uri;
-  final int? _fd;
-  final bool _smb;
-  PlayableHandle(this.uri, {int? fd, bool smb = false}) : _fd = fd, _smb = smb;
+  final int? fd;
+  final bool smb;
+  bool _released = false;
+  PlayableHandle(this.uri, {this.fd, this.smb = false});
 
   Future<void> release() async {
-    if (_fd != null) {
+    if (_released) return;
+    _released = true;
+    final openFd = fd;
+    if (openFd != null) {
       try {
-        await SafUtil().closeFileDescriptor(_fd);
+        await SafUtil().closeFileDescriptor(openFd);
       } catch (_) {}
     }
-    if (_smb) {
+    if (smb) {
       try {
         await rust.smbRelease(url: uri);
       } catch (_) {}
