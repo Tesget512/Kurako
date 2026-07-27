@@ -352,6 +352,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const Divider(height: 32),
           _section(context, '播放器'),
           SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('使用外置播放器'),
             subtitle: Text(
               Platform.isAndroid

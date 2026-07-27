@@ -1,0 +1,36 @@
+Kurako - Third-Party Notices
+
+Kurako includes or depends on open-source software. Each component remains
+subject to its own license and copyright notices. This summary does not replace
+the full license text shipped by, or published with, each upstream project.
+
+Core runtime and frameworks
+
+- Flutter / Dart SDK - BSD 3-Clause License
+  https://github.com/flutter/flutter
+- Rust toolchain and Rust libraries - licenses declared by each crate
+  https://www.rust-lang.org/
+- flutter_rust_bridge - MIT License
+  https://github.com/fzyzcjy/flutter_rust_bridge
+- media_kit - MIT License
+  https://github.com/media-kit/media-kit
+- mpv - GPL-2.0-or-later by default; LGPL build options are documented upstream
+  https://github.com/mpv-player/mpv
+- Anime4K - MIT License
+  https://github.com/bloc97/Anime4K
+
+Services and design references
+
+- Bangumi API and metadata service
+  https://bangumi.github.io/api/
+- bangumi-proxy by Soyorin
+  https://github.com/Yuri-NagaSaki/bangumi-proxy
+- PiliPlus - GPL-3.0 License; player interaction reference
+  https://github.com/bggRGjQaUbCoE/PiliPlus
+- Kazumi - GPL-3.0 License; detail-page layout reference
+  https://github.com/Predidit/Kazumi
+
+Flutter packages and Rust crates not individually listed here retain the
+license declared in their package metadata and upstream source repository.
+The vendored media_kit_video source retains its upstream MIT license at
+third_party/media_kit_video/LICENSE in the Kurako source tree.

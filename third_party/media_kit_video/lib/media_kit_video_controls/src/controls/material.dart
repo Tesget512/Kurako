@@ -143,6 +143,15 @@ class MaterialVideoControlsThemeData {
   /// unlock button above it.
   final bool controlsLocked;
 
+  /// Hide controls as soon as a hover-capable pointer leaves the full video.
+  final bool hideControlsOnMouseExit;
+
+  /// Hide the desktop cursor together with idle controls.
+  final bool hideMouseOnControlsRemoval;
+
+  /// Extra host shortcuts which remain active while touch controls are locked.
+  final Map<ShortcutActivator, VoidCallback>? keyboardShortcuts;
+
   /// Whether to enable double tap to seek on left or right side of the screen.
   final bool seekOnDoubleTap;
 
@@ -300,6 +309,9 @@ class MaterialVideoControlsThemeData {
     this.seekGesture = false,
     this.gesturesEnabledWhileControlsVisible = true,
     this.controlsLocked = false,
+    this.hideControlsOnMouseExit = false,
+    this.hideMouseOnControlsRemoval = false,
+    this.keyboardShortcuts,
     this.seekOnDoubleTap = false,
     this.seekOnDoubleTapEnabledWhileControlsVisible = true,
     this.seekOnDoubleTapLayoutTapsRatios = const [1, 1, 1],
@@ -363,6 +375,9 @@ class MaterialVideoControlsThemeData {
     bool? seekGesture,
     bool? gesturesEnabledWhileControlsVisible,
     bool? controlsLocked,
+    bool? hideControlsOnMouseExit,
+    bool? hideMouseOnControlsRemoval,
+    Map<ShortcutActivator, VoidCallback>? keyboardShortcuts,
     bool? seekOnDoubleTap,
     bool? seekOnDoubleTapEnabledWhileControlsVisible,
     List<int>? seekOnDoubleTapLayoutTapsRatios,
@@ -416,6 +431,11 @@ class MaterialVideoControlsThemeData {
           gesturesEnabledWhileControlsVisible ??
               this.gesturesEnabledWhileControlsVisible,
       controlsLocked: controlsLocked ?? this.controlsLocked,
+      hideControlsOnMouseExit:
+          hideControlsOnMouseExit ?? this.hideControlsOnMouseExit,
+      hideMouseOnControlsRemoval:
+          hideMouseOnControlsRemoval ?? this.hideMouseOnControlsRemoval,
+      keyboardShortcuts: keyboardShortcuts ?? this.keyboardShortcuts,
       seekOnDoubleTap: seekOnDoubleTap ?? this.seekOnDoubleTap,
       seekOnDoubleTapEnabledWhileControlsVisible:
           seekOnDoubleTapEnabledWhileControlsVisible ??
@@ -507,8 +527,8 @@ class MaterialVideoControlsTheme extends InheritedWidget {
 
   @override
   bool updateShouldNotify(MaterialVideoControlsTheme oldWidget) =>
-      identical(normal, oldWidget.normal) &&
-      identical(fullscreen, oldWidget.fullscreen);
+      !identical(normal, oldWidget.normal) ||
+      !identical(fullscreen, oldWidget.fullscreen);
 }
 
 /// {@macro material_video_controls}
@@ -569,6 +589,8 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
           : 0.0);
   Offset? _tapPosition;
   bool _doubleTapWasMouse = false;
+  PointerDeviceKind? _activePointerKind;
+  bool _horizontalDragWasMouse = false;
 
   void _handleDoubleTapDown(TapDownDetails details) {
     setState(() {
@@ -588,18 +610,25 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       });
       shiftSubtitle();
     }
+    _scheduleControlsHide();
+  }
+
+  void _scheduleControlsHide() {
     _timer?.cancel();
-    _timer = Timer(_theme(context).controlsHoverDuration, () {
-      if (mounted) {
-        setState(() {
-          visible = false;
-        });
-        unshiftSubtitle();
-      }
+    _timer = Timer(_theme(context).controlsHoverDuration, hideControls);
+  }
+
+  void hideControls() {
+    _timer?.cancel();
+    if (!visible) return;
+    setState(() {
+      visible = false;
     });
+    unshiftSubtitle();
   }
 
   void _handleLongPress() {
+    if (_activePointerKind == PointerDeviceKind.mouse) return;
     setState(() {
       _speedUpIndicator = true;
     });
@@ -608,6 +637,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   }
 
   void _handleLongPressEnd(LongPressEndDetails details) {
+    if (!_speedUpIndicator) return;
     setState(() {
       _speedUpIndicator = false;
     });
@@ -645,17 +675,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       );
 
       if (_theme(context).visibleOnMount) {
-        _timer = Timer(
-          _theme(context).controlsHoverDuration,
-          () {
-            if (mounted) {
-              setState(() {
-                visible = false;
-              });
-              unshiftSubtitle();
-            }
-          },
-        );
+        _scheduleControlsHide();
       }
     }
   }
@@ -713,11 +733,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     if (!visible) {
       showControls();
     } else {
-      setState(() {
-        visible = false;
-      });
-      unshiftSubtitle();
-      _timer?.cancel();
+      hideControls();
     }
   }
 
@@ -806,7 +822,19 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
 
     setState(() {
       _dragInitialDelta = Offset.zero;
+      swipeDuration = 0;
       showSwipeDuration = false;
+      _seekBarDeltaValueNotifier.value = Duration.zero;
+    });
+  }
+
+  void onHorizontalDragCancel() {
+    _horizontalDragWasMouse = false;
+    setState(() {
+      _dragInitialDelta = Offset.zero;
+      swipeDuration = 0;
+      showSwipeDuration = false;
+      _seekBarDeltaValueNotifier.value = Duration.zero;
     });
   }
 
@@ -952,11 +980,25 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       /// Add [Directionality] to ltr to avoid wrong animation of sides.
       child: Directionality(
         textDirection: TextDirection.ltr,
-        child: Focus(
-          focusNode: videoViewParametersNotifier(context).value.focusNode,
-          autofocus: true,
-          onKeyEvent: controlsLocked ? null : _handleKeyEvent,
-          child: Material(
+        child: MouseRegion(
+          cursor: _theme(context).hideMouseOnControlsRemoval &&
+                  !controlsLocked &&
+                  !visible
+              ? SystemMouseCursors.none
+              : MouseCursor.defer,
+          onEnter: controlsLocked ? null : (_) => showControls(),
+          onHover: controlsLocked ? null : (_) => showControls(),
+          onExit: controlsLocked || !_theme(context).hideControlsOnMouseExit
+              ? null
+              : (_) => hideControls(),
+          child: CallbackShortcuts(
+            bindings: _theme(context).keyboardShortcuts ??
+                const <ShortcutActivator, VoidCallback>{},
+            child: Focus(
+              focusNode: videoViewParametersNotifier(context).value.focusNode,
+              autofocus: true,
+              onKeyEvent: controlsLocked ? null : _handleKeyEvent,
+              child: Material(
             elevation: 0.0,
             borderOnForeground: false,
             animationDuration: Duration.zero,
@@ -1059,9 +1101,12 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                         top: 16.0,
                         right: 16.0,
                         bottom: 16.0 + subtitleVerticalShiftOffset,
-                        child: MouseRegion(
-                          onHover:
-                              controlsLocked ? null : (_) => showControls(),
+                        child: Listener(
+                          onPointerDown: controlsLocked
+                              ? null
+                              : (event) => _activePointerKind = event.kind,
+                          onPointerUp: (_) => _activePointerKind = null,
+                          onPointerCancel: (_) => _activePointerKind = null,
                           child: GestureDetector(
                             // Let Flutter disambiguate a single tap from a
                             // double tap. The old PointerDown listener showed
@@ -1116,6 +1161,10 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                             onHorizontalDragUpdate: controlsLocked
                                 ? null
                                 : (details) {
+                                    if (details.kind ==
+                                        PointerDeviceKind.mouse) {
+                                      return;
+                                    }
                                     if ((!mount &&
                                             _theme(context).seekGesture) ||
                                         (_theme(context).seekGesture &&
@@ -1124,14 +1173,29 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                       onHorizontalDragUpdate(details);
                                     }
                                   },
-                            onHorizontalDragEnd: controlsLocked
+                            onHorizontalDragStart: controlsLocked
                                 ? null
                                 : (details) {
+                                    _horizontalDragWasMouse = details.kind ==
+                                        PointerDeviceKind.mouse;
+                                  },
+                            onHorizontalDragEnd: controlsLocked
+                                ? null
+                                : (_) {
+                                    final ignored = _horizontalDragWasMouse;
+                                    _horizontalDragWasMouse = false;
+                                    if (ignored) return;
                                     onHorizontalDragEnd();
                                   },
+                            onHorizontalDragCancel: controlsLocked
+                                ? null
+                                : onHorizontalDragCancel,
                             onVerticalDragUpdate: controlsLocked
                                 ? null
                                 : (e) async {
+                                    if (e.kind == PointerDeviceKind.mouse) {
+                                      return;
+                                    }
                                     final delta = e.delta.dy;
                                     final Offset position = e.localPosition;
 
@@ -1673,6 +1737,8 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                       ),
                     ),
               ],
+            ),
+              ),
             ),
           ),
         ),

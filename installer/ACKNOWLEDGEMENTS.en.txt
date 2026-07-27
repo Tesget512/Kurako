@@ -1,0 +1,17 @@
+Acknowledgements
+
+Kurako is built on open-source software and public services. Thanks to the
+projects, communities, maintainers, and contributors behind:
+
+- Flutter
+- Rust and flutter_rust_bridge
+- media_kit and mpv
+- Anime4K by bloc97
+- Bangumi
+- bangumi-proxy by Soyorin
+- PiliPlus, for player interaction references
+- Kazumi, for detail-page layout references
+
+Third-party copyrights and trademarks belong to their respective owners. Each
+component remains subject to its own license. See THIRD_PARTY_NOTICES.txt in the
+installation folder for the primary component and license summary.

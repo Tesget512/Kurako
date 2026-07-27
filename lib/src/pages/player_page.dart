@@ -57,7 +57,7 @@ class PlayerPage extends ConsumerStatefulWidget {
   ConsumerState<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends ConsumerState<PlayerPage> {
+class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   // Enable libass so ASS/SSA + embedded subtitles render with their styling via
   // mpv. On Android libass REQUIRES a bundled font (asset + its internal name),
   // otherwise NO subtitle renders at all.
@@ -260,8 +260,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     if (Platform.isAndroid) {
       _pip = SimplePip();
     }
+    if (!_isMobile) windowManager.addListener(this);
     _listen();
     _scheduleOpen(debounceSmb: false);
+  }
+
+  @override
+  void onWindowBlur() {
+    // A pointer released after Alt-Tab or outside the native window may not
+    // deliver Flutter's pointer-up/cancel callback. Never leave the temporary
+    // touch long-press speed active after the desktop window loses focus.
+    if ((_player.state.rate - _rate).abs() > 0.01) {
+      unawaited(_player.setRate(_rate));
+    }
   }
 
   /// Toggle native OS fullscreen (desktop only). No-op on real mobile, which is
@@ -1021,6 +1032,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
       // Leave the OS window as we found it (windowed) when closing the player.
       windowManager.setFullScreen(false);
     }
+    if (!_isMobile) windowManager.removeListener(this);
     _fullscreen.dispose();
     super.dispose();
   }
@@ -1092,21 +1104,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
     return Theme(
       data: dark,
-      // media_kit's controls-theme updateShouldNotify is broken (inverted), so
-      // a mounted controls tree never sees a new themeData. Key the subtree on
-      // the values baked into the theme (seek duration, control set) to force
-      // a clean remount whenever they change — double-tap durations included.
-      child: KeyedSubtree(
-        key: ValueKey('player-controls-$_seekSec-$_controlsLocked'),
-        child: Scaffold(
-          key: _scaffoldKey,
-          backgroundColor: Colors.black,
-          endDrawer: _buildDrawer(),
-          // Open only via the buttons — an edge-swipe would fight the player's
-          // horizontal seek gesture.
-          endDrawerEnableOpenDragGesture: false,
-          body: playerBody,
-        ),
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: Colors.black,
+        endDrawer: _buildDrawer(),
+        // Open only via the buttons — an edge-swipe would fight the player's
+        // horizontal seek gesture.
+        endDrawerEnableOpenDragGesture: false,
+        body: playerBody,
       ),
     );
   }
@@ -1435,6 +1440,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   MaterialVideoControlsThemeData _mobileTheme() {
     return MaterialVideoControlsThemeData(
+      // The visual controls stay unified across touch and desktop, but a real
+      // mouse follows desktop conventions: leaving the whole video hides the
+      // controls immediately and an idle pointer disappears with them.
+      hideControlsOnMouseExit: true,
+      hideMouseOnControlsRemoval: true,
+      keyboardShortcuts: {
+        const SingleActivator(LogicalKeyboardKey.mediaPlay): () =>
+            _player.play(),
+        const SingleActivator(LogicalKeyboardKey.mediaPause): () =>
+            _player.pause(),
+        const SingleActivator(LogicalKeyboardKey.keyM): () =>
+            _player.setVolume(_player.state.volume > 0 ? 0 : 100),
+        const SingleActivator(LogicalKeyboardKey.keyF): _toggleFullscreen,
+        const SingleActivator(LogicalKeyboardKey.escape): () {
+          if (_fullscreen.value) _toggleFullscreen();
+        },
+      },
       // Touch gestures.
       seekOnDoubleTap: true,
       // PiliPlus uses a left-quarter / central-half / right-quarter layout:

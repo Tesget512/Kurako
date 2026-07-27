@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_web_auth_2/flutter_web_auth_2.dart';
@@ -14,6 +17,8 @@ import '../rust/api.dart' show OAuthResult;
 /// Safari/Chrome closes and the app resumes as soon as authorization succeeds.
 const String kOAuthRedirectUri = 'kurako://oauth/callback';
 const String _kCallbackScheme = 'kurako';
+const String _kCallbackHost = 'oauth';
+const String _kCallbackPath = '/callback';
 
 /// Drives the Bangumi OAuth2 authorization-code flow:
 /// 1. open the provider in the operating system's authentication session,
@@ -28,23 +33,45 @@ class BangumiOAuth {
   static Future<OAuthResult> login({
     Duration timeout = const Duration(minutes: 5),
   }) async {
-    final authUrl = await rust.oauthAuthorizeUrl();
+    final state = _newOAuthState();
+    final authUri = Uri.parse(await rust.oauthAuthorizeUrl());
+    final authUrl = authUri
+        .replace(queryParameters: {...authUri.queryParameters, 'state': state})
+        .toString();
     String callbackUrl;
     try {
       callbackUrl =
           await FlutterWebAuth2.authenticate(
             url: authUrl,
             callbackUrlScheme: _kCallbackScheme,
+            options: Platform.isWindows || Platform.isLinux
+                ? const FlutterWebAuth2Options(
+                    useWebview: true,
+                    httpsHost: _kCallbackHost,
+                    httpsPath: _kCallbackPath,
+                  )
+                : const FlutterWebAuth2Options(),
           ).timeout(
             timeout,
             onTimeout: () => throw const OAuthException('授权超时，请重试'),
           );
     } on PlatformException catch (e) {
       throw OAuthException('无法完成 Bangumi 授权：${e.message ?? e.code}');
+    } on StateError catch (e) {
+      if ((Platform.isWindows || Platform.isLinux) &&
+          e.message == 'Webview is not available') {
+        throw const OAuthException(
+          'Windows 登录需要 Microsoft Edge WebView2 Runtime。请安装运行时后重新打开 Kurako。',
+        );
+      }
+      throw OAuthException('无法打开 Bangumi 授权窗口：${e.message}');
     }
 
     final callback = Uri.tryParse(callbackUrl);
-    if (callback == null || callback.scheme != _kCallbackScheme) {
+    if (callback == null ||
+        callback.scheme != _kCallbackScheme ||
+        callback.host != _kCallbackHost ||
+        callback.path != _kCallbackPath) {
       throw const OAuthException('Bangumi 返回了无效的授权回调，请重试。');
     }
     final error = callback.queryParameters['error'];
@@ -55,7 +82,16 @@ class BangumiOAuth {
     if (code == null || code.isEmpty) {
       throw const OAuthException('授权回调未包含授权码，请重试。');
     }
+    if (callback.queryParameters['state'] != state) {
+      throw const OAuthException('授权状态校验失败，请关闭授权窗口后重试。');
+    }
     return rust.oauthExchangeCode(code: code);
+  }
+
+  static String _newOAuthState() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(24, (_) => random.nextInt(256));
+    return base64UrlEncode(bytes).replaceAll('=', '');
   }
 }
 

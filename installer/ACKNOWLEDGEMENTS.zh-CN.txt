@@ -1,0 +1,16 @@
+致谢
+
+Kurako 建立在开源软件与公共服务之上，感谢以下项目、社区与维护者：
+
+- Flutter：跨平台应用界面与运行时。
+- Rust 与 flutter_rust_bridge：跨平台核心能力及 Dart/Rust 桥接。
+- media_kit 与 mpv：跨平台视频播放、硬件解码与字幕能力。
+- Anime4K（bloc97）：动漫视频实时超分辨率着色器。
+- Bangumi 番组计划：番剧元数据、评分与收藏服务。
+- bangumi-proxy（Soyorin）：大陆网络环境下的 Bangumi API 与图片代理。
+- PiliPlus：播放器交互与控件布局参考。
+- Kazumi：番剧详情页布局参考。
+
+各第三方项目的著作权与商标归其各自权利人所有，并继续适用各自的开源许可证。随安装目录提供的 THIRD_PARTY_NOTICES.txt 列出了主要组件与许可说明。
+
+感谢所有为上述项目提交代码、文档、翻译、测试与问题反馈的贡献者。

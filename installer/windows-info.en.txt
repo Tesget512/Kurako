@@ -1,0 +1,31 @@
+Kurako for Windows
+
+Kurako is a cross-platform local anime library and video player. Its interface
+is built with Flutter, while Rust provides reusable core functionality. Kurako
+can scan local folders and SMB shares, match titles with Bangumi metadata, play
+videos with the built-in player, and manage SMB videos and subtitles downloaded
+to this computer.
+
+Installation
+
+1. You can choose the Kurako installation folder on the next page.
+2. Desktop and Start Menu shortcuts are optional tasks.
+3. A newer version can be installed over the same folder without clearing your
+   media-library settings.
+4. Kurako stores its database, account settings, and default downloads under
+   Documents\KURAKO rather than the program installation folder.
+5. Uninstalling Kurako does not delete Documents\KURAKO. Use the maintenance
+   actions in Kurako first, then inspect that folder manually if you want to
+   remove all local data.
+
+Requirements
+
+- 64-bit Windows 10 or Windows 11.
+- Bangumi login requires Microsoft Edge WebView2 Runtime. It is normally
+  included with Windows 11. On Windows 10, install the Evergreen WebView2
+  Runtime from Microsoft if Kurako reports that it is unavailable.
+- SMB features require network access to the Windows or NAS share and valid
+  share credentials.
+
+This installer does not bundle browser changes, proxy changes, or unrelated
+software.

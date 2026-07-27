@@ -42,7 +42,6 @@ set "ISCC=C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 if exist "%ISCC%" (
   "%ISCC%" installer.iss
   if errorlevel 1 ( echo BUILD FAILED ^(installer^) & exit /b 1 )
-  copy /Y "dist\Kurako-Setup-1.0.0.exe" "%OUT%\Kurako-Setup-1.0.0.exe" >nul
   echo   -> %OUT%\Kurako-Setup-1.0.0.exe
 ) else (
   echo   [跳过] 未找到 ISCC.exe，未生成安装包
