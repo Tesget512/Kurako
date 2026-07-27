@@ -60,11 +60,18 @@ pub fn init(db_path: &str) -> Result<()> {
             created_at INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS downloads (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            smb_uri     TEXT NOT NULL UNIQUE,
-            local_path  TEXT NOT NULL,
-            bytes_total INTEGER NOT NULL DEFAULT 0,
-            created_at  INTEGER NOT NULL
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            smb_uri       TEXT NOT NULL UNIQUE,
+            local_path    TEXT NOT NULL,
+            bytes_total   INTEGER NOT NULL DEFAULT 0,
+            created_at    INTEGER NOT NULL,
+            anime_id      INTEGER,
+            bangumi_id    INTEGER,
+            anime_title   TEXT,
+            cover_url     TEXT,
+            episode_no    INTEGER,
+            episode_title TEXT,
+            file_name     TEXT
         );
         "#,
     )?;
@@ -81,6 +88,13 @@ pub fn init(db_path: &str) -> Result<()> {
         "ALTER TABLE library_folders ADD COLUMN last_scanned INTEGER",
         "ALTER TABLE library_folders ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
         "ALTER TABLE episodes ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
+        "ALTER TABLE downloads ADD COLUMN anime_id INTEGER",
+        "ALTER TABLE downloads ADD COLUMN bangumi_id INTEGER",
+        "ALTER TABLE downloads ADD COLUMN anime_title TEXT",
+        "ALTER TABLE downloads ADD COLUMN cover_url TEXT",
+        "ALTER TABLE downloads ADD COLUMN episode_no INTEGER",
+        "ALTER TABLE downloads ADD COLUMN episode_title TEXT",
+        "ALTER TABLE downloads ADD COLUMN file_name TEXT",
     ] {
         let _ = conn.execute(ddl, []);
     }
@@ -666,14 +680,85 @@ pub fn blacklist_values(kind: &str) -> Result<std::collections::HashSet<String>>
 
 /// Record a completed download (replaces any earlier record for the same URI).
 pub fn add_download(smb_uri: &str, local_path: &str, bytes_total: i64, now: i64) -> Result<()> {
-    with_conn(|c| {
-        c.execute(
-            "INSERT OR REPLACE INTO downloads(smb_uri, local_path, bytes_total, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![smb_uri, local_path, bytes_total, now],
-        )?;
-        Ok(())
-    })
+    with_conn(|c| add_download_on(c, smb_uri, local_path, bytes_total, now))
+}
+
+type DownloadSnapshot = (
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    Option<String>,
+);
+
+fn add_download_on(
+    c: &Connection,
+    smb_uri: &str,
+    local_path: &str,
+    bytes_total: i64,
+    now: i64,
+) -> Result<()> {
+    let snapshot: Option<DownloadSnapshot> = c
+        .query_row(
+            "SELECT e.anime_id, a.bangumi_id,
+                    COALESCE(NULLIF(a.name_cn, ''), NULLIF(a.name, ''), a.title_raw),
+                    a.cover_url, e.episode_no, e.title, e.file_name
+             FROM episodes e
+             JOIN anime a ON a.id = e.anime_id
+             WHERE e.file_path = ?1",
+            params![smb_uri],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                ))
+            },
+        )
+        .optional()?;
+    let (anime_id, bangumi_id, anime_title, cover_url, episode_no, episode_title, file_name) =
+        snapshot.unwrap_or((None, None, None, None, None, None, None));
+
+    // A re-download refreshes file attributes and any currently-known match.
+    // If the library was cleared meanwhile, excluded snapshot fields are NULL;
+    // preserve the previous snapshot instead of turning the download unmatched.
+    c.execute(
+        "INSERT INTO downloads(
+             smb_uri, local_path, bytes_total, created_at, anime_id, bangumi_id,
+             anime_title, cover_url, episode_no, episode_title, file_name
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(smb_uri) DO UPDATE SET
+             local_path = excluded.local_path,
+             bytes_total = excluded.bytes_total,
+             created_at = excluded.created_at,
+             anime_id = COALESCE(excluded.anime_id, downloads.anime_id),
+             bangumi_id = COALESCE(excluded.bangumi_id, downloads.bangumi_id),
+             anime_title = COALESCE(excluded.anime_title, downloads.anime_title),
+             cover_url = COALESCE(excluded.cover_url, downloads.cover_url),
+             episode_no = COALESCE(excluded.episode_no, downloads.episode_no),
+             episode_title = COALESCE(excluded.episode_title, downloads.episode_title),
+             file_name = COALESCE(excluded.file_name, downloads.file_name)",
+        params![
+            smb_uri,
+            local_path,
+            bytes_total,
+            now,
+            anime_id,
+            bangumi_id,
+            anime_title,
+            cover_url,
+            episode_no,
+            episode_title,
+            file_name,
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn list_downloads() -> Result<Vec<crate::models::DownloadEntry>> {
@@ -717,45 +802,78 @@ pub fn remove_download(id: i64) -> Result<Option<String>> {
 /// shows up with just its raw file info.
 pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>> {
     with_conn(|c| {
+        refresh_download_snapshots_on(c)?;
+        list_downloads_detailed_on(c)
+    })
+}
+
+/// Populate or refresh metadata for downloads created before snapshot columns
+/// existed, or for downloads which were matched only after they completed.
+/// [add_download_on] preserves an existing snapshot when its live episode is
+/// no longer present, so calling this before every management-page read is
+/// idempotent and cannot turn a matched download back into an unmatched one.
+fn refresh_download_snapshots_on(c: &Connection) -> Result<()> {
+    let downloads = {
         let mut stmt = c.prepare(
-            "SELECT d.id, d.smb_uri, d.local_path, d.bytes_total, d.created_at,
-                    e.anime_id, e.episode_no, e.file_name,
-                    a.name_cn, a.name, a.title_raw, a.cover_url
-             FROM downloads d
-             LEFT JOIN episodes e ON e.file_path = d.smb_uri
-             LEFT JOIN anime a ON a.id = e.anime_id
-             ORDER BY COALESCE(a.name_cn, a.name, a.title_raw), e.episode_no, d.created_at DESC",
+            "SELECT smb_uri, local_path, bytes_total, created_at
+             FROM downloads",
         )?;
         let rows = stmt
             .query_map([], |r| {
-                let smb_uri: String = r.get(1)?;
-                let name_cn: Option<String> = r.get(8)?;
-                let name: Option<String> = r.get(9)?;
-                let title_raw: Option<String> = r.get(10)?;
-                let title = name_cn
-                    .filter(|s| !s.is_empty())
-                    .or(name.filter(|s| !s.is_empty()))
-                    .or(title_raw);
-                // Fall back to the URI's last segment when the episode is gone.
-                let file_name: Option<String> = r.get(7)?;
-                let file_name = file_name
-                    .unwrap_or_else(|| smb_uri.rsplit('/').next().unwrap_or(&smb_uri).to_string());
-                Ok(crate::models::DownloadDetail {
-                    id: r.get(0)?,
-                    smb_uri,
-                    local_path: r.get(2)?,
-                    bytes_total: r.get(3)?,
-                    created_at: r.get(4)?,
-                    anime_id: r.get(5)?,
-                    anime_title: title,
-                    cover_url: r.get(11)?,
-                    episode_no: r.get(6)?,
-                    file_name,
-                })
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
-    })
+        rows
+    };
+
+    for (smb_uri, local_path, bytes_total, created_at) in downloads {
+        add_download_on(c, &smb_uri, &local_path, bytes_total, created_at)?;
+    }
+    Ok(())
+}
+
+fn list_downloads_detailed_on(c: &Connection) -> Result<Vec<crate::models::DownloadDetail>> {
+    let mut stmt = c.prepare(
+        "SELECT d.id, d.smb_uri, d.local_path, d.bytes_total, d.created_at,
+                    COALESCE(e.anime_id, d.anime_id),
+                    COALESCE(e.episode_no, d.episode_no),
+                    COALESCE(e.file_name, d.file_name),
+                    COALESCE(NULLIF(a.name_cn, ''), NULLIF(a.name, ''),
+                             a.title_raw, d.anime_title),
+                    COALESCE(a.cover_url, d.cover_url)
+             FROM downloads d
+             LEFT JOIN episodes e ON e.file_path = d.smb_uri
+             LEFT JOIN anime a ON a.id = e.anime_id
+             ORDER BY COALESCE(NULLIF(a.name_cn, ''), NULLIF(a.name, ''),
+                               a.title_raw, d.anime_title),
+                      COALESCE(e.episode_no, d.episode_no), d.created_at DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            let smb_uri: String = r.get(1)?;
+            let file_name: Option<String> = r.get(7)?;
+            let file_name = file_name
+                .unwrap_or_else(|| smb_uri.rsplit('/').next().unwrap_or(&smb_uri).to_string());
+            Ok(crate::models::DownloadDetail {
+                id: r.get(0)?,
+                smb_uri,
+                local_path: r.get(2)?,
+                bytes_total: r.get(3)?,
+                created_at: r.get(4)?,
+                anime_id: r.get(5)?,
+                anime_title: r.get(8)?,
+                cover_url: r.get(9)?,
+                episode_no: r.get(6)?,
+                file_name,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 /// The local copy of an SMB file, if one was downloaded.
@@ -770,4 +888,106 @@ pub fn download_local_path(smb_uri: &str) -> Result<Option<String>> {
             .optional()?;
         Ok(path)
     })
+}
+
+#[cfg(test)]
+mod download_tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE anime (
+                 id INTEGER PRIMARY KEY, title_raw TEXT NOT NULL, bangumi_id INTEGER,
+                 name TEXT, name_cn TEXT, cover_url TEXT
+             );
+             CREATE TABLE episodes (
+                 anime_id INTEGER NOT NULL, file_path TEXT NOT NULL UNIQUE,
+                 file_name TEXT NOT NULL, episode_no INTEGER, title TEXT
+             );
+             CREATE TABLE downloads (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT, smb_uri TEXT NOT NULL UNIQUE,
+                 local_path TEXT NOT NULL, bytes_total INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL, anime_id INTEGER, bangumi_id INTEGER,
+                 anime_title TEXT, cover_url TEXT, episode_no INTEGER,
+                 episode_title TEXT, file_name TEXT
+             );",
+        )
+        .unwrap();
+        c
+    }
+
+    #[test]
+    fn download_snapshot_survives_library_clear_and_redownload() {
+        let c = connection();
+        let uri = "smb://server/Anime/show/episode-02.mkv";
+        c.execute(
+            "INSERT INTO anime(id, title_raw, bangumi_id, name_cn, cover_url)
+             VALUES (7, 'Raw title', 12345, '保留的番剧', 'https://img/cover.jpg')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
+             VALUES (7, ?1, 'episode-02.mkv', 2, '第二集')",
+            params![uri],
+        )
+        .unwrap();
+
+        add_download_on(&c, uri, "/downloads/episode-02.mkv", 100, 1).unwrap();
+        c.execute("DELETE FROM episodes", []).unwrap();
+        c.execute("DELETE FROM anime", []).unwrap();
+
+        let detail = list_downloads_detailed_on(&c).unwrap().remove(0);
+        assert_eq!(detail.anime_id, Some(7));
+        assert_eq!(detail.anime_title.as_deref(), Some("保留的番剧"));
+        assert_eq!(detail.cover_url.as_deref(), Some("https://img/cover.jpg"));
+        assert_eq!(detail.episode_no, Some(2));
+        assert_eq!(detail.file_name, "episode-02.mkv");
+
+        add_download_on(&c, uri, "/downloads/new-episode-02.mkv", 200, 2).unwrap();
+        let snapshot: (Option<i64>, Option<i64>, Option<String>) = c
+            .query_row(
+                "SELECT anime_id, bangumi_id, anime_title FROM downloads WHERE smb_uri=?1",
+                params![uri],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(snapshot, (Some(7), Some(12345), Some("保留的番剧".into())));
+    }
+
+    #[test]
+    fn legacy_download_is_backfilled_before_library_clear() {
+        let c = connection();
+        let uri = "smb://server/Anime/show/episode-03.mkv";
+        c.execute(
+            "INSERT INTO anime(id, title_raw, bangumi_id, name_cn, cover_url)
+             VALUES (8, 'Raw title', 67890, '旧下载番剧', 'https://img/legacy.jpg')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
+             VALUES (8, ?1, 'episode-03.mkv', 3, '第三集')",
+            params![uri],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO downloads(smb_uri, local_path, bytes_total, created_at)
+             VALUES (?1, '/downloads/episode-03.mkv', 300, 3)",
+            params![uri],
+        )
+        .unwrap();
+
+        refresh_download_snapshots_on(&c).unwrap();
+        c.execute("DELETE FROM episodes", []).unwrap();
+        c.execute("DELETE FROM anime", []).unwrap();
+
+        let detail = list_downloads_detailed_on(&c).unwrap().remove(0);
+        assert_eq!(detail.anime_id, Some(8));
+        assert_eq!(detail.anime_title.as_deref(), Some("旧下载番剧"));
+        assert_eq!(detail.cover_url.as_deref(), Some("https://img/legacy.jpg"));
+        assert_eq!(detail.episode_no, Some(3));
+        assert_eq!(detail.file_name, "episode-03.mkv");
+    }
 }

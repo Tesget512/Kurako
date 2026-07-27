@@ -222,9 +222,8 @@ class BlacklistEntry {
           createdAt == other.createdAt;
 }
 
-/// A download joined with its library episode/anime (LEFT JOIN — the episode
-/// may have been removed from the library, in which case the anime fields are
-/// None and only the raw file info remains).
+/// A download joined with its live library metadata or its retained match
+/// snapshot when the library entry has since been removed.
 class DownloadDetail {
   final PlatformInt64 id;
   final String smbUri;

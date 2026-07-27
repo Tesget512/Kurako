@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,6 +8,7 @@ import '../rust/models.dart';
 import '../state/providers.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/window_caption.dart';
+import 'player_page.dart';
 
 /// Management page for SMB downloads. Downloads are grouped by anime (like the
 /// library → detail view): each anime shows its cover, and its episodes list as
@@ -55,18 +58,65 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
     try {
       await rust.removeDownload(id: e.id);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已删除本地副本')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已删除本地副本')));
       }
       _reload();
     } catch (err) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败: $err')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('删除失败: $err')));
       }
     }
+  }
+
+  Future<void> _playDownloaded(
+    List<DownloadDetail> groupItems,
+    DownloadDetail selected,
+  ) async {
+    final availability = await Future.wait(
+      groupItems.map((item) => File(item.localPath).exists()),
+    );
+    final available = <DownloadDetail>[
+      for (var i = 0; i < groupItems.length; i++)
+        if (availability[i]) groupItems[i],
+    ];
+    final initialIndex = available.indexWhere((item) => item.id == selected.id);
+    if (!mounted) return;
+    if (initialIndex < 0) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('本地文件已不存在，可以删除这条下载记录后重新下载')));
+      return;
+    }
+
+    final playlist = [
+      for (final item in available)
+        Episode(
+          // Keep temporary download rows distinct from real library episodes.
+          // PlayerPage progress writes are best-effort for these negative ids.
+          id: -item.id.toInt(),
+          animeId: item.animeId ?? 0,
+          filePath: item.localPath,
+          fileName: item.fileName,
+          episodeNo: item.episodeNo,
+          title: null,
+          resolution: null,
+          releaseGroup: null,
+          watched: false,
+          lastPositionMs: 0,
+          durationMs: 0,
+          sourceType: 'local',
+        ),
+    ];
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) =>
+            PlayerPage(episodes: playlist, initialIndex: initialIndex),
+      ),
+    );
   }
 
   @override
@@ -87,8 +137,9 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
           final done = snapshot.data ?? const [];
           // URIs already saved to disk — don't duplicate them as "in progress".
           final savedUris = done.map((e) => e.smbUri).toSet();
-          final active =
-              tasks.where((t) => t.active && !savedUris.contains(t.smbUri));
+          final active = tasks.where(
+            (t) => t.active && !savedUris.contains(t.smbUri),
+          );
 
           if (done.isEmpty && active.isEmpty) {
             return const Center(child: Text('还没有下载到本地的视频'));
@@ -103,6 +154,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
                   group: g,
                   fmtSize: _fmtSize,
                   fileName: _fileName,
+                  onPlay: _playDownloaded,
                   onDelete: _delete,
                 ),
               const SizedBox(height: 16),
@@ -178,19 +230,23 @@ class _AnimeGroup extends StatelessWidget {
   final _Group group;
   final String Function(int) fmtSize;
   final String Function(String) fileName;
+  final Future<void> Function(List<DownloadDetail>, DownloadDetail) onPlay;
   final Future<void> Function(DownloadDetail) onDelete;
 
   const _AnimeGroup({
     required this.group,
     required this.fmtSize,
     required this.fileName,
+    required this.onPlay,
     required this.onDelete,
   });
 
   @override
   Widget build(BuildContext context) {
-    final totalBytes =
-        group.items.fold<int>(0, (s, e) => s + e.bytesTotal.toInt());
+    final totalBytes = group.items.fold<int>(
+      0,
+      (s, e) => s + e.bytesTotal.toInt(),
+    );
     return Card(
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       clipBehavior: Clip.antiAlias,
@@ -209,7 +265,9 @@ class _AnimeGroup extends StatelessWidget {
                     child: group.coverUrl != null
                         ? CoverImage(url: group.coverUrl!)
                         : Container(
-                            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest,
                             child: const Icon(Icons.movie_outlined),
                           ),
                   ),
@@ -243,17 +301,33 @@ class _AnimeGroup extends StatelessWidget {
               leading: e.episodeNo != null
                   ? CircleAvatar(
                       radius: 14,
-                      child: Text('${e.episodeNo!.toInt()}',
-                          style: const TextStyle(fontSize: 12)),
+                      child: Text(
+                        '${e.episodeNo!.toInt()}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
                     )
                   : const Icon(Icons.subscriptions_outlined),
-              title: Text(e.fileName,
-                  maxLines: 1, overflow: TextOverflow.ellipsis),
+              title: Text(
+                e.fileName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
               subtitle: Text(fmtSize(e.bytesTotal.toInt())),
-              trailing: IconButton(
-                tooltip: '删除本地副本',
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => onDelete(e),
+              onTap: () => onPlay(group.items, e),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '播放本地副本',
+                    icon: const Icon(Icons.play_arrow),
+                    onPressed: () => onPlay(group.items, e),
+                  ),
+                  IconButton(
+                    tooltip: '删除本地副本',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => onDelete(e),
+                  ),
+                ],
               ),
             ),
         ],

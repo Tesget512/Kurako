@@ -130,9 +130,8 @@ pub struct DownloadEntry {
     pub created_at: i64,
 }
 
-/// A download joined with its library episode/anime (LEFT JOIN — the episode
-/// may have been removed from the library, in which case the anime fields are
-/// None and only the raw file info remains).
+/// A download joined with its live library metadata or its retained match
+/// snapshot when the library entry has since been removed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadDetail {
     pub id: i64,

@@ -100,6 +100,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
 
   Timer? _saveTimer;
   bool _controlsLocked = false;
+  bool _unlockControlVisible = false;
+  Timer? _unlockControlTimer;
   bool _takingScreenshot = false;
   bool _playTogglePending = false;
   bool _reportedSuperResolutionFailure = false;
@@ -991,6 +993,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     _openGeneration.value = ++_openSeq;
     _saveTimer?.cancel();
     _switchDebounce?.cancel();
+    _unlockControlTimer?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _tracksSub?.cancel();
@@ -1073,7 +1076,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     // child or an accidental hand touch cannot do anything except unlock.
     final Widget playerBody = Stack(
       fit: StackFit.expand,
-      children: [guarded, if (_controlsLocked) _buildUnlockControlsButton()],
+      children: [
+        guarded,
+        if (_controlsLocked)
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _showUnlockControl,
+          ),
+        if (_controlsLocked && _unlockControlVisible)
+          _buildUnlockControlsButton(),
+      ],
     );
 
     final dark = Theme.of(context).copyWith(colorScheme: _cs);
@@ -1520,7 +1532,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
             _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
             color: Colors.white,
           ),
-          onPressed: () => setState(() => _controlsLocked = !_controlsLocked),
+          onPressed: () => _setControlsLocked(!_controlsLocked),
         ),
         MaterialCustomButton(
           icon: const Icon(Icons.tune, color: Colors.white),
@@ -1617,27 +1629,47 @@ class _PlayerPageState extends ConsumerState<PlayerPage> {
     ),
   );
 
+  void _setControlsLocked(bool locked) {
+    _unlockControlTimer?.cancel();
+    setState(() {
+      _controlsLocked = locked;
+      _unlockControlVisible = locked;
+    });
+    if (locked) _scheduleUnlockControlHide();
+  }
+
+  void _showUnlockControl() {
+    if (!_controlsLocked) return;
+    _unlockControlTimer?.cancel();
+    if (!_unlockControlVisible) {
+      setState(() => _unlockControlVisible = true);
+    }
+    _scheduleUnlockControlHide();
+  }
+
+  void _scheduleUnlockControlHide() {
+    _unlockControlTimer = Timer(const Duration(milliseconds: 2500), () {
+      if (mounted && _controlsLocked) {
+        setState(() => _unlockControlVisible = false);
+      }
+    });
+  }
+
   Widget _buildUnlockControlsButton() => Align(
     alignment: Alignment.centerLeft,
     child: SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(left: 12),
+        padding: const EdgeInsets.only(left: 8),
         child: Material(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(24),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(24),
-            onTap: () => setState(() => _controlsLocked = false),
-            child: const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.lock_open_outlined, color: Colors.white, size: 21),
-                  SizedBox(width: 6),
-                  Text('解锁', style: TextStyle(color: Colors.white)),
-                ],
-              ),
+          color: Colors.transparent,
+          child: IconButton(
+            tooltip: '解锁播放器',
+            onPressed: () => _setControlsLocked(false),
+            icon: const Icon(
+              Icons.lock_outline,
+              color: Colors.white70,
+              size: 24,
+              shadows: [Shadow(color: Colors.black, blurRadius: 4)],
             ),
           ),
         ),

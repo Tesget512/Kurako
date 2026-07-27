@@ -971,7 +971,9 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                 AnimatedOpacity(
                   curve: Curves.easeInOut,
                   opacity: visible && !controlsLocked ? 1.0 : 0.0,
-                  duration: _theme(context).controlsTransitionDuration,
+                  duration: controlsLocked
+                      ? Duration.zero
+                      : _theme(context).controlsTransitionDuration,
                   onEnd: () {
                     setState(() {
                       if (!visible) {

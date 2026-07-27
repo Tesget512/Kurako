@@ -250,7 +250,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.download_outlined),
             title: const Text('下载管理'),
-            subtitle: const Text('查看并删除已下载到本地的 SMB 视频'),
+            subtitle: const Text('播放与管理已下载到本地的 SMB 视频'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () {
               Navigator.of(
