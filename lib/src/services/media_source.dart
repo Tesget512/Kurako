@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
 import 'package:saf_util/saf_util.dart';
 import 'package:saf_util/saf_util_platform_interface.dart';
 
@@ -108,20 +109,25 @@ class LocalMediaSource extends MediaSource {
 Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
   const subExts = {'.ass', '.srt', '.ssa', '.sub', '.vtt'};
   final file = File(videoPath);
-  final dir = file.parent;
-  if (!await dir.exists()) return const [];
+  final videoDir = file.parent;
+  if (!await videoDir.exists()) return const [];
   final base = file.uri.pathSegments.last;
   final dot = base.lastIndexOf('.');
   final stem = dot > 0 ? base.substring(0, dot) : base;
   final out = <SubtitleCandidate>[];
-  await for (final e in dir.list(followLinks: false)) {
-    if (e is! File) continue;
-    final name = e.uri.pathSegments.last;
-    final extDot = name.lastIndexOf('.');
-    if (extDot < 0) continue;
-    final ext = name.substring(extDot).toLowerCase();
-    if (!subExts.contains(ext) || !name.startsWith(stem)) continue;
-    out.add(SubtitleCandidate(fileName: name, uri: e.path));
+  final seen = <String>{};
+  final directories = [videoDir, Directory(p.join(videoDir.path, 'Subtitles'))];
+  for (final dir in directories) {
+    if (!await dir.exists()) continue;
+    await for (final e in dir.list(followLinks: false)) {
+      if (e is! File || !seen.add(e.path)) continue;
+      final name = e.uri.pathSegments.last;
+      final extDot = name.lastIndexOf('.');
+      if (extDot < 0) continue;
+      final ext = name.substring(extDot).toLowerCase();
+      if (!subExts.contains(ext) || !name.startsWith(stem)) continue;
+      out.add(SubtitleCandidate(fileName: name, uri: e.path));
+    }
   }
   out.sort((a, b) => a.fileName.compareTo(b.fileName));
   return out;

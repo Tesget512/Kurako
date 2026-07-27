@@ -24,6 +24,16 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   final _playerPathController = TextEditingController();
   bool _loggingIn = false;
+  bool _clearingLibrary = false;
+  bool _clearingDownloads = false;
+  bool _clearingMatchConfig = false;
+  bool _resettingConfiguration = false;
+
+  bool get _maintenanceBusy =>
+      _clearingLibrary ||
+      _clearingDownloads ||
+      _clearingMatchConfig ||
+      _resettingConfiguration;
 
   @override
   void dispose() {
@@ -55,7 +65,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         ],
       ),
     );
-    if (ok != true || !context.mounted) return;
+    if (ok != true || !context.mounted || _maintenanceBusy) return;
+    setState(() => _clearingMatchConfig = true);
     try {
       final n = await rust.clearMatchConfig();
       ref.invalidate(animeListProvider);
@@ -70,7 +81,181 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           context,
         ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
       }
+    } finally {
+      if (mounted) setState(() => _clearingMatchConfig = false);
     }
+  }
+
+  Future<void> _clearLibrary(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('清空番剧与匹配'),
+        content: const Text(
+          '将清空当前番剧、剧集和 Bangumi 匹配结果，并让下次扫描重新处理所有已添加的文件夹。\n\n'
+          '已添加的本地 / SMB 文件夹、下载的视频、下载记录、屏蔽记录、账号、设置和手动匹配配置都会保留。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('清空'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _maintenanceBusy) return;
+
+    setState(() => _clearingLibrary = true);
+    try {
+      await rust.clearLibrary();
+      ref.invalidate(animeListProvider);
+      ref.invalidate(animeDetailProvider);
+      ref.invalidate(episodesProvider);
+      _snack('已清空番剧与匹配结果，可以重新扫描');
+    } catch (error) {
+      _snack('清空失败：$error');
+    } finally {
+      if (mounted) setState(() => _clearingLibrary = false);
+    }
+  }
+
+  Future<void> _clearAllDownloads(BuildContext context) async {
+    if (ref.read(downloadManagerProvider).any((task) => task.active)) {
+      _snack('请先在下载管理中取消正在进行的下载');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('清空所有已下载番剧'),
+        content: const Text(
+          '将删除下载管理中登记的全部本地视频、对应的外挂字幕和下载记录。\n\n'
+          '番剧库、媒体来源、账号与软件设置都会保留。此操作无法撤销。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('全部删除'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _maintenanceBusy) return;
+    if (ref.read(downloadManagerProvider).any((task) => task.active)) {
+      _snack('检测到新的下载任务，请先取消后重试');
+      return;
+    }
+
+    setState(() => _clearingDownloads = true);
+    var removed = 0;
+    final failures = <Object>[];
+    try {
+      final downloads = await rust.listDownloads();
+      for (final download in downloads) {
+        try {
+          await rust.removeDownload(id: download.id);
+          removed++;
+        } catch (error) {
+          failures.add(error);
+        }
+      }
+      ref.invalidate(downloadedSmbUrisProvider);
+      if (failures.isEmpty) {
+        _snack('已删除 $removed 个本地视频及其字幕');
+      } else {
+        _snack('已删除 $removed 个，${failures.length} 个删除失败，请重试');
+      }
+    } catch (error) {
+      _snack('清空下载失败：$error');
+    } finally {
+      if (mounted) setState(() => _clearingDownloads = false);
+    }
+  }
+
+  Future<void> _clearAllConfiguration(BuildContext context) async {
+    if (ref.read(downloadManagerProvider).any((task) => task.active)) {
+      _snack('请先在下载管理中取消正在进行的下载');
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('清空所有配置'),
+        content: const Text(
+          '将恢复全部软件选项，并清空 Bangumi 登录、SMB 凭证、媒体来源、番剧与匹配、屏蔽记录和手动匹配配置。\n\n'
+          '已经下载到本地的视频和下载记录会保留。此操作无法撤销。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('清空所有配置'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted || _maintenanceBusy) return;
+    if (ref.read(downloadManagerProvider).any((task) => task.active)) {
+      _snack('检测到新的下载任务，请先取消后重试');
+      return;
+    }
+
+    setState(() => _resettingConfiguration = true);
+    try {
+      await rust.clearMatchConfig();
+      await rust.clearLibrary();
+      final folders = await rust.listLibraryFolders();
+      for (final folder in folders) {
+        await rust.removeLibraryFolder(id: folder.id);
+      }
+      final blacklist = await rust.listBlacklist();
+      for (final entry in blacklist) {
+        await rust.removeBlacklist(id: entry.id);
+      }
+      await resetPersistedAppSettings();
+      _playerPathController.clear();
+      _invalidateConfigurationProviders();
+      _snack('已清空所有配置，下载的视频仍可在下载管理中使用');
+    } catch (error) {
+      _snack('清空配置失败：$error');
+    } finally {
+      if (mounted) setState(() => _resettingConfiguration = false);
+    }
+  }
+
+  void _invalidateConfigurationProviders() {
+    ref.invalidate(animeListProvider);
+    ref.invalidate(animeDetailProvider);
+    ref.invalidate(episodesProvider);
+    ref.invalidate(foldersProvider);
+    ref.invalidate(librarySortProvider);
+    ref.invalidate(pinCollectedProvider);
+    ref.invalidate(groupingEnabledProvider);
+    ref.invalidate(themeProvider);
+    ref.invalidate(seekDurationProvider);
+    ref.invalidate(uiScaleProvider);
+    ref.invalidate(touchModePlayerProvider);
+    ref.invalidate(useSystemFontProvider);
+    ref.invalidate(decodeModeProvider);
+    ref.invalidate(downloadDirProvider);
+    ref.invalidate(bangumiMirrorProvider);
+    ref.invalidate(smbConfiguredProvider);
+    ref.invalidate(settingsProvider);
   }
 
   @override
@@ -260,13 +445,44 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           ListTile(
             contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_sweep_outlined),
+            title: const Text('清空番剧与匹配'),
+            subtitle: const Text('清空当前番剧、剧集和匹配结果；保留媒体来源、下载与设置'),
+            onTap: _maintenanceBusy ? null : () => _clearLibrary(context),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_forever_outlined),
+            title: const Text('清空所有已下载番剧'),
+            subtitle: const Text('删除下载管理中的全部本地视频、绑定字幕和下载记录'),
+            onTap: _maintenanceBusy ? null : () => _clearAllDownloads(context),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.link_off_outlined),
             title: const Text('删除手动匹配配置'),
             subtitle: const Text(
               '清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
               '下次扫描将恢复为自动分组',
             ),
-            onTap: () => _clearMatchConfig(context),
+            onTap: _maintenanceBusy ? null : () => _clearMatchConfig(context),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: _resettingConfiguration
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    Icons.restart_alt,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+            title: const Text('清空所有配置'),
+            subtitle: const Text('恢复软件选项并清除账号、凭证、媒体来源、屏蔽与匹配配置；保留下载'),
+            onTap: _maintenanceBusy
+                ? null
+                : () => _clearAllConfiguration(context),
           ),
           _buildDownloadDirRow(context),
           const Divider(height: 32),

@@ -7,12 +7,17 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `ensure_anime_for_subject`, `finish_scan`, `now_secs`, `persist_match`, `prune_prefixes_for`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `configured_download_directory`, `ensure_anime_for_subject`, `finish_scan`, `now_secs`, `persist_match`, `prune_prefixes_for`, `recover_configured_downloads`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
 Future<void> initDb({required String dbPath}) =>
     RustLib.instance.api.crateApiInitDb(dbPath: dbPath);
+
+/// Register the effective local download directory and recover video files
+/// which survived while their SQLite download records did not.
+Future<PlatformInt64> setDownloadDirectory({required String downloadDir}) =>
+    RustLib.instance.api.crateApiSetDownloadDirectory(downloadDir: downloadDir);
 
 /// Configure the optional Bangumi personal access token.
 Future<void> setBangumiToken({String? token}) =>

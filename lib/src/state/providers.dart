@@ -270,6 +270,7 @@ class _StringPrefNotifier extends StateNotifier<String> {
     final prefs = await SharedPreferences.getInstance();
     state = prefs.getString(key) ?? def;
     if (key == 'decode_mode') decodeModeStartupValue = state;
+    if (key == 'download_dir') await _syncDownloadDirectory(state);
   }
 
   Future<void> set(String value) async {
@@ -277,6 +278,13 @@ class _StringPrefNotifier extends StateNotifier<String> {
     await prefs.setString(key, value);
     state = value;
     if (key == 'decode_mode') decodeModeStartupValue = value;
+    if (key == 'download_dir') await _syncDownloadDirectory(value);
+  }
+
+  Future<void> _syncDownloadDirectory(String value) async {
+    final effective = effectiveDownloadDir(value);
+    if (effective.isEmpty) return;
+    await rust.setDownloadDirectory(downloadDir: effective);
   }
 }
 
@@ -408,7 +416,10 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   /// Clear lingering completed/failed tasks for an anime once the user has seen
   /// them. Active downloads are kept.
   void dismissAnime(int animeId) {
-    state = state.where((t) => !(t.animeId == animeId && !t.active)).toList();
+    final next = state
+        .where((t) => !(t.animeId == animeId && !t.active))
+        .toList();
+    if (next.length != state.length) state = next;
   }
 
   void _update(String smbUri, DownloadTask Function(DownloadTask) f) {
@@ -430,24 +441,19 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
   return creds.isConfigured;
 });
 
+/// Only active-task membership changes require a completed-download DB query.
+/// Progress ticks and later dismissal of completed/failed tasks are irrelevant.
+String activeDownloadFingerprint(List<DownloadTask> tasks) =>
+    tasks.where((task) => task.active).map((task) => task.smbUri).join('\n');
+
 /// The smbUri of every SMB episode with a completed local download — lets the
 /// episode list show a "downloaded" badge without an async round-trip per
-/// tile. Re-fetches whenever a download task changes (starts/finishes/is
-/// removed) so a just-finished download's badge appears without a restart.
+/// tile. A task entering/leaving the active set refreshes the DB result, so a
+/// just-finished download's badge appears without progress-tick query storms.
 final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((
   ref,
 ) async {
-  // Only membership and completion/failure transitions matter for the badge.
-  // Watching the whole task list would re-run rust.listDownloads() on every
-  // per-second progress tick of every active download — select a fingerprint
-  // that ignores bytesDone so ticks don't trigger a DB re-query storm.
-  ref.watch(
-    downloadManagerProvider.select(
-      (tasks) => tasks
-          .map((t) => '${t.smbUri}|${t.done}|${t.error != null}')
-          .join('\n'),
-    ),
-  );
+  ref.watch(downloadManagerProvider.select(activeDownloadFingerprint));
   final list = await rust.listDownloads();
   return list.map((d) => d.smbUri).toSet();
 });
@@ -686,3 +692,23 @@ final settingsProvider = StateNotifierProvider<SettingsNotifier, Settings>((
 ) {
   return SettingsNotifier();
 });
+
+/// Restore every SharedPreferences-backed option to its default and clear the
+/// matching Rust runtime state. Library/database cleanup is deliberately owned
+/// by the caller so downloaded media can be preserved independently.
+Future<void> resetPersistedAppSettings() async {
+  final prefs = await SharedPreferences.getInstance();
+  final cleared = await prefs.clear();
+  if (!cleared) {
+    throw StateError('无法清空软件配置');
+  }
+
+  decodeModeStartupValue = 'auto';
+  await rust.setBangumiToken(token: null);
+  await rust.setBangumiMirror(enabled: true);
+  await rust.smbSetCredentials(host: '', share: '', user: '', password: '');
+  final downloadDir = effectiveDownloadDir('');
+  if (downloadDir.isNotEmpty) {
+    await rust.setDownloadDirectory(downloadDir: downloadDir);
+  }
+}

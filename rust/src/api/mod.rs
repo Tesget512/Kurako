@@ -21,11 +21,56 @@ static RT: Lazy<Runtime> = Lazy::new(|| {
         .expect("tokio runtime")
 });
 
+static DOWNLOAD_DIRECTORY: Lazy<std::sync::Mutex<Option<String>>> =
+    Lazy::new(|| std::sync::Mutex::new(None));
+
 fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn configured_download_directory() -> Option<String> {
+    DOWNLOAD_DIRECTORY.lock().unwrap().clone()
+}
+
+fn is_nonempty_file(path: &str) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
+}
+
+fn recover_download_records(download_dir: &str) -> Result<i64, String> {
+    let mut recovered = db::rebase_download_paths(download_dir).map_err(|e| e.to_string())?;
+    let entries = match std::fs::read_dir(download_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(recovered),
+        Err(error) => return Err(error.to_string()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !path.is_file() || !smb::is_video(file_name) {
+            continue;
+        }
+        let local_path = path.to_string_lossy().to_string();
+        let bytes_total = entry
+            .metadata()
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or(0);
+        if bytes_total <= 0 {
+            continue;
+        }
+        if db::recover_download_file(&local_path, file_name, bytes_total, now_secs())
+            .map_err(|e| e.to_string())?
+        {
+            recovered += 1;
+        }
+    }
+    Ok(recovered)
 }
 
 #[frb(init)]
@@ -37,6 +82,22 @@ pub fn init_app() {
 pub fn init_db(db_path: String) -> Result<(), String> {
     sidecar::set_data_dir_from_db(&db_path);
     db::init(&db_path).map_err(|e| e.to_string())
+}
+
+/// Register the effective local download directory and recover video files
+/// which survived while their SQLite download records did not.
+pub fn set_download_directory(download_dir: String) -> Result<i64, String> {
+    let normalized = download_dir.trim().to_string();
+    *DOWNLOAD_DIRECTORY.lock().unwrap() = if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized.clone())
+    };
+    if normalized.is_empty() {
+        Ok(0)
+    } else {
+        recover_download_records(&normalized)
+    }
 }
 
 /// Configure the optional Bangumi personal access token.
@@ -295,6 +356,10 @@ pub fn smb_connect(
 /// Restore cached SMB credentials on startup (from Dart's persisted settings)
 /// without a network round-trip. Connection is opened lazily per operation.
 pub fn smb_set_credentials(host: String, share: String, user: String, password: String) {
+    if host.trim().is_empty() || share.trim_matches('/').is_empty() {
+        smb::set_creds(None);
+        return;
+    }
     smb::set_creds(Some(smb::SmbCreds {
         addr: if host.contains(':') {
             host
@@ -347,8 +412,23 @@ pub fn smb_download(
     smb_uri: String,
     dest_dir: String,
 ) -> Result<String, String> {
-    let local = RT
-        .block_on(async {
+    *DOWNLOAD_DIRECTORY.lock().unwrap() = Some(dest_dir.clone());
+    smb::reset_download_cancellation(&smb_uri);
+    let existing = RT
+        .block_on(async { smb::matching_existing_download(&smb_uri, &dest_dir).await })
+        .ok()
+        .flatten();
+    if smb::download_was_cancelled(&smb_uri) {
+        return Err("下载已取消".to_string());
+    }
+    let local = if let Some((path, size)) = existing {
+        let _ = sink.add(DownloadProgress {
+            bytes_done: size as i64,
+            bytes_total: size as i64,
+        });
+        path
+    } else {
+        RT.block_on(async {
             smb::download(&smb_uri, &dest_dir, |done, total| {
                 let _ = sink.add(DownloadProgress {
                     bytes_done: done as i64,
@@ -357,7 +437,17 @@ pub fn smb_download(
             })
             .await
         })
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())?
+    };
+    let subtitle_result = RT.block_on(async { smb::download_subtitles(&smb_uri, &dest_dir).await });
+    if smb::download_was_cancelled(&smb_uri) {
+        smb::remove_downloaded_subtitles(&local);
+        let _ = std::fs::remove_file(&local);
+        return Err("下载已取消".to_string());
+    }
+    if let Err(error) = subtitle_result {
+        eprintln!("KURAKO could not download sidecar subtitles: {error:#}");
+    }
     let size = std::fs::metadata(&local)
         .map(|m| m.len() as i64)
         .unwrap_or(0);
@@ -384,6 +474,7 @@ pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>, S
 pub fn remove_download(id: i64) -> Result<(), String> {
     let path = db::remove_download(id).map_err(|e| e.to_string())?;
     if let Some(p) = path {
+        smb::remove_downloaded_subtitles(&p);
         let _ = std::fs::remove_file(p);
     }
     Ok(())
@@ -394,20 +485,53 @@ pub fn remove_download(id: i64) -> Result<(), String> {
 pub fn downloaded_local_path(smb_uri: String) -> Result<Option<String>, String> {
     let path = db::download_local_path(&smb_uri).map_err(|e| e.to_string())?;
     match path {
-        Some(p) if std::path::Path::new(&p).exists() => Ok(Some(p)),
+        Some(p) if is_nonempty_file(&p) => Ok(Some(p)),
         Some(_) => {
-            // File was deleted outside the app — drop the stale record.
-            if let Ok(list) = db::list_downloads() {
-                for d in list {
-                    if d.smb_uri == smb_uri {
-                        let _ = db::remove_download(d.id);
+            // App-container UUIDs are not stable. Rebase the authoritative
+            // download row before treating its old absolute path as missing.
+            if let Some(download_dir) = configured_download_directory() {
+                db::rebase_download_paths(&download_dir).map_err(|e| e.to_string())?;
+                if let Some(rebased) =
+                    db::download_local_path(&smb_uri).map_err(|e| e.to_string())?
+                {
+                    if is_nonempty_file(&rebased) {
+                        return Ok(Some(rebased));
                     }
                 }
             }
+            // Keep the exact SMB URI and match snapshot. Only an explicit user
+            // delete may remove a download row whose file cannot be verified.
             Ok(None)
         }
-        None => Ok(None),
+        None => recover_exact_download(&smb_uri),
     }
+}
+
+fn recover_exact_download(smb_uri: &str) -> Result<Option<String>, String> {
+    let Some(download_dir) = configured_download_directory() else {
+        return Ok(None);
+    };
+    let Some(path) = smb::expected_download_path(smb_uri, &download_dir) else {
+        return Ok(None);
+    };
+    let metadata = match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => metadata,
+        _ => return Ok(None),
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    if db::unique_smb_episode_uri(file_name)
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        != Some(smb_uri)
+    {
+        return Ok(None);
+    }
+    let local_path = path.to_string_lossy().to_string();
+    db::add_download(smb_uri, &local_path, metadata.len() as i64, now_secs())
+        .map_err(|e| e.to_string())?;
+    Ok(Some(local_path))
 }
 
 // ---- Snapshot sync (multi-device) ----

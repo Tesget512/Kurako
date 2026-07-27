@@ -62,6 +62,9 @@ Future<void> main() async {
 
   // Restore the saved Bangumi token, if any.
   final prefs = await SharedPreferences.getInstance();
+  await rust.setDownloadDirectory(
+    downloadDir: effectiveDownloadDir(prefs.getString('download_dir') ?? ''),
+  );
   final token = prefs.getString('bangumi_token');
   if (token != null && token.isNotEmpty) {
     rust.setBangumiToken(token: token);

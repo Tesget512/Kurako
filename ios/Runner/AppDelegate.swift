@@ -128,8 +128,22 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
     }
     let controller = UIActivityViewController(
       activityItems: [URL(fileURLWithPath: path)], applicationActivities: nil)
-    topViewController()?.present(controller, animated: true)
-    result(true)
+    guard let presenter = topViewController() else {
+      result(FlutterError(code: "presenter_unavailable", message: "无法打开系统分享面板", details: nil))
+      return
+    }
+    if let popover = controller.popoverPresentationController {
+      popover.sourceView = presenter.view
+      popover.sourceRect = CGRect(
+        x: presenter.view.bounds.midX,
+        y: presenter.view.bounds.midY,
+        width: 1,
+        height: 1)
+      popover.permittedArrowDirections = []
+    }
+    presenter.present(controller, animated: true) {
+      result(true)
+    }
   }
 
   /// Adds a PNG/JPEG to Photos using iOS's narrow add-only authorization. The

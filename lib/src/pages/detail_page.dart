@@ -22,31 +22,39 @@ class DetailPage extends ConsumerStatefulWidget {
   ConsumerState<DetailPage> createState() => _DetailPageState();
 }
 
-class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObserver {
+class _DetailPageState extends ConsumerState<DetailPage> {
   bool _refreshing = false;
   final _scrollController = ScrollController();
   // Whether the header has scrolled far enough to show the toolbar title.
   bool _collapsed = false;
+  Set<String> _downloadedUris = const {};
+  ProviderSubscription<AsyncValue<Set<String>>>? _downloadedUrisSubscription;
 
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    // Clear completed/failed tasks left by the previous visit before this page
+    // starts observing download state. Active downloads continue in background.
+    ref.read(downloadManagerProvider.notifier).dismissAnime(widget.animeId);
+    // Riverpod 2.6.1 closes implicit watches after StatefulElement.unmount.
+    // Own this subscription so dispose can close it before the defunct window.
+    _downloadedUrisSubscription = ref.listenManual<AsyncValue<Set<String>>>(
+      downloadedSmbUrisProvider,
+      (_, next) {
+        final uris = next.valueOrNull;
+        if (uris == null || !mounted) return;
+        if (_downloadedUris.length == uris.length &&
+            _downloadedUris.containsAll(uris)) {
+          return;
+        }
+        setState(() => _downloadedUris = uris);
+      },
+      fireImmediately: true,
+    );
     // Metadata is no longer refreshed per-anime on open; the whole library is
     // refreshed once at startup (see HomePage._refreshAllMetadataOnce). The
     // manual refresh button below still force-refetches this one subject.
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    // The internal player already invalidates on pop (see _play), but an
-    // external player is a detached process we never await — the only signal
-    // that playback may have progressed (updating "可续播"/watched) is the app
-    // coming back to the foreground.
-    if (state == AppLifecycleState.resumed) {
-      ref.invalidate(episodesProvider(widget.animeId));
-    }
   }
 
   void _onScroll() {
@@ -132,6 +140,7 @@ class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObse
                     data: (episodes) => SliverToBoxAdapter(
                       child: _EpisodeList(
                         episodes: episodes,
+                        downloadedUris: _downloadedUris,
                         onPlay: (e) => _play(context, ref, e),
                         onPlayWith: (e, external) =>
                             _play(context, ref, e, forceExternal: external),
@@ -241,11 +250,8 @@ class _DetailPageState extends ConsumerState<DetailPage> with WidgetsBindingObse
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
+    _downloadedUrisSubscription?.close();
     _scrollController.dispose();
-    // Once the user leaves the page, drop lingering completed/failed downloads
-    // so the badge doesn't persist on the next visit (active ones stay).
-    ref.read(downloadManagerProvider.notifier).dismissAnime(widget.animeId);
     super.dispose();
   }
 
@@ -670,6 +676,7 @@ class _CollectionRow extends StatelessWidget {
 
 class _EpisodeList extends StatelessWidget {
   final List<Episode> episodes;
+  final Set<String> downloadedUris;
   final void Function(Episode) onPlay;
   final void Function(Episode, bool external) onPlayWith;
   final void Function(Episode) onDownload;
@@ -678,6 +685,7 @@ class _EpisodeList extends StatelessWidget {
 
   const _EpisodeList({
     required this.episodes,
+    required this.downloadedUris,
     required this.onPlay,
     required this.onPlayWith,
     required this.onDownload,
@@ -705,6 +713,8 @@ class _EpisodeList extends StatelessWidget {
 
     Widget tile(Episode e) => _EpisodeTile(
           episode: e,
+          isDownloaded:
+              e.sourceType == 'smb' && downloadedUris.contains(e.filePath),
           onPlay: () => onPlay(e),
           onPlayWith: (external) => onPlayWith(e, external),
           onDownload: () => onDownload(e),
@@ -759,6 +769,7 @@ class _EpisodeList extends StatelessWidget {
 
 class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
+  final bool isDownloaded;
   final VoidCallback onPlay;
   /// Play with an explicitly chosen player (true = external).
   final void Function(bool external) onPlayWith;
@@ -773,6 +784,7 @@ class _EpisodeTile extends ConsumerWidget {
 
   const _EpisodeTile({
     required this.episode,
+    required this.isDownloaded,
     required this.onPlay,
     required this.onPlayWith,
     required this.onDownload,
@@ -786,10 +798,6 @@ class _EpisodeTile extends ConsumerWidget {
     final resumed = episode.lastPositionMs > 0 && !episode.watched
         ? '（可续播）'
         : '';
-    final downloadedUris = ref.watch(downloadedSmbUrisProvider).value ??
-        const <String>{};
-    final isDownloaded =
-        episode.sourceType == 'smb' && downloadedUris.contains(episode.filePath);
     // Long-press (touch) and right-click (desktop) both open the context menu:
     // choose a player, download (SMB), or block the file. The gestures live on
     // a wrapping GestureDetector because ListTile has no onSecondaryTap.

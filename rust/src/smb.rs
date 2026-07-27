@@ -23,6 +23,7 @@ const VIDEO_EXTS: &[&str] = &[
 ];
 
 const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
+pub const DOWNLOADED_SUBTITLE_DIR: &str = "Subtitles";
 
 /// Cap every SMB *setup* step (TCP connect, share connect, file open) so a NAS
 /// that has hit its per-client session limit — or is briefly unresponsive —
@@ -120,7 +121,7 @@ pub fn uri_prefix(subdir: &str) -> Option<String> {
     }
 }
 
-fn is_video(name: &str) -> bool {
+pub fn is_video(name: &str) -> bool {
     match name.rsplit_once('.') {
         Some((_, ext)) => VIDEO_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
         None => false,
@@ -132,6 +133,14 @@ fn is_subtitle(name: &str) -> bool {
         Some((_, ext)) => SUBTITLE_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
         None => false,
     }
+}
+
+fn subtitle_matches_video_stem(video_name: &str, subtitle_name: &str) -> bool {
+    let stem = video_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(video_name);
+    is_subtitle(subtitle_name) && subtitle_name.starts_with(stem)
 }
 
 /// Normalize a user-entered host into "host:port" (default SMB port 445).
@@ -303,20 +312,21 @@ pub fn smb_path_from_uri(uri: &str) -> Option<String> {
     Some(parts.next().unwrap_or("").to_string())
 }
 
-/// List external subtitle files sitting next to an SMB video: same directory,
-/// subtitle extension, and file name starting with the video's stem (catches
-/// `video.sc.ass` / `video.tc.ass` style multi-language pairs). Each hit is
-/// registered on the proxy so mpv can load it over loopback HTTP.
-pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::SubtitleCandidate>> {
+#[derive(Debug)]
+struct SmbSubtitleFile {
+    file_name: String,
+    smb_uri: String,
+}
+
+/// Discover subtitle files without registering loopback proxy tokens. Playback
+/// and downloads share this exact matching path so they cannot disagree about
+/// which sidecars belong to a video.
+async fn find_subtitle_files(smb_uri: &str) -> Result<Vec<SmbSubtitleFile>> {
     let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
     let (dir, video_name) = match path.rsplit_once('/') {
         Some((d, n)) => (d.to_string(), n.to_string()),
         None => (String::new(), path.clone()),
     };
-    let stem = video_name
-        .rsplit_once('.')
-        .map(|(s, _)| s)
-        .unwrap_or(&video_name);
 
     let c = creds().context("smb not connected")?;
     let session = session(&c).await?;
@@ -351,7 +361,7 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
 
     let mut out = Vec::new();
     for e in entries {
-        if e.is_directory || !is_subtitle(&e.name) || !e.name.starts_with(stem) {
+        if e.is_directory || !subtitle_matches_video_stem(&video_name, &e.name) {
             continue;
         }
         let sub_path = if dir.is_empty() {
@@ -359,8 +369,24 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
         } else {
             format!("{dir}/{}", e.name)
         };
-        let sub_uri = format!("smb://{}/{}/{}", c.addr, c.share, sub_path);
-        let url = register_playable(&sub_uri).await?;
+        out.push(SmbSubtitleFile {
+            file_name: e.name,
+            smb_uri: format!("smb://{}/{}/{}", c.addr, c.share, sub_path),
+        });
+    }
+    Ok(out)
+}
+
+/// List external subtitle files sitting next to an SMB video: same directory,
+/// subtitle extension, and file name starting with the video's stem (catches
+/// `video.sc.ass` / `video.tc.ass` style multi-language pairs). Each hit is
+/// registered on the proxy so mpv can load it over loopback HTTP.
+pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::SubtitleCandidate>> {
+    let video_path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
+    let files = find_subtitle_files(smb_uri).await?;
+    let mut out = Vec::with_capacity(files.len());
+    for file in files {
+        let url = register_playable(&file.smb_uri).await?;
         // Associate subtitle tokens with their video path. A superseded open
         // may release late, after the next episode has already listed its own
         // subtitles; a process-wide flat list would delete those new tokens.
@@ -368,12 +394,12 @@ pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::Subtitle
             SUBTITLE_TOKENS
                 .lock()
                 .unwrap()
-                .entry(path.clone())
+                .entry(video_path.clone())
                 .or_default()
                 .push(token.to_string());
         }
         out.push(crate::models::SubtitleCandidate {
-            file_name: e.name,
+            file_name: file.file_name,
             uri: url,
         });
     }
@@ -1131,8 +1157,16 @@ pub fn cancel_download(smb_uri: &str) {
         .insert(smb_uri.to_string());
 }
 
+pub fn reset_download_cancellation(smb_uri: &str) {
+    DOWNLOAD_CANCELLED.lock().unwrap().remove(smb_uri);
+}
+
 fn is_cancelled(smb_uri: &str) -> bool {
     DOWNLOAD_CANCELLED.lock().unwrap().contains(smb_uri)
+}
+
+pub fn download_was_cancelled(smb_uri: &str) -> bool {
+    is_cancelled(smb_uri)
 }
 
 async fn acquire_download_permit(smb_uri: &str) -> Result<tokio::sync::SemaphorePermit<'static>> {
@@ -1155,7 +1189,6 @@ pub async fn download(
     dest_dir: &str,
     progress: impl Fn(u64, u64),
 ) -> Result<String> {
-    DOWNLOAD_CANCELLED.lock().unwrap().remove(smb_uri);
     let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
     let file_name = path.rsplit('/').next().unwrap_or(&path).to_string();
     let c = creds().context("smb not connected")?;
@@ -1259,6 +1292,107 @@ pub async fn download(
     Ok(final_path.to_string_lossy().to_string())
 }
 
+pub fn expected_download_path(smb_uri: &str, dest_dir: &str) -> Option<std::path::PathBuf> {
+    let path = smb_path_from_uri(smb_uri)?;
+    let file_name = path.rsplit('/').next().unwrap_or(&path);
+    Some(std::path::Path::new(dest_dir).join(file_name))
+}
+
+/// Reuse an orphaned local video only after its byte size matches the exact SMB
+/// source. This avoids binding a same-named file from another folder without
+/// transferring the entire video again.
+pub async fn matching_existing_download(
+    smb_uri: &str,
+    dest_dir: &str,
+) -> Result<Option<(String, u64)>> {
+    let Some(local_path) = expected_download_path(smb_uri, dest_dir) else {
+        return Ok(None);
+    };
+    let local_size = match tokio::fs::metadata(&local_path).await {
+        Ok(metadata) if metadata.is_file() && metadata.len() > 0 => metadata.len(),
+        _ => return Ok(None),
+    };
+    let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
+    let c = creds().context("smb not connected")?;
+    let (reader, _) = open_session_reader(&c, &path).await?;
+    let remote_size = reader.size();
+    let _ = reader.close().await;
+    if remote_size == local_size {
+        Ok(Some((local_path.to_string_lossy().to_string(), local_size)))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Download every matching SMB sidecar into one dedicated folder below the
+/// video download directory. Subtitle failures are reported to the caller but
+/// do not remove the already-completed video; cancellation remains tied to the
+/// original video's task.
+pub async fn download_subtitles(smb_uri: &str, dest_dir: &str) -> Result<Vec<String>> {
+    let files = find_subtitle_files(smb_uri).await?;
+    let video_name = smb_path_from_uri(smb_uri)
+        .and_then(|path| path.rsplit('/').next().map(str::to_string))
+        .context("bad smb uri")?;
+    let local_video = std::path::Path::new(dest_dir).join(&video_name);
+    remove_downloaded_subtitles(&local_video);
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let subtitle_dir = std::path::Path::new(dest_dir).join(DOWNLOADED_SUBTITLE_DIR);
+    let subtitle_dir = subtitle_dir.to_string_lossy().to_string();
+    let mut downloaded = Vec::with_capacity(files.len());
+    for file in files {
+        if is_cancelled(smb_uri) {
+            anyhow::bail!("下载已取消");
+        }
+        reset_download_cancellation(&file.smb_uri);
+        match download(&file.smb_uri, &subtitle_dir, |_, _| {}).await {
+            Ok(path) => downloaded.push(path),
+            Err(error) => eprintln!(
+                "KURAKO could not download subtitle {}: {error:#}",
+                file.file_name
+            ),
+        }
+    }
+    if is_cancelled(smb_uri) {
+        anyhow::bail!("下载已取消");
+    }
+    Ok(downloaded)
+}
+
+/// Remove sidecars downloaded for [video_path]. Only the dedicated subtitle
+/// directory is touched; user-managed files next to the video are never
+/// removed.
+pub fn remove_downloaded_subtitles(video_path: impl AsRef<std::path::Path>) {
+    let video_path = video_path.as_ref();
+    let Some(video_name) = video_path.file_name().and_then(|name| name.to_str()) else {
+        return;
+    };
+    let Some(parent) = video_path.parent() else {
+        return;
+    };
+    let subtitle_dir = parent.join(DOWNLOADED_SUBTITLE_DIR);
+    let Ok(entries) = std::fs::read_dir(&subtitle_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if path.is_file() && subtitle_matches_video_stem(video_name, name) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    if std::fs::read_dir(&subtitle_dir)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_dir(subtitle_dir);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1285,6 +1419,50 @@ mod tests {
 
         DOWNLOAD_CANCELLED.lock().unwrap().remove(&uri);
         drop(held);
+    }
+
+    #[test]
+    fn subtitle_matching_uses_video_stem_and_supported_extensions() {
+        assert!(subtitle_matches_video_stem(
+            "Episode 01.mkv",
+            "Episode 01.sc.ass"
+        ));
+        assert!(subtitle_matches_video_stem(
+            "Episode 01.mkv",
+            "Episode 01.srt"
+        ));
+        assert!(!subtitle_matches_video_stem(
+            "Episode 01.mkv",
+            "Episode 02.sc.ass"
+        ));
+        assert!(!subtitle_matches_video_stem(
+            "Episode 01.mkv",
+            "Episode 01.txt"
+        ));
+    }
+
+    #[test]
+    fn downloaded_subtitle_cleanup_keeps_unrelated_files() {
+        let root = std::env::temp_dir().join(format!(
+            "kurako-subtitle-cleanup-{}-{}",
+            std::process::id(),
+            STREAM_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let subtitle_dir = root.join(DOWNLOADED_SUBTITLE_DIR);
+        std::fs::create_dir_all(&subtitle_dir).unwrap();
+        let video = root.join("Episode 01.mkv");
+        std::fs::write(&video, b"video").unwrap();
+        std::fs::write(subtitle_dir.join("Episode 01.sc.ass"), b"sub").unwrap();
+        std::fs::write(subtitle_dir.join("Episode 01.tc.srt"), b"sub").unwrap();
+        let unrelated = subtitle_dir.join("Episode 02.sc.ass");
+        std::fs::write(&unrelated, b"keep").unwrap();
+
+        remove_downloaded_subtitles(&video);
+
+        assert!(!subtitle_dir.join("Episode 01.sc.ass").exists());
+        assert!(!subtitle_dir.join("Episode 01.tc.srt").exists());
+        assert!(unrelated.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

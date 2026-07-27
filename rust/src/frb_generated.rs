@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -123977605;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 928780868;
 
 // Section: executor
 
@@ -1150,6 +1150,39 @@ fn wire__crate__api__set_collection_impl(
         },
     )
 }
+fn wire__crate__api__set_download_directory_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_download_directory",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_download_dir = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::set_download_directory(api_download_dir)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__set_watched_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -2181,19 +2214,20 @@ fn pde_ffi_dispatcher_primary_impl(
         31 => wire__crate__api__set_bangumi_mirror_impl(port, ptr, rust_vec_len, data_len),
         32 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
         33 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__smb_cancel_download_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__smb_download_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__smb_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__smb_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__set_download_directory_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__smb_cancel_download_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__smb_download_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__smb_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__smb_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

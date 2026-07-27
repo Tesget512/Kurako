@@ -2,6 +2,8 @@ use crate::models::{Anime, Episode, LibraryFolder};
 use anyhow::Result;
 use once_cell::sync::OnceCell;
 use rusqlite::{params, Connection, OptionalExtension};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 static DB: OnceCell<Mutex<Connection>> = OnceCell::new();
@@ -857,6 +859,186 @@ pub fn download_local_path(smb_uri: &str) -> Result<Option<String>> {
     })
 }
 
+/// Rebase completed downloads whose persisted absolute path points at an old
+/// app container. The existing SMB URI and metadata snapshot are authoritative;
+/// no current episode match or network access is required.
+pub fn rebase_download_paths(download_dir: &str) -> Result<i64> {
+    with_conn(|c| rebase_download_paths_on(c, Path::new(download_dir)))
+}
+
+struct DownloadPathRow {
+    id: i64,
+    local_path: String,
+    bytes_total: i64,
+}
+
+struct DownloadPathCandidate {
+    id: i64,
+    target: PathBuf,
+    target_key: String,
+}
+
+fn path_key(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn stored_file_name(path: &str) -> Option<&str> {
+    Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .or_else(|| {
+            path.rsplit(|ch| ch == '/' || ch == '\\')
+                .find(|part| !part.is_empty())
+        })
+}
+
+fn rebase_download_paths_on(c: &Connection, download_dir: &Path) -> Result<i64> {
+    let rows = {
+        let mut stmt = c.prepare("SELECT id, local_path, bytes_total FROM downloads")?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(DownloadPathRow {
+                    id: r.get(0)?,
+                    local_path: r.get(1)?,
+                    bytes_total: r.get(2)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows
+    };
+
+    let mut occupied = HashMap::<String, Vec<i64>>::new();
+    for row in &rows {
+        occupied
+            .entry(path_key(Path::new(&row.local_path)))
+            .or_default()
+            .push(row.id);
+    }
+
+    let mut candidates = Vec::new();
+    for row in &rows {
+        if Path::new(&row.local_path).is_file() || row.bytes_total <= 0 {
+            continue;
+        }
+        let Some(file_name) = stored_file_name(&row.local_path) else {
+            continue;
+        };
+        let target = download_dir.join(file_name);
+        let metadata = match std::fs::metadata(&target) {
+            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => metadata,
+            _ => continue,
+        };
+        if metadata.len() != row.bytes_total as u64 {
+            continue;
+        }
+        candidates.push(DownloadPathCandidate {
+            id: row.id,
+            target_key: path_key(&target),
+            target,
+        });
+    }
+
+    let mut candidate_counts = HashMap::<String, usize>::new();
+    for candidate in &candidates {
+        *candidate_counts
+            .entry(candidate.target_key.clone())
+            .or_default() += 1;
+    }
+
+    let tx = c.unchecked_transaction()?;
+    let mut rebased = 0;
+    for candidate in candidates {
+        if candidate_counts.get(&candidate.target_key) != Some(&1) {
+            continue;
+        }
+        if occupied
+            .get(&candidate.target_key)
+            .is_some_and(|ids| ids.iter().any(|id| *id != candidate.id))
+        {
+            continue;
+        }
+        let target = candidate.target.to_string_lossy().to_string();
+        tx.execute(
+            "UPDATE downloads SET local_path = ?1 WHERE id = ?2",
+            params![target, candidate.id],
+        )?;
+        occupied
+            .entry(candidate.target_key)
+            .or_default()
+            .push(candidate.id);
+        rebased += 1;
+    }
+    tx.commit()?;
+    Ok(rebased)
+}
+
+/// Return the SMB episode URI for [file_name] only when it is unambiguous in
+/// the current library. Directory recovery must never guess between two shows
+/// which happen to use the same generic episode filename.
+pub fn unique_smb_episode_uri(file_name: &str) -> Result<Option<String>> {
+    with_conn(|c| unique_smb_episode_uri_on(c, file_name))
+}
+
+/// Recreate one missing download row from a local file when the current SMB
+/// library provides one unambiguous episode with the same filename.
+pub fn recover_download_file(
+    local_path: &str,
+    file_name: &str,
+    bytes_total: i64,
+    now: i64,
+) -> Result<bool> {
+    with_conn(|c| recover_download_file_on(c, local_path, file_name, bytes_total, now))
+}
+
+fn recover_download_file_on(
+    c: &Connection,
+    local_path: &str,
+    file_name: &str,
+    bytes_total: i64,
+    now: i64,
+) -> Result<bool> {
+    let already_recorded: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM downloads WHERE local_path = ?1)",
+        params![local_path],
+        |r| r.get(0),
+    )?;
+    if already_recorded {
+        return Ok(false);
+    }
+    let Some(smb_uri) = unique_smb_episode_uri_on(c, file_name)? else {
+        return Ok(false);
+    };
+    let smb_uri_recorded: bool = c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM downloads WHERE smb_uri = ?1)",
+        params![smb_uri],
+        |r| r.get(0),
+    )?;
+    if smb_uri_recorded {
+        return Ok(false);
+    }
+    add_download_on(c, &smb_uri, local_path, bytes_total, now)?;
+    Ok(true)
+}
+
+fn unique_smb_episode_uri_on(c: &Connection, file_name: &str) -> Result<Option<String>> {
+    let mut stmt = c.prepare(
+        "SELECT file_path FROM episodes
+         WHERE source_type = 'smb' AND file_name = ?1
+         LIMIT 2",
+    )?;
+    let paths = stmt
+        .query_map(params![file_name], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(if paths.len() == 1 {
+        paths.into_iter().next()
+    } else {
+        None
+    })
+}
+
 #[cfg(test)]
 mod download_tests {
     use super::*;
@@ -870,7 +1052,8 @@ mod download_tests {
              );
              CREATE TABLE episodes (
                  anime_id INTEGER NOT NULL, file_path TEXT NOT NULL UNIQUE,
-                 file_name TEXT NOT NULL, episode_no INTEGER, title TEXT
+                 file_name TEXT NOT NULL, episode_no INTEGER, title TEXT,
+                 source_type TEXT NOT NULL DEFAULT 'smb'
              );
              CREATE TABLE downloads (
                  id INTEGER PRIMARY KEY AUTOINCREMENT, smb_uri TEXT NOT NULL UNIQUE,
@@ -882,6 +1065,19 @@ mod download_tests {
         )
         .unwrap();
         c
+    }
+
+    fn temp_download_dir(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "kurako-download-rebase-{label}-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
     }
 
     #[test]
@@ -921,5 +1117,196 @@ mod download_tests {
             )
             .unwrap();
         assert_eq!(snapshot, (Some(7), Some(12345), Some("保留的番剧".into())));
+    }
+
+    #[test]
+    fn download_path_rebase_preserves_exact_record_without_library_match() {
+        let c = connection();
+        let dir = temp_download_dir("exact");
+        let file_name = "[字幕组] 第 01 集 [1080P].mkv";
+        let target = dir.join(file_name);
+        std::fs::write(&target, b"video-bytes").unwrap();
+        let old_path = format!(
+            "/var/mobile/Containers/Data/Application/OLD/Documents/KURAKO Downloads/{file_name}"
+        );
+        let uri = "smb://server/Anime/show/episode-01.mkv";
+        c.execute(
+            "INSERT INTO downloads(
+                 id, smb_uri, local_path, bytes_total, created_at, anime_id,
+                 bangumi_id, anime_title, cover_url, episode_no, episode_title,
+                 file_name
+             ) VALUES (41, ?1, ?2, 11, 77, 9, 1234, '保留的番剧',
+                       'https://img/cover.jpg', 1, '第一集', ?3)",
+            params![uri, old_path, file_name],
+        )
+        .unwrap();
+
+        assert_eq!(rebase_download_paths_on(&c, &dir).unwrap(), 1);
+        let row: (
+            i64,
+            String,
+            String,
+            i64,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
+        ) = c
+            .query_row(
+                "SELECT id, smb_uri, local_path, bytes_total, created_at,
+                        anime_id, bangumi_id, anime_title, file_name
+                 FROM downloads WHERE id = 41",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, 41);
+        assert_eq!(row.1, uri);
+        assert_eq!(row.2, target.to_string_lossy());
+        assert_eq!(row.3, 11);
+        assert_eq!(row.4, 77);
+        assert_eq!(row.5, Some(9));
+        assert_eq!(row.6, Some(1234));
+        assert_eq!(row.7.as_deref(), Some("保留的番剧"));
+        assert_eq!(row.8.as_deref(), Some(file_name));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn download_path_rebase_rejects_ambiguous_or_unverified_targets() {
+        let c = connection();
+        let dir = temp_download_dir("unsafe");
+        std::fs::write(dir.join("Duplicate.mkv"), b"12345").unwrap();
+        std::fs::write(dir.join("Mismatch.mkv"), b"12345").unwrap();
+        std::fs::write(dir.join("Zero.mkv"), b"12345").unwrap();
+        let claimed = dir.join("Claimed.mkv");
+        std::fs::write(&claimed, b"12345").unwrap();
+        c.execute_batch(&format!(
+            "INSERT INTO downloads(smb_uri, local_path, bytes_total, created_at) VALUES
+             ('smb://server/a', '/old-a/Duplicate.mkv', 5, 1),
+             ('smb://server/b', '/old-b/Duplicate.mkv', 5, 2),
+             ('smb://server/mismatch', '/old/Mismatch.mkv', 4, 3),
+             ('smb://server/zero', '/old/Zero.mkv', 0, 4),
+             ('smb://server/claimed', '{}', 5, 5),
+             ('smb://server/stale-claimed', '/old/Claimed.mkv', 5, 6),
+             ('smb://server/missing', '/old/Missing.mkv', 5, 7);",
+            claimed.to_string_lossy().replace('\'', "''")
+        ))
+        .unwrap();
+
+        assert_eq!(rebase_download_paths_on(&c, &dir).unwrap(), 0);
+        let stale_paths: Vec<String> = {
+            let mut stmt = c
+                .prepare(
+                    "SELECT local_path FROM downloads
+                     WHERE smb_uri != 'smb://server/claimed'
+                     ORDER BY created_at",
+                )
+                .unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            stale_paths,
+            vec![
+                "/old-a/Duplicate.mkv",
+                "/old-b/Duplicate.mkv",
+                "/old/Mismatch.mkv",
+                "/old/Zero.mkv",
+                "/old/Claimed.mkv",
+                "/old/Missing.mkv",
+            ]
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn download_recovery_requires_unique_smb_filename() {
+        let c = connection();
+        c.execute(
+            "INSERT INTO anime(id, title_raw, name_cn)
+             VALUES (1, 'Recovery title', '恢复番剧')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
+             VALUES (1, 'smb://server/Anime/A/Episode 01.mkv', 'Episode 01.mkv', 1, NULL)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            unique_smb_episode_uri_on(&c, "Episode 01.mkv")
+                .unwrap()
+                .as_deref(),
+            Some("smb://server/Anime/A/Episode 01.mkv")
+        );
+        assert!(recover_download_file_on(
+            &c,
+            "/downloads/Episode 01.mkv",
+            "Episode 01.mkv",
+            123,
+            1,
+        )
+        .unwrap());
+        assert!(!recover_download_file_on(
+            &c,
+            "/downloads/Episode 01.mkv",
+            "Episode 01.mkv",
+            123,
+            2,
+        )
+        .unwrap());
+        assert!(!recover_download_file_on(
+            &c,
+            "/downloads/relocated/Episode 01.mkv",
+            "Episode 01.mkv",
+            123,
+            2,
+        )
+        .unwrap());
+        let detail = list_downloads_detailed_on(&c).unwrap().remove(0);
+        assert_eq!(detail.anime_title.as_deref(), Some("恢复番剧"));
+        assert_eq!(detail.local_path, "/downloads/Episode 01.mkv");
+
+        c.execute(
+            "INSERT INTO anime(id, title_raw, name_cn)
+             VALUES (2, 'Ambiguous title', '重名番剧')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
+             VALUES (2, 'smb://server/Anime/B/Episode 01.mkv', 'Episode 01.mkv', 1, NULL)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            unique_smb_episode_uri_on(&c, "Episode 01.mkv").unwrap(),
+            None
+        );
+        assert!(!recover_download_file_on(
+            &c,
+            "/downloads/other/Episode 01.mkv",
+            "Episode 01.mkv",
+            456,
+            3,
+        )
+        .unwrap());
     }
 }
