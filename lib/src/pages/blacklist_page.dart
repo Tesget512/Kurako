@@ -18,16 +18,20 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
   late Future<List<BlacklistEntry>> _future = rust.listBlacklist();
 
   void _reload() {
-    setState(() => _future = rust.listBlacklist());
+    if (!mounted) return;
+    final future = rust.listBlacklist();
+    setState(() {
+      _future = future;
+    });
   }
 
   Future<void> _unblock(BlacklistEntry e) async {
     await rust.removeBlacklist(id: e.id);
-    _reload();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已解除屏蔽，重新扫描后条目将恢复')),
-    );
+    _reload();
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已解除屏蔽，重新扫描后条目将恢复')));
   }
 
   @override
@@ -49,9 +53,11 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.block_outlined,
-                      size: 48,
-                      color: Theme.of(context).colorScheme.outline),
+                  Icon(
+                    Icons.block_outlined,
+                    size: 48,
+                    color: Theme.of(context).colorScheme.outline,
+                  ),
                   const SizedBox(height: 12),
                   const Text('还没有屏蔽任何内容'),
                   const SizedBox(height: 4),
@@ -69,9 +75,11 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
               final e = items[i];
               final isAnime = e.kind == 'anime';
               return ListTile(
-                leading: Icon(isAnime
-                    ? Icons.video_library_outlined
-                    : Icons.insert_drive_file_outlined),
+                leading: Icon(
+                  isAnime
+                      ? Icons.video_library_outlined
+                      : Icons.insert_drive_file_outlined,
+                ),
                 title: Text(
                   e.value,
                   maxLines: 2,

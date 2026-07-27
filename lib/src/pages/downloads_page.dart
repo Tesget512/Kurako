@@ -23,9 +23,14 @@ class DownloadsPage extends ConsumerStatefulWidget {
 
 class _DownloadsPageState extends ConsumerState<DownloadsPage> {
   late Future<List<DownloadDetail>> _future = rust.listDownloadsDetailed();
+  final Set<String> _deletingIds = {};
 
   void _reload() {
-    setState(() => _future = rust.listDownloadsDetailed());
+    if (!mounted) return;
+    final future = rust.listDownloadsDetailed();
+    setState(() {
+      _future = future;
+    });
   }
 
   String _fmtSize(int bytes) {
@@ -55,19 +60,30 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
       ),
     );
     if (confirmed != true) return;
+    final deletingId = e.id.toString();
+    if (_deletingIds.contains(deletingId)) return;
+    setState(() {
+      _deletingIds.add(deletingId);
+    });
     try {
       await rust.removeDownload(id: e.id);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已删除本地副本')));
-      }
+      if (!mounted) return;
       _reload();
-    } catch (err) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已删除本地副本')));
+    } catch (err, stackTrace) {
+      debugPrint('Failed to delete download ${e.id}: $err\n$stackTrace');
       if (mounted) {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('删除失败: $err')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _deletingIds.remove(deletingId);
+        });
       }
     }
   }
@@ -154,6 +170,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
                   group: g,
                   fmtSize: _fmtSize,
                   fileName: _fileName,
+                  deletingIds: _deletingIds,
                   onPlay: _playDownloaded,
                   onDelete: _delete,
                 ),
@@ -230,6 +247,7 @@ class _AnimeGroup extends StatelessWidget {
   final _Group group;
   final String Function(int) fmtSize;
   final String Function(String) fileName;
+  final Set<String> deletingIds;
   final Future<void> Function(List<DownloadDetail>, DownloadDetail) onPlay;
   final Future<void> Function(DownloadDetail) onDelete;
 
@@ -237,6 +255,7 @@ class _AnimeGroup extends StatelessWidget {
     required this.group,
     required this.fmtSize,
     required this.fileName,
+    required this.deletingIds,
     required this.onPlay,
     required this.onDelete,
   });
@@ -324,8 +343,15 @@ class _AnimeGroup extends StatelessWidget {
                   ),
                   IconButton(
                     tooltip: '删除本地副本',
-                    icon: const Icon(Icons.delete_outline),
-                    onPressed: () => onDelete(e),
+                    icon: deletingIds.contains(e.id.toString())
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.delete_outline),
+                    onPressed: deletingIds.contains(e.id.toString())
+                        ? null
+                        : () => onDelete(e),
                   ),
                 ],
               ),

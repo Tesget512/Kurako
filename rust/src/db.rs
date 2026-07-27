@@ -801,40 +801,7 @@ pub fn remove_download(id: i64) -> Result<Option<String>> {
 /// LEFT JOINs: a download whose episode was removed from the library still
 /// shows up with just its raw file info.
 pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>> {
-    with_conn(|c| {
-        refresh_download_snapshots_on(c)?;
-        list_downloads_detailed_on(c)
-    })
-}
-
-/// Populate or refresh metadata for downloads created before snapshot columns
-/// existed, or for downloads which were matched only after they completed.
-/// [add_download_on] preserves an existing snapshot when its live episode is
-/// no longer present, so calling this before every management-page read is
-/// idempotent and cannot turn a matched download back into an unmatched one.
-fn refresh_download_snapshots_on(c: &Connection) -> Result<()> {
-    let downloads = {
-        let mut stmt = c.prepare(
-            "SELECT smb_uri, local_path, bytes_total, created_at
-             FROM downloads",
-        )?;
-        let rows = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, i64>(2)?,
-                    r.get::<_, i64>(3)?,
-                ))
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        rows
-    };
-
-    for (smb_uri, local_path, bytes_total, created_at) in downloads {
-        add_download_on(c, &smb_uri, &local_path, bytes_total, created_at)?;
-    }
-    Ok(())
+    with_conn(list_downloads_detailed_on)
 }
 
 fn list_downloads_detailed_on(c: &Connection) -> Result<Vec<crate::models::DownloadDetail>> {
@@ -954,40 +921,5 @@ mod download_tests {
             )
             .unwrap();
         assert_eq!(snapshot, (Some(7), Some(12345), Some("保留的番剧".into())));
-    }
-
-    #[test]
-    fn legacy_download_is_backfilled_before_library_clear() {
-        let c = connection();
-        let uri = "smb://server/Anime/show/episode-03.mkv";
-        c.execute(
-            "INSERT INTO anime(id, title_raw, bangumi_id, name_cn, cover_url)
-             VALUES (8, 'Raw title', 67890, '旧下载番剧', 'https://img/legacy.jpg')",
-            [],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
-             VALUES (8, ?1, 'episode-03.mkv', 3, '第三集')",
-            params![uri],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO downloads(smb_uri, local_path, bytes_total, created_at)
-             VALUES (?1, '/downloads/episode-03.mkv', 300, 3)",
-            params![uri],
-        )
-        .unwrap();
-
-        refresh_download_snapshots_on(&c).unwrap();
-        c.execute("DELETE FROM episodes", []).unwrap();
-        c.execute("DELETE FROM anime", []).unwrap();
-
-        let detail = list_downloads_detailed_on(&c).unwrap().remove(0);
-        assert_eq!(detail.anime_id, Some(8));
-        assert_eq!(detail.anime_title.as_deref(), Some("旧下载番剧"));
-        assert_eq!(detail.cover_url.as_deref(), Some("https://img/legacy.jpg"));
-        assert_eq!(detail.episode_no, Some(3));
-        assert_eq!(detail.file_name, "episode-03.mkv");
     }
 }
