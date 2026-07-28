@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `configured_download_directory`, `ensure_anime_for_subject`, `finish_scan`, `now_secs`, `persist_match`, `prune_prefixes_for`, `recover_configured_downloads`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `configured_download_directory`, `ensure_anime_for_subject`, `finish_scan`, `is_nonempty_file`, `now_secs`, `persist_match`, `prune_prefixes_for`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -159,6 +159,16 @@ Future<void> smbRelease({required String url}) =>
 /// each pre-registered on the loopback proxy so mpv can load it.
 Future<List<SubtitleCandidate>> smbListSubtitles({required String smbUri}) =>
     RustLib.instance.api.crateApiSmbListSubtitles(smbUri: smbUri);
+
+/// Filter locally enumerated subtitle filenames through the same recognizer
+/// used by SMB streaming, download, and downloaded-sidecar cleanup.
+Future<List<String>> matchingSubtitleFileNames({
+  required String videoName,
+  required List<String> subtitleNames,
+}) => RustLib.instance.api.crateApiMatchingSubtitleFileNames(
+  videoName: videoName,
+  subtitleNames: subtitleNames,
+);
 
 /// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
 /// and shows the delta as transfer speed in the playback-info panel.

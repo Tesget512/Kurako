@@ -162,11 +162,16 @@ pub fn set_fallback(file_path: &str, bangumi_id: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Delete the entire fallback store. Returns whether a file was removed.
-pub fn remove_all_fallback() -> bool {
+/// Delete the entire fallback store. Returns whether a file was removed and
+/// preserves real I/O errors so maintenance cannot report a false success.
+pub fn remove_all_fallback() -> anyhow::Result<bool> {
     let _guard = FALLBACK_LOCK.lock().unwrap();
     let Some(p) = fallback_path() else {
-        return false;
+        return Ok(false);
     };
-    std::fs::remove_file(&p).is_ok()
+    match std::fs::remove_file(&p) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
 }

@@ -9,7 +9,6 @@ projects, communities, maintainers, and contributors behind:
 - Anime4K by bloc97
 - Bangumi
 - bangumi-proxy by Soyorin
-- PiliPlus, for player interaction references
 - Kazumi, for detail-page layout references
 
 Third-party copyrights and trademarks belong to their respective owners. Each

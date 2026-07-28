@@ -22,7 +22,6 @@ const VIDEO_EXTS: &[&str] = &[
     "mpeg", "3gp", "ogv",
 ];
 
-const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
 pub const DOWNLOADED_SUBTITLE_DIR: &str = "Subtitles";
 
 /// Cap every SMB *setup* step (TCP connect, share connect, file open) so a NAS
@@ -126,21 +125,6 @@ pub fn is_video(name: &str) -> bool {
         Some((_, ext)) => VIDEO_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
         None => false,
     }
-}
-
-fn is_subtitle(name: &str) -> bool {
-    match name.rsplit_once('.') {
-        Some((_, ext)) => SUBTITLE_EXTS.contains(&ext.to_ascii_lowercase().as_str()),
-        None => false,
-    }
-}
-
-fn subtitle_matches_video_stem(video_name: &str, subtitle_name: &str) -> bool {
-    let stem = video_name
-        .rsplit_once('.')
-        .map(|(stem, _)| stem)
-        .unwrap_or(video_name);
-    is_subtitle(subtitle_name) && subtitle_name.starts_with(stem)
 }
 
 /// Normalize a user-entered host into "host:port" (default SMB port 445).
@@ -361,7 +345,7 @@ async fn find_subtitle_files(smb_uri: &str) -> Result<Vec<SmbSubtitleFile>> {
 
     let mut out = Vec::new();
     for e in entries {
-        if e.is_directory || !subtitle_matches_video_stem(&video_name, &e.name) {
+        if e.is_directory || !crate::recognize::subtitle_matches_video(&video_name, &e.name) {
             continue;
         }
         let sub_path = if dir.is_empty() {
@@ -521,17 +505,24 @@ pub async fn delete_sidecar(folder_uri: &str) -> Result<bool> {
         tokio::time::timeout(SETUP_TIMEOUT, client.delete_file(tree, &path)).await
     };
     drop(guard);
-    let res = match res {
-        Ok(res) => {
+    match res {
+        Ok(Ok(())) => {
             session.touch();
-            res
+            Ok(true)
+        }
+        Ok(Err(error)) if error.kind() == smb2::ErrorKind::NotFound => {
+            session.touch();
+            Ok(false)
+        }
+        Ok(Err(error)) => {
+            invalidate_session_if(&session);
+            Err(error).context("smb delete sidecar")
         }
         Err(_) => {
             invalidate_session_if(&session);
-            anyhow::bail!("smb delete sidecar timed out")
+            Err(anyhow::anyhow!("smb delete sidecar timed out"))
         }
-    };
-    Ok(res.is_ok())
+    }
 }
 
 // ---- Local HTTP streaming proxy ----
@@ -1381,7 +1372,7 @@ pub fn remove_downloaded_subtitles(video_path: impl AsRef<std::path::Path>) {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if path.is_file() && subtitle_matches_video_stem(video_name, name) {
+        if path.is_file() && crate::recognize::subtitle_matches_video(video_name, name) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -1422,20 +1413,20 @@ mod tests {
     }
 
     #[test]
-    fn subtitle_matching_uses_video_stem_and_supported_extensions() {
-        assert!(subtitle_matches_video_stem(
+    fn subtitle_matching_uses_shared_recognizer() {
+        assert!(crate::recognize::subtitle_matches_video(
             "Episode 01.mkv",
             "Episode 01.sc.ass"
         ));
-        assert!(subtitle_matches_video_stem(
+        assert!(crate::recognize::subtitle_matches_video(
             "Episode 01.mkv",
             "Episode 01.srt"
         ));
-        assert!(!subtitle_matches_video_stem(
+        assert!(!crate::recognize::subtitle_matches_video(
             "Episode 01.mkv",
             "Episode 02.sc.ass"
         ));
-        assert!(!subtitle_matches_video_stem(
+        assert!(!crate::recognize::subtitle_matches_video(
             "Episode 01.mkv",
             "Episode 01.txt"
         ));

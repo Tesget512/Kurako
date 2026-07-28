@@ -36,6 +36,11 @@ target 'Runner' do
 end
 
 post_install do |installer|
+  legacy_image_picker_targets = %w[
+    DKImagePickerController
+    DKPhotoGallery
+    SwiftyGif
+  ]
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
@@ -52,6 +57,13 @@ post_install do |installer|
       config.build_settings['RUSTC'] = '/usr/local/opt/rustup/bin/rustc'
       config.build_settings['RUSTUP_HOME'] = '/Users/developer/.rustup'
       config.build_settings['CARGO_HOME'] = '/Users/developer/.cargo'
+      if legacy_image_picker_targets.include?(target.name)
+        # file_picker still depends on these archived/legacy Swift pods. Keep
+        # their deprecation and Swift-concurrency warnings out of Runner's
+        # Issues list without suppressing warnings from Kurako or other pods.
+        config.build_settings['GCC_WARN_INHIBIT_ALL_WARNINGS'] = 'YES'
+        config.build_settings['SWIFT_SUPPRESS_WARNINGS'] = 'YES'
+      end
     end
     if target.name == 'volume_controller'
       # The upstream pod's source glob includes an unused template privacy

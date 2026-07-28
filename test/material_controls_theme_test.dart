@@ -37,10 +37,14 @@ void main() {
     final shortcuts = <ShortcutActivator, VoidCallback>{
       const SingleActivator(LogicalKeyboardKey.keyF): () {},
     };
+    void onMouseDoubleTap() {}
+    void onSecondaryTap() {}
     final theme = MaterialVideoControlsThemeData(
       hideControlsOnMouseExit: true,
       hideMouseOnControlsRemoval: true,
       keyboardShortcuts: shortcuts,
+      onMouseDoubleTap: onMouseDoubleTap,
+      onSecondaryTap: onSecondaryTap,
     );
 
     final copied = theme.copyWith(controlsHoverDuration: Duration.zero);
@@ -48,5 +52,7 @@ void main() {
     expect(copied.hideControlsOnMouseExit, isTrue);
     expect(copied.hideMouseOnControlsRemoval, isTrue);
     expect(copied.keyboardShortcuts, same(shortcuts));
+    expect(copied.onMouseDoubleTap, same(onMouseDoubleTap));
+    expect(copied.onSecondaryTap, same(onSecondaryTap));
   });
 }

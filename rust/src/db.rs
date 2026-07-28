@@ -598,14 +598,16 @@ pub fn delete_empty_anime() -> Result<usize> {
 
 /// Remove an anime and its episodes (used when a folder is dropped and rescanned).
 pub fn clear_all() -> Result<()> {
-    with_conn(|c| {
-        // Also reset last_scanned so a clear + rescan reprocesses every folder
-        // even in incremental mode.
-        c.execute_batch(
-            "DELETE FROM episodes; DELETE FROM anime; UPDATE library_folders SET last_scanned = NULL;",
-        )?;
-        Ok(())
-    })
+    with_conn(clear_all_on)
+}
+
+fn clear_all_on(c: &Connection) -> Result<()> {
+    // Also reset last_scanned so a clear + rescan reprocesses every folder even
+    // in incremental mode. Downloads, sources and blacklist are independent.
+    c.execute_batch(
+        "DELETE FROM episodes; DELETE FROM anime; UPDATE library_folders SET last_scanned = NULL;",
+    )?;
+    Ok(())
 }
 
 // ---- Blacklist (user-blocked anime titles / video file paths) ----
@@ -1065,6 +1067,59 @@ mod download_tests {
         )
         .unwrap();
         c
+    }
+
+    #[test]
+    fn clear_all_resets_library_index_but_preserves_sources_and_downloads() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE library_folders (
+                 id INTEGER PRIMARY KEY, path TEXT NOT NULL, last_scanned INTEGER
+             );
+             CREATE TABLE anime (id INTEGER PRIMARY KEY);
+             CREATE TABLE episodes (id INTEGER PRIMARY KEY, anime_id INTEGER);
+             CREATE TABLE downloads (id INTEGER PRIMARY KEY, smb_uri TEXT NOT NULL);
+             CREATE TABLE blacklist (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO library_folders VALUES (1, 'smb://server/Anime', 99);
+             INSERT INTO anime VALUES (2);
+             INSERT INTO episodes VALUES (3, 2);
+             INSERT INTO downloads VALUES (4, 'smb://server/Anime/show/01.mkv');
+             INSERT INTO blacklist VALUES (5, 'blocked');",
+        )
+        .unwrap();
+
+        clear_all_on(&c).unwrap();
+
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM anime", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM episodes", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row("SELECT last_scanned FROM library_folders", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM downloads", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM blacklist", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
     }
 
     fn temp_download_dir(label: &str) -> PathBuf {

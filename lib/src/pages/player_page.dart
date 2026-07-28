@@ -1445,6 +1445,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       // controls immediately and an idle pointer disappears with them.
       hideControlsOnMouseExit: true,
       hideMouseOnControlsRemoval: true,
+      onMouseDoubleTap: _togglePlaying,
+      onSecondaryTap: () => _openPanel(_Panel.menu),
       keyboardShortcuts: {
         const SingleActivator(LogicalKeyboardKey.mediaPlay): () =>
             _player.play(),
@@ -1459,10 +1461,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       },
       // Touch gestures.
       seekOnDoubleTap: true,
-      // PiliPlus uses a left-quarter / central-half / right-quarter layout:
-      // the centre toggles playback while only the two outer quarters seek.
-      // The vendored controls honour the same ratios for both hit-testing and
-      // the seek animation placement.
+      // The centre toggles playback while only the two outer quarters seek.
+      // The same ratios drive hit-testing and seek-animation placement.
       seekOnDoubleTapLayoutTapsRatios: const [1, 2, 1],
       seekOnDoubleTapLayoutWidgetRatios: const [1, 2, 1],
       volumeGesture: true,
@@ -1486,8 +1486,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       // bars below instead of covering the middle of the video.
       backdropColor: Colors.transparent,
       edgeShadeColor: const Color(0x66000000),
-      // A compact two-row bottom bar derived from PiliPlus: the progress line
-      // sits just above the transport row, rather than floating high above it.
+      // Keep the progress line directly above the compact transport row.
       seekBarThumbColor: _cs.primary,
       seekBarColor: Colors.white70,
       seekBarPositionColor: _cs.primary,
@@ -1590,8 +1589,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     ),
   );
 
-  /// Compact touch transport group modelled after PiliPlus:
-  /// play/pause → time → previous → next.  Keeping this as one Row makes the
+  /// Compact touch transport group: play/pause → time → previous → next.
+  /// Keeping this as one Row makes the
   /// placement deterministic on phones, iPads and narrow Stage Manager panes.
   Widget _touchTransportGroup() => Row(
     mainAxisSize: MainAxisSize.min,
@@ -1623,8 +1622,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     ],
   );
 
-  /// PiliPlus uses 30px-high transport targets instead of Material's default
-  /// 48px IconButton footprint.  It keeps the controls visibly grouped in the
+  /// Use 30px-high transport targets instead of Material's default 48px
+  /// IconButton footprint. It keeps the controls visibly grouped in the
   /// lower-left corner without sacrificing a usable touch hit area.
   Widget _compactTouchButton({
     required IconData icon,
@@ -2341,28 +2340,10 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
     return SafeArea(
       child: SingleChildScrollView(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.info_outline,
-                    size: 18,
-                    color: cs.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '播放信息',
-                    style: TextStyle(
-                      color: cs.onSurfaceVariant,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
               for (final (label, value) in rows)
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 3),

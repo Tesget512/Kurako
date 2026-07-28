@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../build_info.dart';
+import '../widgets/window_caption.dart';
 
 /// Product and attribution information kept out of the operational settings
 /// page. The project-home row is deliberately a visible placeholder until the
@@ -10,7 +11,7 @@ class AboutPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('关于 Kurako')),
+    appBar: const SysAppBar(title: Text('关于 Kurako')),
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -59,7 +60,7 @@ class _Acknowledgements extends StatelessWidget {
       ),
       _AcknowledgementGroup(
         title: '应用与界面参考',
-        entries: ['Kazumi — 详情页布局灵感（GPL-3.0）', 'PiliPlus — 播放器交互参考（GPL-3.0）'],
+        entries: ['Kazumi — 详情页布局灵感（GPL-3.0）'],
       ),
       _AcknowledgementGroup(
         title: '播放与图像',

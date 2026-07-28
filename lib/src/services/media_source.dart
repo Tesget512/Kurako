@@ -102,19 +102,15 @@ class LocalMediaSource extends MediaSource {
   }
 }
 
-/// Subtitle files next to a local video: same directory, subtitle extension,
-/// file name starting with the video's stem — catches `video.sc.ass` /
-/// `video.tc.ass` style multi-language pairs. Shared with the SMB source's
-/// downloaded-copy path.
+/// Subtitle files next to a local video. Rust applies the same conservative
+/// title + episode recognizer used for SMB streaming and downloaded sidecars.
 Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
   const subExts = {'.ass', '.srt', '.ssa', '.sub', '.vtt'};
   final file = File(videoPath);
   final videoDir = file.parent;
   if (!await videoDir.exists()) return const [];
   final base = file.uri.pathSegments.last;
-  final dot = base.lastIndexOf('.');
-  final stem = dot > 0 ? base.substring(0, dot) : base;
-  final out = <SubtitleCandidate>[];
+  final candidates = <SubtitleCandidate>[];
   final seen = <String>{};
   final directories = [videoDir, Directory(p.join(videoDir.path, 'Subtitles'))];
   for (final dir in directories) {
@@ -125,10 +121,17 @@ Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
       final extDot = name.lastIndexOf('.');
       if (extDot < 0) continue;
       final ext = name.substring(extDot).toLowerCase();
-      if (!subExts.contains(ext) || !name.startsWith(stem)) continue;
-      out.add(SubtitleCandidate(fileName: name, uri: e.path));
+      if (!subExts.contains(ext)) continue;
+      candidates.add(SubtitleCandidate(fileName: name, uri: e.path));
     }
   }
+  final matchingNames = (await rust.matchingSubtitleFileNames(
+    videoName: base,
+    subtitleNames: candidates.map((candidate) => candidate.fileName).toList(),
+  )).toSet();
+  final out = candidates
+      .where((candidate) => matchingNames.contains(candidate.fileName))
+      .toList();
   out.sort((a, b) => a.fileName.compareTo(b.fileName));
   return out;
 }

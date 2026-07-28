@@ -3,7 +3,7 @@ use crate::models::{
     Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode, LibraryFolder,
     ScanProgress, SubtitleCandidate,
 };
-use crate::{bangumi, db, scan, sidecar, smb};
+use crate::{bangumi, db, recognize, scan, sidecar, smb};
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -395,6 +395,18 @@ pub fn smb_release(url: String) {
 pub fn smb_list_subtitles(smb_uri: String) -> Result<Vec<SubtitleCandidate>, String> {
     RT.block_on(async { smb::list_subtitles(&smb_uri).await })
         .map_err(|e| e.to_string())
+}
+
+/// Filter locally enumerated subtitle filenames through the same recognizer
+/// used by SMB streaming, download, and downloaded-sidecar cleanup.
+pub fn matching_subtitle_file_names(
+    video_name: String,
+    subtitle_names: Vec<String>,
+) -> Vec<String> {
+    subtitle_names
+        .into_iter()
+        .filter(|name| recognize::subtitle_matches_video(&video_name, name))
+        .collect()
 }
 
 /// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
@@ -1150,37 +1162,49 @@ fn apply_sidecars(source_type: &str) {
     let _ = db::delete_empty_anime();
 }
 
-/// Remove ALL manual-match configuration: the per-folder `.kurako-match.json`
-/// sidecars (local via std::fs, SMB via smb2 delete) and the app-data fallback
-/// store (which also covers SAF, whose matches only ever live there). Returns
-/// the number of physical files removed. The DB grouping isn't changed here — a
-/// subsequent rescan re-groups everything by filename as if nothing had been
-/// manually matched. Best-effort: a folder that can't be written is skipped.
+/// Remove ALL manual-match configuration and the current recognition index.
+/// Sources, downloads, blacklist, account and settings stay intact; the next
+/// scan rebuilds anime/episodes with automatic grouping and matching.
 pub fn clear_match_config() -> Result<u32, String> {
     let mut removed = 0u32;
     // Local sidecars.
-    if let Ok(parents) = db::episode_parents("local") {
-        for parent in parents {
-            let p = std::path::Path::new(&parent).join(sidecar::SIDECAR_NAME);
-            if std::fs::remove_file(&p).is_ok() {
-                removed += 1;
+    let local_parents =
+        db::episode_parents("local").map_err(|error| format!("读取本地剧集目录失败：{error}"))?;
+    for parent in local_parents {
+        let p = std::path::Path::new(&parent).join(sidecar::SIDECAR_NAME);
+        match std::fs::remove_file(&p) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("删除本地手动匹配配置失败：{error}"));
             }
         }
     }
-    // SMB sidecars (best-effort; read-only shares just report false).
-    if let Ok(parents) = db::episode_parents("smb") {
-        for parent in parents {
-            if RT
-                .block_on(async { smb::delete_sidecar(&parent).await })
-                .unwrap_or(false)
-            {
-                removed += 1;
-            }
+    // SMB sidecars. Read first so a read-only folder with no sidecar remains a
+    // normal no-op, while a transport failure or an undeletable real sidecar
+    // is surfaced instead of falsely claiming the reset succeeded.
+    let smb_parents =
+        db::episode_parents("smb").map_err(|error| format!("读取 SMB 剧集目录失败：{error}"))?;
+    for parent in smb_parents {
+        let map = RT
+            .block_on(async { smb::read_sidecar(&parent).await })
+            .map_err(|error| format!("读取 SMB 手动匹配配置失败：{error:#}"))?;
+        if map.is_empty() {
+            continue;
+        }
+        if RT
+            .block_on(async { smb::delete_sidecar(&parent).await })
+            .map_err(|error| format!("删除 SMB 手动匹配配置失败：{error:#}"))?
+        {
+            removed += 1;
         }
     }
     // App-data fallback (read-only SMB + all SAF matches live here).
-    if sidecar::remove_all_fallback() {
+    if sidecar::remove_all_fallback()
+        .map_err(|error| format!("删除软件内手动匹配配置失败：{error}"))?
+    {
         removed += 1;
     }
+    db::clear_all().map_err(|error| format!("清空当前识别结果失败：{error}"))?;
     Ok(removed)
 }

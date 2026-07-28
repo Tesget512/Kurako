@@ -25,8 +25,6 @@ Services and design references
   https://bangumi.github.io/api/
 - bangumi-proxy by Soyorin
   https://github.com/Yuri-NagaSaki/bangumi-proxy
-- PiliPlus - GPL-3.0 License; player interaction reference
-  https://github.com/bggRGjQaUbCoE/PiliPlus
 - Kazumi - GPL-3.0 License; detail-page layout reference
   https://github.com/Predidit/Kazumi
 

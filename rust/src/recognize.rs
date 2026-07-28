@@ -118,10 +118,72 @@ static RE_COPY_MARKER: Lazy<Regex> =
 // Bracketed special-content markers: BD menus, creditless OP/ED, PVs, CMs.
 static RE_SPECIAL_MARK: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"(?i)\[(menu|ncop|nced|nc|pv|cm|preview)\s*\d*\]").unwrap());
+static RE_AMBIGUOUS_EPISODE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:^|[^0-9])(?:ep(?:isode)?\s*)?\d{1,4}\s*(?:[-~～]|\.)\s*\d{1,4}(?:[^0-9]|$)")
+        .unwrap()
+});
+
+const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
+const WEAK_SUBTITLE_TITLES: &[&str] = &["ep", "episode", "video", "subtitle", "sub"];
 
 /// Parse a filename (with or without extension) using anitomy.
 pub fn parse_filename(file_name: &str) -> ParsedName {
     parse_stem(file_name)
+}
+
+/// Whether one subtitle filename belongs to one video filename. Exact stem
+/// variants win; a conservative parsed fallback accepts shorter release names
+/// only when both the normalized title and explicit episode number agree.
+pub fn subtitle_matches_video(video_name: &str, subtitle_name: &str) -> bool {
+    let Some((subtitle_stem, subtitle_ext)) = subtitle_name.rsplit_once('.') else {
+        return false;
+    };
+    if !SUBTITLE_EXTS.contains(&subtitle_ext.to_ascii_lowercase().as_str()) {
+        return false;
+    }
+
+    let video_stem = video_name
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .unwrap_or(video_name);
+    let video_lower = video_stem.to_lowercase();
+    let subtitle_lower = subtitle_stem.to_lowercase();
+    if RE_AMBIGUOUS_EPISODE.is_match(subtitle_stem)
+        && !video_stem.eq_ignore_ascii_case(subtitle_stem)
+    {
+        return false;
+    }
+    if let Some(suffix) = subtitle_lower.strip_prefix(&video_lower) {
+        if suffix.is_empty()
+            || suffix
+                .chars()
+                .next()
+                .is_some_and(|c| matches!(c, '.' | ' ' | '[' | '(' | '_' | '-'))
+        {
+            return true;
+        }
+    }
+
+    // Ranges and decimal episodes are deliberately excluded from fuzzy
+    // matching: reducing `01-12` or `01.5` to episode 1 would mis-attach it.
+    if RE_AMBIGUOUS_EPISODE.is_match(video_stem) {
+        return false;
+    }
+    let video = parse_filename(video_name);
+    let subtitle = parse_filename(subtitle_name);
+    let (Some(video_episode), Some(subtitle_episode)) = (video.episode_no, subtitle.episode_no)
+    else {
+        return false;
+    };
+    if video_episode != subtitle_episode {
+        return false;
+    }
+    let video_key = group_key(&video.title);
+    let subtitle_key = group_key(&subtitle.title);
+    video_key == subtitle_key
+        && video_key.chars().count() >= 3
+        && !video_key.chars().all(|c| c.is_ascii_digit())
+        && !WEAK_SUBTITLE_TITLES.contains(&video_key.as_str())
 }
 
 /// Parse a stem or full filename using anitomy, mapping its elements onto our
@@ -599,6 +661,29 @@ mod tests {
     fn video_ext() {
         assert!(is_video_file("a.mkv"));
         assert!(!is_video_file("a.txt"));
+    }
+
+    #[test]
+    fn subtitle_matching_accepts_short_release_name_with_same_title_and_episode() {
+        let video = "[DBD-Raws][Happy Sugar Life][01][1080P][BDRip][HEVC-10bit][FLAC].mkv";
+        assert!(subtitle_matches_video(video, "Happy Sugar Life 01.ass"));
+        assert!(subtitle_matches_video(video, "happy sugar life 01.SRT"));
+        assert!(!subtitle_matches_video(video, "Happy Sugar Life 02.ass"));
+        assert!(!subtitle_matches_video(video, "Another Show 01.ass"));
+    }
+
+    #[test]
+    fn subtitle_matching_keeps_strict_stem_boundaries() {
+        assert!(subtitle_matches_video(
+            "Episode 01.mkv",
+            "episode 01.sc.ass"
+        ));
+        assert!(!subtitle_matches_video("Episode 01.mkv", "Episode 010.ass"));
+        assert!(!subtitle_matches_video("Episode 01.mkv", "Episode 01.txt"));
+        assert!(!subtitle_matches_video(
+            "Happy Sugar Life 01.mkv",
+            "Happy Sugar Life 01-12.ass"
+        ));
     }
 
     #[test]
