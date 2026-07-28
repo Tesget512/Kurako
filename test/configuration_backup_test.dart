@@ -29,6 +29,10 @@ void main() {
       'smb_share': 'Anime',
       'smb_user': 'private-user',
       'smb_password': 'private-password',
+      'webdav_base_url': 'https://dav.example.test/anime/',
+      'webdav_user': 'dav-user',
+      'webdav_password': 'dav-password',
+      'webdav_auth_mode': 'basic',
       'download_dir': '/private/downloads',
       'external_player_path': '/private/player',
       'sub_pref_42': 7,
@@ -50,6 +54,7 @@ void main() {
       expect(settings['decode_mode'], 'sw');
       final account = root['account'] as Map<String, dynamic>;
       final smb = root['smb'] as Map<String, dynamic>;
+      final webdav = root['webdav'] as Map<String, dynamic>;
       expect(account['accessToken'], 'secret-access-token');
       expect(account['refreshToken'], 'secret-refresh-token');
       expect(account['expiresAt'], 1782604800);
@@ -57,6 +62,9 @@ void main() {
       expect(smb['share'], 'Anime');
       expect(smb['user'], 'private-user');
       expect(smb['password'], 'private-password');
+      expect(webdav['baseUrl'], 'https://dav.example.test/anime/');
+      expect(webdav['user'], 'dav-user');
+      expect(webdav['password'], 'dav-password');
       expect(settings, isNot(contains('download_dir')));
       expect(settings, isNot(contains('external_player_path')));
       expect(settings, isNot(contains('sub_pref_42')));
@@ -65,7 +73,7 @@ void main() {
     },
   );
 
-  test('validated v2 document restores settings and credentials', () async {
+  test('validated v3 document restores settings and credentials', () async {
     final source = await ConfigurationBackupDocument.exportJson();
     final document = ConfigurationBackupDocument.parse(source);
     final prefs = await SharedPreferences.getInstance();
@@ -74,6 +82,7 @@ void main() {
     await prefs.setString('decode_mode', 'auto');
     await prefs.setString('bangumi_token', 'other-token');
     await prefs.setString('smb_password', 'other-password');
+    await prefs.setString('webdav_password', 'other-dav-password');
     await document.apply();
 
     expect(prefs.getInt('library_sort'), 3);
@@ -84,6 +93,28 @@ void main() {
     expect(prefs.getString('smb_host'), '192.0.2.1');
     expect(prefs.getString('smb_share'), 'Anime');
     expect(prefs.getString('smb_password'), 'private-password');
+    expect(
+      prefs.getString('webdav_base_url'),
+      'https://dav.example.test/anime/',
+    );
+    expect(prefs.getString('webdav_password'), 'dav-password');
+  });
+
+  test('v2 document imports account and SMB but preserves WebDAV', () async {
+    final source = await ConfigurationBackupDocument.exportJson();
+    final root = jsonDecode(source) as Map<String, dynamic>;
+    root['schemaVersion'] = 2;
+    root.remove('webdav');
+    final document = ConfigurationBackupDocument.parse(jsonEncode(root));
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('webdav_password', 'keep-current-dav-password');
+
+    await document.apply();
+
+    expect(document.includesAccountAndSmb, isTrue);
+    expect(document.includesWebDav, isFalse);
+    expect(prefs.getString('smb_password'), 'private-password');
+    expect(prefs.getString('webdav_password'), 'keep-current-dav-password');
   });
 
   test('legacy v1 document preserves credentials on import', () async {
@@ -92,6 +123,7 @@ void main() {
     root['schemaVersion'] = 1;
     root.remove('account');
     root.remove('smb');
+    root.remove('webdav');
     final document = ConfigurationBackupDocument.parse(jsonEncode(root));
     final prefs = await SharedPreferences.getInstance();
 
@@ -160,6 +192,14 @@ void main() {
     (missingSmb['smb'] as Map<String, dynamic>).remove('share');
     expect(
       () => ConfigurationBackupDocument.parse(jsonEncode(missingSmb)),
+      throwsFormatException,
+    );
+
+    final invalidWebDav = jsonDecode(source) as Map<String, dynamic>;
+    (invalidWebDav['webdav'] as Map<String, dynamic>)['baseUrl'] =
+        'ftp://example.test/';
+    expect(
+      () => ConfigurationBackupDocument.parse(jsonEncode(invalidWebDav)),
       throwsFormatException,
     );
   });

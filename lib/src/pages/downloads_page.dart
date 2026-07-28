@@ -152,9 +152,9 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
           }
           final done = snapshot.data ?? const [];
           // URIs already saved to disk — don't duplicate them as "in progress".
-          final savedUris = done.map((e) => e.smbUri).toSet();
+          final savedUris = done.map((entry) => entry.smbUri).toSet();
           final active = tasks.where(
-            (t) => t.active && !savedUris.contains(t.smbUri),
+            (task) => task.active && !savedUris.contains(task.sourceUri),
           );
 
           if (done.isEmpty && active.isEmpty) {
@@ -236,7 +236,7 @@ class _ActiveTile extends ConsumerWidget {
         tooltip: '取消',
         icon: const Icon(Icons.close),
         onPressed: () =>
-            ref.read(downloadManagerProvider.notifier).cancel(task.smbUri),
+            ref.read(downloadManagerProvider.notifier).cancel(task.sourceUri),
       ),
     );
   }

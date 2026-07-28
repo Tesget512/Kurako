@@ -40,6 +40,8 @@ PODS:
     - Flutter
   - media_kit_video (0.0.1):
     - Flutter
+  - nsd_ios (0.0.1):
+    - Flutter
   - package_info_plus (0.4.5):
     - Flutter
   - rust_lib_kurako (0.0.1):
@@ -69,6 +71,7 @@ DEPENDENCIES:
   - flutter_web_auth_2 (from `.symlinks/plugins/flutter_web_auth_2/ios`)
   - media_kit_libs_ios_video (from `.symlinks/plugins/media_kit_libs_ios_video/ios`)
   - media_kit_video (from `.symlinks/plugins/media_kit_video/ios`)
+  - nsd_ios (from `.symlinks/plugins/nsd_ios/ios`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - rust_lib_kurako (from `.symlinks/plugins/rust_lib_kurako/ios`)
   - screen_brightness_ios (from `.symlinks/plugins/screen_brightness_ios/ios`)
@@ -96,6 +99,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/media_kit_libs_ios_video/ios"
   media_kit_video:
     :path: ".symlinks/plugins/media_kit_video/ios"
+  nsd_ios:
+    :path: ".symlinks/plugins/nsd_ios/ios"
   package_info_plus:
     :path: ".symlinks/plugins/package_info_plus/ios"
   rust_lib_kurako:
@@ -121,6 +126,7 @@ SPEC CHECKSUMS:
   flutter_web_auth_2: 646fc9df97a01c59e5eea99b237da2c6360f8439
   media_kit_libs_ios_video: 5a18affdb97d1f5d466dc79988b13eff6c5e2854
   media_kit_video: 1746e198cb697d1ffb734b1d05ec429d1fcd1474
+  nsd_ios: d2eedc5904efa30a0e36d42f2501a39fd7fbe73f
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   rust_lib_kurako: d80eac72434b73a5d5b25ec38497c2fc0beb56fe
   screen_brightness_ios: 212d950bb99c915eee971c884f4a6c87c92cd13d

@@ -49,6 +49,9 @@ pub enum Source {
     /// Android Storage Access Framework (content:// tree) — Rust can't write
     /// files there, so its sidecar persistence is unsupported.
     Saf,
+    /// Read-only remote sources whose match metadata always belongs in the
+    /// app-local fallback store, never beside the network file.
+    Remote,
 }
 
 pub fn source_of(locator: &str) -> Source {
@@ -56,6 +59,8 @@ pub fn source_of(locator: &str) -> Source {
         Source::Smb
     } else if locator.starts_with("content://") {
         Source::Saf
+    } else if locator.starts_with("http://") || locator.starts_with("https://") {
+        Source::Remote
     } else {
         Source::Local
     }

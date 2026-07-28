@@ -8,7 +8,8 @@ DownloadTask task(
   bool done = false,
   String? error,
 }) => DownloadTask(
-  smbUri: uri,
+  sourceUri: uri,
+  sourceType: uri.startsWith('https://') ? 'webdav' : 'smb',
   fileName: uri.split('/').last,
   bytesDone: bytesDone,
   bytesTotal: bytesTotal,
@@ -19,9 +20,9 @@ DownloadTask task(
 void main() {
   test('download fingerprint only follows active task membership', () {
     final active = task('smb://server/Anime/Episode 01.mkv');
-    expect(activeDownloadFingerprint([active]), active.smbUri);
+    expect(activeDownloadFingerprint([active]), active.sourceUri);
 
-    final progressed = task(active.smbUri, bytesDone: 50, bytesTotal: 100);
+    final progressed = task(active.sourceUri, bytesDone: 50, bytesTotal: 100);
     expect(
       activeDownloadFingerprint([progressed]),
       activeDownloadFingerprint([active]),
@@ -29,12 +30,12 @@ void main() {
 
     expect(
       activeDownloadFingerprint([
-        task(active.smbUri, bytesDone: 100, bytesTotal: 100, done: true),
+        task(active.sourceUri, bytesDone: 100, bytesTotal: 100, done: true),
       ]),
       isEmpty,
     );
     expect(
-      activeDownloadFingerprint([task(active.smbUri, error: 'failed')]),
+      activeDownloadFingerprint([task(active.sourceUri, error: 'failed')]),
       isEmpty,
     );
   });

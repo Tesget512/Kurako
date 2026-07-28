@@ -104,12 +104,56 @@ pub struct BlacklistEntry {
     pub created_at: i64,
 }
 
-/// An external subtitle file found next to a video. `uri` is what mpv should
-/// load: a local absolute path (local sources) or a loopback proxy URL (SMB).
+/// An external subtitle file found next to a video. `uri` identifies the source
+/// (a local absolute path or an `smb://` URI); it is prepared for mpv separately
+/// so every platform receives normalized UTF-8 text.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubtitleCandidate {
     pub file_name: String,
     pub uri: String,
+}
+
+/// A subtitle ready for libmpv. Text subtitles are normalized into a temporary
+/// UTF-8 file; binary/local subtitles may reuse their source; SMB binary data
+/// can still use the loopback proxy. Optional cleanup fields tell Dart what to
+/// release only after mpv unloads the track.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreparedSubtitle {
+    pub uri: String,
+    pub temporary_path: Option<String>,
+    pub proxy_url: Option<String>,
+}
+
+/// One file server announced by a bounded discovery protocol. Discovery never
+/// authenticates or changes the active media session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiscoveredServer {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub protocol: String,
+    pub discovery_source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmbShareInfo {
+    pub name: String,
+    pub comment: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteDirectory {
+    /// Share-relative path; empty means the share root.
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteEntry {
+    pub path: String,
+    pub name: String,
+    pub is_directory: bool,
+    pub size: i64,
 }
 
 /// Progress event streamed back to Dart during an SMB download.

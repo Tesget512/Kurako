@@ -1,9 +1,12 @@
 pub mod api;
 pub mod bangumi;
 pub mod db;
+pub mod discovery;
 mod frb_generated;
 pub mod models;
 pub mod recognize;
 pub mod scan;
 pub mod sidecar;
 pub mod smb;
+pub mod subtitle;
+pub mod webdav;

@@ -1,7 +1,8 @@
 use crate::frb_generated::StreamSink;
 use crate::models::{
-    Anime, BangumiSubject, BlacklistEntry, DownloadEntry, DownloadProgress, Episode, LibraryFolder,
-    ScanProgress, SubtitleCandidate,
+    Anime, BangumiSubject, BlacklistEntry, DiscoveredServer, DownloadEntry, DownloadProgress,
+    Episode, LibraryFolder, PreparedSubtitle, RemoteDirectory, RemoteEntry, ScanProgress,
+    SmbShareInfo, SubtitleCandidate,
 };
 use crate::{bangumi, db, recognize, scan, sidecar, smb};
 use flutter_rust_bridge::frb;
@@ -324,6 +325,7 @@ fn prune_prefixes_for(folder_id: i64, source_type: &str) -> Vec<String> {
             let subdir = smb_subdir_of(&folder.path);
             smb::uri_prefix(&subdir).into_iter().collect()
         }
+        "webdav" => vec![format!("{}/", folder.path.trim_end_matches('/'))],
         // saf (and any other prefix-clean source): the folder path is already a
         // prefix of every file discovered under it.
         _ => vec![folder.path],
@@ -351,6 +353,47 @@ pub fn smb_connect(
 ) -> Result<(), String> {
     RT.block_on(async { smb::connect(&host, &share, &user, &password).await })
         .map_err(|e| e.to_string())
+}
+
+/// Discover Windows file servers through bounded WS-Discovery multicast. This
+/// does not scan addresses, authenticate, or alter the active SMB session.
+pub fn discover_windows_file_servers() -> Vec<DiscoveredServer> {
+    RT.block_on(crate::discovery::discover_windows_file_servers())
+}
+
+pub fn smb_list_shares(
+    host: String,
+    user: String,
+    password: String,
+) -> Result<Vec<SmbShareInfo>, String> {
+    RT.block_on(async { smb::list_shares(&host, &user, &password).await })
+        .map_err(|error| error.to_string())
+}
+
+pub fn smb_setup_begin(
+    host: String,
+    share: String,
+    user: String,
+    password: String,
+) -> Result<String, String> {
+    RT.block_on(async { smb::setup_begin(&host, &share, &user, &password).await })
+        .map_err(|error| error.to_string())
+}
+
+pub fn smb_setup_list_directories(
+    token: String,
+    subdir: String,
+) -> Result<Vec<RemoteDirectory>, String> {
+    RT.block_on(async { smb::setup_list_directories(&token, &subdir).await })
+        .map_err(|error| error.to_string())
+}
+
+pub fn smb_setup_cancel(token: String) {
+    smb::setup_cancel(&token);
+}
+
+pub fn smb_setup_commit(token: String) -> Result<(), String> {
+    smb::setup_commit(&token).map_err(|error| error.to_string())
 }
 
 /// Restore cached SMB credentials on startup (from Dart's persisted settings)
@@ -407,6 +450,24 @@ pub fn matching_subtitle_file_names(
         .into_iter()
         .filter(|name| recognize::subtitle_matches_video(&video_name, name))
         .collect()
+}
+
+/// Normalize a local or SMB text subtitle into one strict UTF-8 cache file.
+/// Binary `.sub` files retain their existing local/proxy behavior.
+pub fn prepare_subtitle(
+    source_uri: String,
+    file_name: String,
+    cache_dir: String,
+) -> Result<PreparedSubtitle, String> {
+    RT.block_on(async { crate::subtitle::prepare(&source_uri, &file_name, &cache_dir).await })
+        .map_err(|error| error.to_string())
+}
+
+/// Release any loopback URL returned by a network subtitle backend. Calling
+/// both registries is harmless and keeps Dart independent from proxy ports.
+pub fn release_network_url(url: String) {
+    smb::unregister_playable(&url);
+    crate::webdav::unregister_playable(&url);
 }
 
 /// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
@@ -473,6 +534,146 @@ pub fn smb_cancel_download(smb_uri: String) {
     smb::cancel_download(&smb_uri);
 }
 
+// ---- WebDAV network source ----
+
+pub fn webdav_set_credentials(
+    base_url: String,
+    user: String,
+    password: String,
+    auth_mode: String,
+) -> Result<(), String> {
+    if base_url.trim().is_empty() {
+        return crate::webdav::set_creds(None).map_err(|error| error.to_string());
+    }
+    crate::webdav::set_creds(Some(crate::webdav::WebDavCreds {
+        base_url,
+        user,
+        password,
+        auth_mode,
+    }))
+    .map_err(|error| error.to_string())
+}
+
+pub fn webdav_test_connection() -> Result<Vec<RemoteEntry>, String> {
+    RT.block_on(crate::webdav::test_connection())
+        .map_err(|error| error.to_string())
+}
+
+pub fn webdav_setup_begin(
+    base_url: String,
+    user: String,
+    password: String,
+    auth_mode: String,
+) -> Result<String, String> {
+    RT.block_on(crate::webdav::setup_begin(
+        &base_url, &user, &password, &auth_mode,
+    ))
+    .map_err(|error| error.to_string())
+}
+
+pub fn webdav_setup_list_entries(
+    token: String,
+    subdir: String,
+) -> Result<Vec<RemoteEntry>, String> {
+    RT.block_on(crate::webdav::setup_list_entries(&token, &subdir))
+        .map_err(|error| error.to_string())
+}
+
+pub fn webdav_setup_cancel(token: String) {
+    crate::webdav::setup_cancel(&token);
+}
+
+pub fn webdav_setup_commit(token: String) -> Result<(), String> {
+    crate::webdav::setup_commit(&token).map_err(|error| error.to_string())
+}
+
+pub fn webdav_list_entries(subdir: String) -> Result<Vec<RemoteEntry>, String> {
+    RT.block_on(crate::webdav::list_entries(&subdir))
+        .map_err(|error| error.to_string())
+}
+
+pub fn webdav_enumerate(source_uri: String) -> Result<Vec<crate::models::ScannedFile>, String> {
+    RT.block_on(crate::webdav::enumerate_source(&source_uri))
+        .map_err(|error| error.to_string())
+}
+
+pub fn webdav_uri_for_relative(subdir: String) -> Result<String, String> {
+    crate::webdav::uri_for_relative(&subdir).map_err(|error| error.to_string())
+}
+
+pub fn webdav_playable_url(remote_uri: String) -> Result<String, String> {
+    RT.block_on(crate::webdav::register_playable(&remote_uri))
+        .map_err(|error| error.to_string())
+}
+
+pub fn webdav_release(url: String) {
+    crate::webdav::unregister_playable(&url);
+}
+
+pub fn webdav_list_subtitles(remote_uri: String) -> Result<Vec<SubtitleCandidate>, String> {
+    RT.block_on(crate::webdav::list_subtitles(&remote_uri))
+        .map_err(|error| error.to_string())
+}
+
+pub fn webdav_download(
+    sink: StreamSink<DownloadProgress>,
+    remote_uri: String,
+    dest_dir: String,
+) -> Result<String, String> {
+    *DOWNLOAD_DIRECTORY.lock().unwrap() = Some(dest_dir.clone());
+    crate::webdav::reset_download_cancellation(&remote_uri);
+    let existing = RT
+        .block_on(crate::webdav::matching_existing_download(
+            &remote_uri,
+            &dest_dir,
+        ))
+        .ok()
+        .flatten();
+    let reused_existing = existing.is_some();
+    if crate::webdav::download_was_cancelled(&remote_uri) {
+        return Err("下载已取消".to_string());
+    }
+    let local = if let Some((path, size)) = existing {
+        let _ = sink.add(DownloadProgress {
+            bytes_done: size as i64,
+            bytes_total: size as i64,
+        });
+        path
+    } else {
+        RT.block_on(crate::webdav::download(
+            &remote_uri,
+            &dest_dir,
+            |done, total| {
+                let _ = sink.add(DownloadProgress {
+                    bytes_done: done as i64,
+                    bytes_total: total as i64,
+                });
+            },
+        ))
+        .map_err(|error| error.to_string())?
+    };
+    let subtitles = RT.block_on(crate::webdav::download_subtitles(&remote_uri, &dest_dir));
+    if crate::webdav::download_was_cancelled(&remote_uri) {
+        if !reused_existing {
+            smb::remove_downloaded_subtitles(&local);
+            let _ = std::fs::remove_file(&local);
+        }
+        return Err("下载已取消".to_string());
+    }
+    if let Err(error) = subtitles {
+        eprintln!("KURAKO could not download WebDAV sidecar subtitles: {error:#}");
+    }
+    let size = std::fs::metadata(&local)
+        .map(|metadata| metadata.len() as i64)
+        .unwrap_or(0);
+    db::add_download(&remote_uri, &local, size, now_secs()).map_err(|error| error.to_string())?;
+    Ok(local)
+}
+
+pub fn webdav_cancel_download(remote_uri: String) {
+    crate::webdav::cancel_download(&remote_uri);
+}
+
 pub fn list_downloads() -> Result<Vec<DownloadEntry>, String> {
     db::list_downloads().map_err(|e| e.to_string())
 }
@@ -523,21 +724,32 @@ fn recover_exact_download(smb_uri: &str) -> Result<Option<String>, String> {
     let Some(download_dir) = configured_download_directory() else {
         return Ok(None);
     };
-    let Some(path) = smb::expected_download_path(smb_uri, &download_dir) else {
+    let expected = if smb_uri.starts_with("smb://") {
+        smb::expected_download_path(smb_uri, &download_dir)
+    } else if smb_uri.starts_with("http://") || smb_uri.starts_with("https://") {
+        crate::webdav::expected_download_path(smb_uri, &download_dir)
+    } else {
+        None
+    };
+    let Some(path) = expected else {
         return Ok(None);
     };
     let metadata = match std::fs::metadata(&path) {
         Ok(metadata) if metadata.is_file() && metadata.len() > 0 => metadata,
         _ => return Ok(None),
     };
-    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
-        return Ok(None);
+    let belongs_to_library = if smb_uri.starts_with("smb://") {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return Ok(None);
+        };
+        db::unique_smb_episode_uri(file_name)
+            .map_err(|error| error.to_string())?
+            .as_deref()
+            == Some(smb_uri)
+    } else {
+        db::episode_uri_exists("webdav", smb_uri).map_err(|error| error.to_string())?
     };
-    if db::unique_smb_episode_uri(file_name)
-        .map_err(|e| e.to_string())?
-        .as_deref()
-        != Some(smb_uri)
-    {
+    if !belongs_to_library {
         return Ok(None);
     }
     let local_path = path.to_string_lossy().to_string();
@@ -1067,7 +1279,7 @@ fn persist_match(file_path: &str, bangumi_id: i64) {
             }
         }
         // SAF content:// can't be written from Rust — always use the fallback.
-        sidecar::Source::Saf => {
+        sidecar::Source::Saf | sidecar::Source::Remote => {
             let _ = sidecar::set_fallback(file_path, bangumi_id);
         }
     }

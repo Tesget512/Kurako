@@ -317,7 +317,8 @@ final downloadDirProvider = StateNotifierProvider<_StringPrefNotifier, String>((
 /// One tracked download. Lives from the moment it starts until the user
 /// dismisses it after completion. `bytesTotal == 0` means "still connecting".
 class DownloadTask {
-  final String smbUri;
+  final String sourceUri;
+  final String sourceType;
   final String fileName;
   final int? animeId;
   final int bytesDone;
@@ -326,7 +327,8 @@ class DownloadTask {
   final bool done;
 
   const DownloadTask({
-    required this.smbUri,
+    required this.sourceUri,
+    required this.sourceType,
     required this.fileName,
     this.animeId,
     this.bytesDone = 0,
@@ -344,7 +346,8 @@ class DownloadTask {
     String? error,
     bool? done,
   }) => DownloadTask(
-    smbUri: smbUri,
+    sourceUri: sourceUri,
+    sourceType: sourceType,
     fileName: fileName,
     animeId: animeId,
     bytesDone: bytesDone ?? this.bytesDone,
@@ -363,8 +366,8 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   final Ref _ref;
   final _subs = <String, StreamSubscription<DownloadProgress>>{};
 
-  bool isDownloading(String smbUri) =>
-      state.any((t) => t.smbUri == smbUri && t.active);
+  bool isDownloading(String sourceUri) =>
+      state.any((task) => task.sourceUri == sourceUri && task.active);
 
   /// Whether an anime has any active or freshly-completed download to surface.
   bool hasFor(int animeId) => state.any((t) => t.animeId == animeId);
@@ -374,16 +377,20 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
 
   void start(Episode ep, {int? animeId}) {
     if (isDownloading(ep.filePath)) return;
+    if (ep.sourceType != 'smb' && ep.sourceType != 'webdav') return;
     final destDir = effectiveDownloadDir(_ref.read(downloadDirProvider));
     state = [
       ...state,
       DownloadTask(
-        smbUri: ep.filePath,
+        sourceUri: ep.filePath,
+        sourceType: ep.sourceType,
         fileName: ep.fileName,
         animeId: animeId,
       ),
     ];
-    final stream = rust.smbDownload(smbUri: ep.filePath, destDir: destDir);
+    final stream = ep.sourceType == 'webdav'
+        ? rust.webdavDownload(remoteUri: ep.filePath, destDir: destDir)
+        : rust.smbDownload(smbUri: ep.filePath, destDir: destDir);
     _subs[ep.filePath] = stream.listen(
       (p) => _update(
         ep.filePath,
@@ -404,13 +411,18 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
     );
   }
 
-  Future<void> cancel(String smbUri) async {
+  Future<void> cancel(String sourceUri) async {
     // Cancel the progress subscription FIRST: a late event from the old stream
     // must not resurrect the task we're about to remove, or pollute a
     // re-download of the same episode started right afterwards.
-    await _subs.remove(smbUri)?.cancel();
-    await rust.smbCancelDownload(smbUri: smbUri);
-    state = state.where((t) => t.smbUri != smbUri).toList();
+    await _subs.remove(sourceUri)?.cancel();
+    final task = state.where((task) => task.sourceUri == sourceUri).firstOrNull;
+    if (task?.sourceType == 'webdav') {
+      await rust.webdavCancelDownload(remoteUri: sourceUri);
+    } else {
+      await rust.smbCancelDownload(smbUri: sourceUri);
+    }
+    state = state.where((task) => task.sourceUri != sourceUri).toList();
   }
 
   /// Clear lingering completed/failed tasks for an anime once the user has seen
@@ -422,10 +434,10 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
     if (next.length != state.length) state = next;
   }
 
-  void _update(String smbUri, DownloadTask Function(DownloadTask) f) {
+  void _update(String sourceUri, DownloadTask Function(DownloadTask) f) {
     state = [
       for (final t in state)
-        if (t.smbUri == smbUri) f(t) else t,
+        if (t.sourceUri == sourceUri) f(t) else t,
     ];
   }
 }
@@ -444,13 +456,13 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
 /// Only active-task membership changes require a completed-download DB query.
 /// Progress ticks and later dismissal of completed/failed tasks are irrelevant.
 String activeDownloadFingerprint(List<DownloadTask> tasks) =>
-    tasks.where((task) => task.active).map((task) => task.smbUri).join('\n');
+    tasks.where((task) => task.active).map((task) => task.sourceUri).join('\n');
 
 /// The smbUri of every SMB episode with a completed local download — lets the
 /// episode list show a "downloaded" badge without an async round-trip per
 /// tile. A task entering/leaving the active set refreshes the DB result, so a
 /// just-finished download's badge appears without progress-tick query storms.
-final downloadedSmbUrisProvider = FutureProvider.autoDispose<Set<String>>((
+final downloadedRemoteUrisProvider = FutureProvider.autoDispose<Set<String>>((
   ref,
 ) async {
   ref.watch(downloadManagerProvider.select(activeDownloadFingerprint));
@@ -533,6 +545,51 @@ class SmbCredentials {
     );
   }
 }
+
+class WebDavCredentials {
+  final String baseUrl;
+  final String user;
+  final String password;
+  final String authMode;
+
+  const WebDavCredentials({
+    required this.baseUrl,
+    required this.user,
+    required this.password,
+    required this.authMode,
+  });
+
+  bool get isConfigured => baseUrl.isNotEmpty;
+
+  static Future<WebDavCredentials> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    return WebDavCredentials(
+      baseUrl: prefs.getString('webdav_base_url') ?? '',
+      user: prefs.getString('webdav_user') ?? '',
+      password: prefs.getString('webdav_password') ?? '',
+      authMode: prefs.getString('webdav_auth_mode') ?? 'basic',
+    );
+  }
+
+  Future<void> save() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('webdav_base_url', baseUrl);
+    await prefs.setString('webdav_user', user);
+    await prefs.setString('webdav_password', password);
+    await prefs.setString('webdav_auth_mode', authMode);
+  }
+
+  Future<void> pushToRust() => rust.webdavSetCredentials(
+    baseUrl: baseUrl,
+    user: user,
+    password: password,
+    authMode: authMode,
+  );
+}
+
+final webDavConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
+  return (await WebDavCredentials.load()).isConfigured;
+});
 
 // ---- Settings (player choice, OAuth token, external player) ----
 
@@ -707,6 +764,12 @@ Future<void> resetPersistedAppSettings() async {
   await rust.setBangumiToken(token: null);
   await rust.setBangumiMirror(enabled: true);
   await rust.smbSetCredentials(host: '', share: '', user: '', password: '');
+  await rust.webdavSetCredentials(
+    baseUrl: '',
+    user: '',
+    password: '',
+    authMode: 'basic',
+  );
   final downloadDir = effectiveDownloadDir('');
   if (downloadDir.isNotEmpty) {
     await rust.setDownloadDirectory(downloadDir: downloadDir);

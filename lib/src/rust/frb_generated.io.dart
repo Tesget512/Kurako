@@ -57,6 +57,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw);
 
   @protected
+  DiscoveredServer dco_decode_discovered_server(dynamic raw);
+
+  @protected
   DownloadDetail dco_decode_download_detail(dynamic raw);
 
   @protected
@@ -90,6 +93,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<BlacklistEntry> dco_decode_list_blacklist_entry(dynamic raw);
 
   @protected
+  List<DiscoveredServer> dco_decode_list_discovered_server(dynamic raw);
+
+  @protected
   List<DownloadDetail> dco_decode_list_download_detail(dynamic raw);
 
   @protected
@@ -105,7 +111,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
 
   @protected
+  List<RemoteDirectory> dco_decode_list_remote_directory(dynamic raw);
+
+  @protected
+  List<RemoteEntry> dco_decode_list_remote_entry(dynamic raw);
+
+  @protected
   List<ScannedFile> dco_decode_list_scanned_file(dynamic raw);
+
+  @protected
+  List<SmbShareInfo> dco_decode_list_smb_share_info(dynamic raw);
 
   @protected
   List<SubtitleCandidate> dco_decode_list_subtitle_candidate(dynamic raw);
@@ -126,13 +141,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw);
 
   @protected
+  PreparedSubtitle dco_decode_prepared_subtitle(dynamic raw);
+
+  @protected
+  RemoteDirectory dco_decode_remote_directory(dynamic raw);
+
+  @protected
+  RemoteEntry dco_decode_remote_entry(dynamic raw);
+
+  @protected
   ScanProgress dco_decode_scan_progress(dynamic raw);
 
   @protected
   ScannedFile dco_decode_scanned_file(dynamic raw);
 
   @protected
+  SmbShareInfo dco_decode_smb_share_info(dynamic raw);
+
+  @protected
   SubtitleCandidate dco_decode_subtitle_candidate(dynamic raw);
+
+  @protected
+  int dco_decode_u_16(dynamic raw);
 
   @protected
   int dco_decode_u_32(dynamic raw);
@@ -184,6 +214,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  DiscoveredServer sse_decode_discovered_server(SseDeserializer deserializer);
+
+  @protected
   DownloadDetail sse_decode_download_detail(SseDeserializer deserializer);
 
   @protected
@@ -221,6 +254,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<DiscoveredServer> sse_decode_list_discovered_server(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<DownloadDetail> sse_decode_list_download_detail(
     SseDeserializer deserializer,
   );
@@ -242,7 +280,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
 
   @protected
+  List<RemoteDirectory> sse_decode_list_remote_directory(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  List<RemoteEntry> sse_decode_list_remote_entry(SseDeserializer deserializer);
+
+  @protected
   List<ScannedFile> sse_decode_list_scanned_file(SseDeserializer deserializer);
+
+  @protected
+  List<SmbShareInfo> sse_decode_list_smb_share_info(
+    SseDeserializer deserializer,
+  );
 
   @protected
   List<SubtitleCandidate> sse_decode_list_subtitle_candidate(
@@ -265,13 +316,28 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer);
 
   @protected
+  PreparedSubtitle sse_decode_prepared_subtitle(SseDeserializer deserializer);
+
+  @protected
+  RemoteDirectory sse_decode_remote_directory(SseDeserializer deserializer);
+
+  @protected
+  RemoteEntry sse_decode_remote_entry(SseDeserializer deserializer);
+
+  @protected
   ScanProgress sse_decode_scan_progress(SseDeserializer deserializer);
 
   @protected
   ScannedFile sse_decode_scanned_file(SseDeserializer deserializer);
 
   @protected
+  SmbShareInfo sse_decode_smb_share_info(SseDeserializer deserializer);
+
+  @protected
   SubtitleCandidate sse_decode_subtitle_candidate(SseDeserializer deserializer);
+
+  @protected
+  int sse_decode_u_16(SseDeserializer deserializer);
 
   @protected
   int sse_decode_u_32(SseDeserializer deserializer);
@@ -340,6 +406,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_discovered_server(
+    DiscoveredServer self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_download_detail(
     DownloadDetail self,
     SseSerializer serializer,
@@ -385,6 +457,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_discovered_server(
+    List<DiscoveredServer> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_download_detail(
     List<DownloadDetail> self,
     SseSerializer serializer,
@@ -412,8 +490,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_remote_directory(
+    List<RemoteDirectory> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_remote_entry(
+    List<RemoteEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_scanned_file(
     List<ScannedFile> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_smb_share_info(
+    List<SmbShareInfo> self,
     SseSerializer serializer,
   );
 
@@ -442,16 +538,37 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_prepared_subtitle(
+    PreparedSubtitle self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_remote_directory(
+    RemoteDirectory self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_remote_entry(RemoteEntry self, SseSerializer serializer);
+
+  @protected
   void sse_encode_scan_progress(ScanProgress self, SseSerializer serializer);
 
   @protected
   void sse_encode_scanned_file(ScannedFile self, SseSerializer serializer);
 
   @protected
+  void sse_encode_smb_share_info(SmbShareInfo self, SseSerializer serializer);
+
+  @protected
   void sse_encode_subtitle_candidate(
     SubtitleCandidate self,
     SseSerializer serializer,
   );
+
+  @protected
+  void sse_encode_u_16(int self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);

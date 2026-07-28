@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:simple_pip_mode/simple_pip.dart';
 import 'package:window_manager/window_manager.dart';
@@ -128,6 +129,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   List<SubtitleCandidate> _extSubs = const [];
   // The uri of the currently-active external subtitle, if any.
   String? _activeExtSub;
+  PreparedSubtitle? _preparedExtSub;
+  Directory? _subtitleCacheDirectory;
   // The subtitle panel is an endDrawer route and may stay mounted separately
   // from this page's normal rebuilds. Drive its checkmark with a notifier that
   // is updated once an explicit media_kit selection command has completed.
@@ -262,7 +265,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     }
     if (!_isMobile) windowManager.addListener(this);
     _listen();
-    _scheduleOpen(debounceSmb: false);
+    _scheduleOpen(debounceRemote: false);
   }
 
   @override
@@ -324,12 +327,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     // EBML-header errors seen in the device log).
     final old = _handle;
     _handle = null;
-    if (old != null) {
+    if (old != null || _preparedExtSub != null) {
       try {
         await _player.stop();
       } catch (_) {}
-      await old.release();
     }
+    await _releaseActivePreparedSubtitle();
+    await old?.release();
     if (seq != _openSeq) return;
 
     for (var attempt = 1; attempt <= _maxOpenAttempts; attempt++) {
@@ -547,7 +551,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       return;
     }
     if (!mounted || seq != _openSeq) {
-      await _releaseUnusedSubtitleCandidates(subs);
       return;
     }
     if (subs.isEmpty) return;
@@ -564,36 +567,107 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         best = s;
       }
     }
-    await _loadExtSub(best);
+    await _loadExtSub(best, notifyError: false);
   }
 
-  Future<void> _releaseUnusedSubtitleCandidates(
-    List<SubtitleCandidate> candidates,
-  ) async {
-    for (final candidate in candidates) {
-      if (!candidate.uri.startsWith('http://127.0.0.1:')) continue;
+  Future<Directory> _subtitleCache() async {
+    final existing = _subtitleCacheDirectory;
+    if (existing != null) return existing;
+    final root = await getTemporaryDirectory();
+    final parent = Directory(p.join(root.path, 'kurako-subtitles'));
+    await parent.create(recursive: true);
+    unawaited(_removeStaleSubtitleCaches(parent));
+    final directory = Directory(
+      p.join(
+        parent.path,
+        '${DateTime.now().microsecondsSinceEpoch}-${identityHashCode(this)}',
+      ),
+    );
+    await directory.create(recursive: true);
+    _subtitleCacheDirectory = directory;
+    return directory;
+  }
+
+  Future<void> _removeStaleSubtitleCaches(Directory parent) async {
+    final cutoff = DateTime.now().subtract(const Duration(days: 1));
+    try {
+      await for (final entry in parent.list(followLinks: false)) {
+        if (entry is! Directory) continue;
+        final modified = await entry.stat().then((stat) => stat.modified);
+        if (modified.isBefore(cutoff)) {
+          await entry.delete(recursive: true);
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _releasePreparedSubtitle(PreparedSubtitle? prepared) async {
+    if (prepared == null) return;
+    final proxyUrl = prepared.proxyUrl;
+    if (proxyUrl != null) {
       try {
-        await rust.smbRelease(url: candidate.uri);
+        await rust.releaseNetworkUrl(url: proxyUrl);
+      } catch (_) {}
+    }
+    final temporaryPath = prepared.temporaryPath;
+    if (temporaryPath != null) {
+      try {
+        final file = File(temporaryPath);
+        if (await file.exists()) await file.delete();
       } catch (_) {}
     }
   }
 
-  Future<void> _loadExtSub(SubtitleCandidate sub) async {
+  Future<void> _releaseActivePreparedSubtitle() async {
+    final prepared = _preparedExtSub;
+    _preparedExtSub = null;
+    await _releasePreparedSubtitle(prepared);
+  }
+
+  Future<void> _loadExtSub(
+    SubtitleCandidate sub, {
+    bool notifyError = true,
+  }) async {
     final seq = _openSeq;
-    final previous = _activeExtSub;
+    PreparedSubtitle? prepared;
+    final previousSource = _activeExtSub;
+    final previousPrepared = _preparedExtSub;
     // Mark the external choice as pending before sub-add. That command itself
     // updates media_kit's track-list; without this guard the track-list listener
     // can mistake the newly-added sidecar for an embedded track and run the
     // automatic language picker against it a second time.
     _activeExtSub = sub.uri;
     try {
-      final track = SubtitleTrack.uri(sub.uri, title: sub.fileName);
+      final cache = await _subtitleCache();
+      prepared = await rust.prepareSubtitle(
+        sourceUri: sub.uri,
+        fileName: sub.fileName,
+        cacheDir: cache.path,
+      );
+      if (!mounted || seq != _openSeq) {
+        await _releasePreparedSubtitle(prepared);
+        return;
+      }
+      final track = SubtitleTrack.uri(prepared.uri, title: sub.fileName);
       await _player.setSubtitleTrack(track);
-      if (!mounted || seq != _openSeq) return;
+      if (!mounted || seq != _openSeq) {
+        await _releasePreparedSubtitle(prepared);
+        return;
+      }
+      _preparedExtSub = prepared;
       _selectedSubtitle.value = track;
-    } catch (_) {
+      if (!identical(previousPrepared, prepared)) {
+        await _releasePreparedSubtitle(previousPrepared);
+      }
+    } catch (error) {
+      await _releasePreparedSubtitle(prepared);
       if (seq == _openSeq && _activeExtSub == sub.uri) {
-        _activeExtSub = previous;
+        _activeExtSub = previousSource;
+      }
+      if (notifyError && mounted && seq == _openSeq) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('无法加载字幕：$error')));
       }
     }
   }
@@ -888,10 +962,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   bool get _hasNext => _index < widget.episodes.length - 1;
 
   /// Open the currently-selected episode. Local/SAF sources open immediately;
-  /// SMB sources debounce (same on every platform) so a burst of rapid switches
-  /// only opens the final target, avoiding the SMB connection pile-up the NAS
-  /// throttles. See [_switchDebounce].
-  void _scheduleOpen({bool debounceSmb = true}) {
+  /// Remote sources debounce so a burst of rapid switches only opens the final
+  /// target, avoiding needless connection and Range-probe pile-ups.
+  void _scheduleOpen({bool debounceRemote = true}) {
     // The old video keeps playing (and emitting events) until the new open
     // lands — SMB debounce + retries + watchdog can stretch that to seconds.
     // Clear the progress snapshot NOW, synchronously with the index change,
@@ -909,7 +982,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     final seq = ++_openSeq;
     _openGeneration.value = seq;
     final episode = _ep;
-    if (!debounceSmb || episode.sourceType != 'smb') {
+    final isRemote =
+        episode.sourceType == 'smb' || episode.sourceType == 'webdav';
+    if (!debounceRemote || !isRemote) {
       _enqueueOpen(seq, episode);
       return;
     }
@@ -1015,8 +1090,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _save();
     final handle = _handle;
     _handle = null;
+    final preparedSubtitle = _preparedExtSub;
+    _preparedExtSub = null;
     final disposePlayer = _playerLifecycle.then(
-      (_) => _disposePlayback(handle),
+      (_) => _disposePlayback(handle, preparedSubtitle),
     );
     _playerLifecycle = disposePlayer.catchError((
       Object error,
@@ -1037,12 +1114,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     super.dispose();
   }
 
-  Future<void> _disposePlayback(PlayableHandle? handle) async {
+  Future<void> _disposePlayback(
+    PlayableHandle? handle,
+    PreparedSubtitle? preparedSubtitle,
+  ) async {
     try {
       await _player.dispose();
     } catch (_) {
     } finally {
+      await _releasePreparedSubtitle(preparedSubtitle);
       await handle?.release();
+      final cache = _subtitleCacheDirectory;
+      if (cache != null) {
+        try {
+          if (await cache.exists()) await cache.delete(recursive: true);
+        } catch (_) {}
+      }
       // The serialized open pipeline has now drained, so no duration watchdog
       // can still be removing a listener from this notifier.
       _openGeneration.dispose();
@@ -1959,6 +2046,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                   await _player.setSubtitleTrack(disabled);
                   if (!mounted) return;
                   setState(() => _activeExtSub = null);
+                  await _releaseActivePreparedSubtitle();
                   _selectedSubtitle.value = disabled;
                 },
               ),
@@ -1972,6 +2060,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                     await _player.setSubtitleTrack(subtitle);
                     if (!mounted) return;
                     setState(() => _activeExtSub = null);
+                    await _releaseActivePreparedSubtitle();
                     _selectedSubtitle.value = subtitle;
                     unawaited(_rememberSub(subtitle));
                   },
@@ -1981,7 +2070,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                 for (final subtitle in _extSubs)
                   _trackTile(
                     subtitle.fileName,
-                    selectedSubtitle.uri && selectedSubtitle.id == subtitle.uri,
+                    _activeExtSub == subtitle.uri,
                     () => _loadExtSub(subtitle),
                   ),
               ],
@@ -2038,7 +2127,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     try {
       result = await FilePicker.platform.pickFiles(
         type: FileType.custom,
-        allowedExtensions: ['ass', 'srt', 'ssa', 'sub', 'vtt'],
+        allowedExtensions: [
+          'ass',
+          'srt',
+          'ssa',
+          'sub',
+          'vtt',
+          'smi',
+          'sami',
+          'lrc',
+          'mpl',
+          'mpl2',
+          'sup',
+        ],
       );
     } catch (_) {
       return;

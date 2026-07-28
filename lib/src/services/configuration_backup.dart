@@ -3,8 +3,9 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const configurationBackupKind = 'kurako.configuration';
-const configurationBackupSchemaVersion = 2;
+const configurationBackupSchemaVersion = 3;
 const _legacyConfigurationBackupSchemaVersion = 1;
+const _accountAndSmbSchemaVersion = 2;
 
 typedef _Validator = bool Function(Object value);
 
@@ -51,6 +52,13 @@ const _smbFields = <String, _SettingDefinition>{
   'password': _SettingDefinition('', _isString),
 };
 
+const _webDavFields = <String, _SettingDefinition>{
+  'baseUrl': _SettingDefinition('', _webDavUrlValidator),
+  'user': _SettingDefinition('', _isString),
+  'password': _SettingDefinition('', _isString),
+  'authMode': _SettingDefinition('basic', _webDavAuthValidator),
+};
+
 const _accountPreferenceKeys = <String, String>{
   'accessToken': 'bangumi_token',
   'refreshToken': 'bangumi_refresh_token',
@@ -64,6 +72,13 @@ const _smbPreferenceKeys = <String, String>{
   'password': 'smb_password',
 };
 
+const _webDavPreferenceKeys = <String, String>{
+  'baseUrl': 'webdav_base_url',
+  'user': 'webdav_user',
+  'password': 'webdav_password',
+  'authMode': 'webdav_auth_mode',
+};
+
 bool _librarySortValidator(Object value) => _isIntInRange(value, 0, 5);
 bool _themeSeedValidator(Object value) => _isIntInRange(value, 0, 7);
 bool _seekDurationValidator(Object value) => _isIntInRange(value, 5, 90);
@@ -73,6 +88,19 @@ bool _decodeModeValidator(Object value) =>
     _isOneOf(value, const {'auto', 'hw', 'sw'});
 bool _superResolutionValidator(Object value) =>
     _isOneOf(value, const {'off', 'anime4k-light', 'anime4k-balanced'});
+bool _webDavAuthValidator(Object value) =>
+    _isOneOf(value, const {'anonymous', 'basic'});
+bool _webDavUrlValidator(Object value) {
+  if (value is! String) return false;
+  if (value.isEmpty) return true;
+  final uri = Uri.tryParse(value);
+  return uri != null &&
+      (uri.scheme == 'http' || uri.scheme == 'https') &&
+      uri.host.isNotEmpty &&
+      uri.userInfo.isEmpty &&
+      !uri.hasQuery &&
+      !uri.hasFragment;
+}
 
 /// A validated, portable subset of Kurako's application settings plus an
 /// explicitly exported Bangumi session and SMB credentials.
@@ -85,16 +113,20 @@ class ConfigurationBackupDocument {
   final Map<String, Object> settings;
   final Map<String, Object>? account;
   final Map<String, Object>? smb;
+  final Map<String, Object>? webdav;
 
   const ConfigurationBackupDocument._({
     required this.schemaVersion,
     required this.settings,
     required this.account,
     required this.smb,
+    required this.webdav,
   });
 
   int get settingCount => settings.length;
-  bool get includesCredentials => account != null && smb != null;
+  bool get includesAccountAndSmb => account != null && smb != null;
+  bool get includesWebDav => webdav != null;
+  bool get includesCredentials => includesAccountAndSmb || includesWebDav;
 
   String get bangumiAccessToken => account?['accessToken'] as String? ?? '';
   String get bangumiRefreshToken => account?['refreshToken'] as String? ?? '';
@@ -103,6 +135,10 @@ class ConfigurationBackupDocument {
   String get smbShare => smb?['share'] as String? ?? '';
   String get smbUser => smb?['user'] as String? ?? '';
   String get smbPassword => smb?['password'] as String? ?? '';
+  String get webDavBaseUrl => webdav?['baseUrl'] as String? ?? '';
+  String get webDavUser => webdav?['user'] as String? ?? '';
+  String get webDavPassword => webdav?['password'] as String? ?? '';
+  String get webDavAuthMode => webdav?['authMode'] as String? ?? 'basic';
 
   static Future<String> exportJson({DateTime? exportedAt}) async {
     final prefs = await SharedPreferences.getInstance();
@@ -130,6 +166,12 @@ class ConfigurationBackupDocument {
       preferenceKeys: _smbPreferenceKeys,
       label: 'SMB 凭证',
     );
+    final webdav = _readSection(
+      prefs,
+      definitions: _webDavFields,
+      preferenceKeys: _webDavPreferenceKeys,
+      label: 'WebDAV 凭证',
+    );
 
     return const JsonEncoder.withIndent('  ').convert({
       'kind': configurationBackupKind,
@@ -138,6 +180,7 @@ class ConfigurationBackupDocument {
       'settings': settings,
       'account': account,
       'smb': smb,
+      'webdav': webdav,
     });
   }
 
@@ -156,6 +199,7 @@ class ConfigurationBackupDocument {
     }
     final schemaVersion = decoded['schemaVersion'];
     if (schemaVersion != _legacyConfigurationBackupSchemaVersion &&
+        schemaVersion != _accountAndSmbSchemaVersion &&
         schemaVersion != configurationBackupSchemaVersion) {
       throw const FormatException('不支持此配置文件版本');
     }
@@ -169,18 +213,25 @@ class ConfigurationBackupDocument {
       definitions: _portableSettings,
       label: '设置',
     );
-    final account = schemaVersion == configurationBackupSchemaVersion
+    final account = schemaVersion >= _accountAndSmbSchemaVersion
         ? _parseSection(
             decoded['account'],
             definitions: _accountFields,
             label: '账号',
           )
         : null;
-    final smb = schemaVersion == configurationBackupSchemaVersion
+    final smb = schemaVersion >= _accountAndSmbSchemaVersion
         ? _parseSection(
             decoded['smb'],
             definitions: _smbFields,
             label: 'SMB 凭证',
+          )
+        : null;
+    final webdav = schemaVersion == configurationBackupSchemaVersion
+        ? _parseSection(
+            decoded['webdav'],
+            definitions: _webDavFields,
+            label: 'WebDAV 凭证',
           )
         : null;
     return ConfigurationBackupDocument._(
@@ -188,6 +239,7 @@ class ConfigurationBackupDocument {
       settings: Map.unmodifiable(settings),
       account: account == null ? null : Map.unmodifiable(account),
       smb: smb == null ? null : Map.unmodifiable(smb),
+      webdav: webdav == null ? null : Map.unmodifiable(webdav),
     );
   }
 
@@ -196,12 +248,17 @@ class ConfigurationBackupDocument {
   Future<void> apply() async {
     final prefs = await SharedPreferences.getInstance();
     final values = <String, Object>{...settings};
-    if (includesCredentials) {
+    if (includesAccountAndSmb) {
       for (final entry in _accountPreferenceKeys.entries) {
         values[entry.value] = account![entry.key]!;
       }
       for (final entry in _smbPreferenceKeys.entries) {
         values[entry.value] = smb![entry.key]!;
+      }
+    }
+    if (includesWebDav) {
+      for (final entry in _webDavPreferenceKeys.entries) {
+        values[entry.value] = webdav![entry.key]!;
       }
     }
     final previous = <String, Object?>{

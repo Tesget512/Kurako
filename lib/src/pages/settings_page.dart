@@ -12,6 +12,8 @@ import '../services/media_source.dart';
 import '../state/providers.dart';
 import 'about_page.dart';
 import 'maintenance_page.dart';
+import 'smb_source_wizard.dart';
+import 'webdav_source_wizard.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -54,13 +56,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 ...folders.map(
                   (f) => ListTile(
-                    leading: Icon(
-                      f.sourceType == 'smb' ? Icons.lan_outlined : Icons.folder,
-                    ),
+                    leading: Icon(switch (f.sourceType) {
+                      'smb' => Icons.lan_outlined,
+                      'webdav' => Icons.cloud_outlined,
+                      _ => Icons.folder,
+                    }),
                     title: Text(f.path),
-                    subtitle: f.sourceType == 'smb'
-                        ? const Text('SMB 网络共享')
-                        : null,
+                    subtitle: switch (f.sourceType) {
+                      'smb' => const Text('SMB 网络共享'),
+                      'webdav' => const Text('WebDAV 网络共享'),
+                      _ => null,
+                    },
                     trailing: IconButton(
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () async {
@@ -80,6 +86,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           _addFolder();
                         } else if (v == 'smb') {
                           _addSmbFolder();
+                        } else if (v == 'webdav') {
+                          _addWebDavFolder();
                         }
                       },
                       itemBuilder: (context) => const [
@@ -88,6 +96,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                           child: ListTile(
                             leading: Icon(Icons.folder_outlined),
                             title: Text('本地文件夹'),
+                            contentPadding: EdgeInsets.zero,
+                          ),
+                        ),
+                        PopupMenuItem(
+                          value: 'webdav',
+                          child: ListTile(
+                            leading: Icon(Icons.cloud_outlined),
+                            title: Text('WebDAV 网络共享'),
                             contentPadding: EdgeInsets.zero,
                           ),
                         ),
@@ -560,29 +576,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _addSmbFolder() async {
-    final creds = await showDialog<SmbCredentials>(
-      context: context,
-      builder: (_) => const _SmbDialog(),
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const SmbSourceWizardPage()),
     );
-    if (creds == null) return;
-    if (!mounted) return;
-    // Test-connect, then persist credentials + add as a library folder.
-    _snack('正在连接 SMB…');
-    try {
-      await rust.smbConnect(
-        host: creds.host,
-        share: creds.share,
-        user: creds.user,
-        password: creds.password,
-      );
-      await creds.save();
-      final path = 'smb://${creds.host}/${creds.share}';
-      await rust.addLibraryFolder(path: path, sourceType: 'smb');
-      ref.invalidate(foldersProvider);
-      _snack('SMB 共享已添加，去番剧库扫描');
-    } catch (e) {
-      _snack('SMB 连接失败：$e');
-    }
+  }
+
+  Future<void> _addWebDavFolder() async {
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute(builder: (_) => const WebDavSourceWizardPage()),
+    );
   }
 
   Future<void> _pickPlayer() async {
@@ -599,102 +601,5 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (path == null) return;
     _playerPathController.text = path;
     ref.read(settingsProvider.notifier).setExternalPlayerPath(path);
-  }
-}
-
-/// Dialog collecting SMB share credentials. Returns [SmbCredentials] on submit.
-class _SmbDialog extends StatefulWidget {
-  const _SmbDialog();
-
-  @override
-  State<_SmbDialog> createState() => _SmbDialogState();
-}
-
-class _SmbDialogState extends State<_SmbDialog> {
-  final _host = TextEditingController();
-  final _share = TextEditingController();
-  final _user = TextEditingController();
-  final _password = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    // Prefill with the last-used credentials.
-    SmbCredentials.load().then((c) {
-      if (!mounted) return;
-      _host.text = c.host;
-      _share.text = c.share;
-      _user.text = c.user;
-      _password.text = c.password;
-    });
-  }
-
-  @override
-  void dispose() {
-    _host.dispose();
-    _share.dispose();
-    _user.dispose();
-    _password.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('添加 SMB 网络共享'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: _host,
-              decoration: const InputDecoration(
-                labelText: '主机',
-                hintText: '192.168.1.100 或 192.168.1.100:445',
-              ),
-            ),
-            TextField(
-              controller: _share,
-              decoration: const InputDecoration(
-                labelText: '共享名',
-                hintText: 'Anime',
-              ),
-            ),
-            TextField(
-              controller: _user,
-              decoration: const InputDecoration(labelText: '用户名'),
-            ),
-            TextField(
-              controller: _password,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: '密码'),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final host = _host.text.trim();
-            final share = _share.text.trim();
-            if (host.isEmpty || share.isEmpty) return;
-            Navigator.pop(
-              context,
-              SmbCredentials(
-                host: host,
-                share: share,
-                user: _user.text,
-                password: _password.text,
-              ),
-            );
-          },
-          child: const Text('连接'),
-        ),
-      ],
-    );
   }
 }

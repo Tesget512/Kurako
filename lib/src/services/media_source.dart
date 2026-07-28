@@ -43,6 +43,7 @@ abstract class MediaSource {
   static MediaSource forEpisode(Episode e) => switch (e.sourceType) {
     'saf' => SafMediaSource(),
     'smb' => SmbMediaSource(),
+    'webdav' => WebDavMediaSource(),
     _ => LocalMediaSource(),
   };
 
@@ -56,9 +57,9 @@ abstract class MediaSource {
 class PlayableHandle {
   final String uri;
   final int? fd;
-  final bool smb;
+  final bool networkProxy;
   bool _released = false;
-  PlayableHandle(this.uri, {this.fd, this.smb = false});
+  PlayableHandle(this.uri, {this.fd, this.networkProxy = false});
 
   Future<void> release() async {
     if (_released) return;
@@ -69,9 +70,9 @@ class PlayableHandle {
         await SafUtil().closeFileDescriptor(openFd);
       } catch (_) {}
     }
-    if (smb) {
+    if (networkProxy) {
       try {
-        await rust.smbRelease(url: uri);
+        await rust.releaseNetworkUrl(url: uri);
       } catch (_) {}
     }
   }
@@ -105,7 +106,6 @@ class LocalMediaSource extends MediaSource {
 /// Subtitle files next to a local video. Rust applies the same conservative
 /// title + episode recognizer used for SMB streaming and downloaded sidecars.
 Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
-  const subExts = {'.ass', '.srt', '.ssa', '.sub', '.vtt'};
   final file = File(videoPath);
   final videoDir = file.parent;
   if (!await videoDir.exists()) return const [];
@@ -118,10 +118,6 @@ Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
     await for (final e in dir.list(followLinks: false)) {
       if (e is! File || !seen.add(e.path)) continue;
       final name = e.uri.pathSegments.last;
-      final extDot = name.lastIndexOf('.');
-      if (extDot < 0) continue;
-      final ext = name.substring(extDot).toLowerCase();
-      if (!subExts.contains(ext)) continue;
       candidates.add(SubtitleCandidate(fileName: name, uri: e.path));
     }
   }
@@ -273,23 +269,24 @@ class SmbMediaSource extends MediaSource {
       // giving it to libmpv. This turns the old endless spinner into a concrete
       // SMB/proxy error and also warms the authenticated SMB session.
       try {
-        await _verifyIosLoopbackStream(url);
+        await _verifyIosLoopbackStream(url, sourceName: 'SMB');
       } catch (_) {
         // smbPlayableUrl already registered the proxy token; no PlayableHandle
         // is ever constructed on this path, so release it here or it leaks.
         try {
-          await rust.smbRelease(url: url);
+          await rust.releaseNetworkUrl(url: url);
         } catch (_) {}
         rethrow;
       }
     }
-    return PlayableHandle(url, smb: true);
+    return PlayableHandle(url, networkProxy: true);
   }
 
   @override
   Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async {
     // If we have a local copy, use the local sidecar subtitles; else ask Rust
-    // to enumerate them over SMB (registered on the proxy for mpv).
+    // to enumerate their source URIs over SMB. The player prepares every text
+    // sidecar as UTF-8 before handing it to mpv.
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
     if (local != null) {
       return listLocalSubtitles(local);
@@ -324,10 +321,57 @@ class SmbMediaSource extends MediaSource {
   }
 }
 
+class WebDavMediaSource extends MediaSource {
+  @override
+  String get sourceType => 'webdav';
+
+  @override
+  Future<String?> pickFolder() async {
+    throw UnsupportedError('WebDAV folders are added through settings');
+  }
+
+  @override
+  Future<List<ScannedFile>> enumerate(String folderUri) {
+    return rust.webdavEnumerate(sourceUri: folderUri);
+  }
+
+  @override
+  Future<PlayableHandle> resolvePlayable(Episode episode) async {
+    final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
+    if (local != null) return PlayableHandle('file:///$local');
+    final url = await rust.webdavPlayableUrl(remoteUri: episode.filePath);
+    if (Platform.isIOS) {
+      try {
+        await _verifyIosLoopbackStream(url, sourceName: 'WebDAV');
+      } catch (_) {
+        try {
+          await rust.releaseNetworkUrl(url: url);
+        } catch (_) {}
+        rethrow;
+      }
+    }
+    return PlayableHandle(url, networkProxy: true);
+  }
+
+  @override
+  Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async {
+    final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
+    if (local != null) return listLocalSubtitles(local);
+    try {
+      return await rust.webdavListSubtitles(remoteUri: episode.filePath);
+    } catch (_) {
+      return const [];
+    }
+  }
+}
+
 /// Fetch one byte through the Rust loopback proxy using URLSession's Dart
 /// equivalent. media_kit otherwise only reports a permanent "loading" state
 /// when iOS cannot connect to 127.0.0.1 or the SMB server rejects the request.
-Future<void> _verifyIosLoopbackStream(String url) async {
+Future<void> _verifyIosLoopbackStream(
+  String url, {
+  required String sourceName,
+}) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
   try {
     final request = await client.getUrl(Uri.parse(url));
@@ -346,12 +390,12 @@ Future<void> _verifyIosLoopbackStream(String url) async {
         .toList()
         .timeout(const Duration(seconds: 15));
     if (firstChunk.isEmpty || firstChunk.first.isEmpty) {
-      throw const HttpException('SMB 串流未返回视频数据');
+      throw HttpException('$sourceName 串流未返回视频数据');
     }
   } on SocketException catch (e) {
-    throw StateError('无法连接 iOS 本机 SMB 中转：${e.message}');
+    throw StateError('无法连接 iOS 本机 $sourceName 中转：${e.message}');
   } on TimeoutException {
-    throw StateError('SMB 中转连接超时，请确认 NAS 与 iPhone 在同一局域网');
+    throw StateError('$sourceName 中转连接超时，请检查服务器与网络连接');
   } finally {
     client.close(force: true);
   }

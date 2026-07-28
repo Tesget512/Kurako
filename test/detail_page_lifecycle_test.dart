@@ -40,8 +40,7 @@ void main() {
         episodesProvider.overrideWith(
           (ref, id) async => [episode(1), episode(2), episode(3)],
         ),
-        smbConfiguredProvider.overrideWith((ref) async => false),
-        downloadedSmbUrisProvider.overrideWith((ref) async {
+        downloadedRemoteUrisProvider.overrideWith((ref) async {
           final generation = ref.watch(refresh);
           await Future<void>.delayed(Duration.zero);
           return generation == 0

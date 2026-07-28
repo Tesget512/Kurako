@@ -128,6 +128,47 @@ Future<void> smbConnect({
   password: password,
 );
 
+/// Discover Windows file servers through bounded WS-Discovery multicast. This
+/// does not scan addresses, authenticate, or alter the active SMB session.
+Future<List<DiscoveredServer>> discoverWindowsFileServers() =>
+    RustLib.instance.api.crateApiDiscoverWindowsFileServers();
+
+Future<List<SmbShareInfo>> smbListShares({
+  required String host,
+  required String user,
+  required String password,
+}) => RustLib.instance.api.crateApiSmbListShares(
+  host: host,
+  user: user,
+  password: password,
+);
+
+Future<String> smbSetupBegin({
+  required String host,
+  required String share,
+  required String user,
+  required String password,
+}) => RustLib.instance.api.crateApiSmbSetupBegin(
+  host: host,
+  share: share,
+  user: user,
+  password: password,
+);
+
+Future<List<RemoteDirectory>> smbSetupListDirectories({
+  required String token,
+  required String subdir,
+}) => RustLib.instance.api.crateApiSmbSetupListDirectories(
+  token: token,
+  subdir: subdir,
+);
+
+Future<void> smbSetupCancel({required String token}) =>
+    RustLib.instance.api.crateApiSmbSetupCancel(token: token);
+
+Future<void> smbSetupCommit({required String token}) =>
+    RustLib.instance.api.crateApiSmbSetupCommit(token: token);
+
 /// Restore cached SMB credentials on startup (from Dart's persisted settings)
 /// without a network round-trip. Connection is opened lazily per operation.
 Future<void> smbSetCredentials({
@@ -170,6 +211,23 @@ Future<List<String>> matchingSubtitleFileNames({
   subtitleNames: subtitleNames,
 );
 
+/// Normalize a local or SMB text subtitle into one strict UTF-8 cache file.
+/// Binary `.sub` files retain their existing local/proxy behavior.
+Future<PreparedSubtitle> prepareSubtitle({
+  required String sourceUri,
+  required String fileName,
+  required String cacheDir,
+}) => RustLib.instance.api.crateApiPrepareSubtitle(
+  sourceUri: sourceUri,
+  fileName: fileName,
+  cacheDir: cacheDir,
+);
+
+/// Release any loopback URL returned by a network subtitle backend. Calling
+/// both registries is harmless and keeps Dart independent from proxy ports.
+Future<void> releaseNetworkUrl({required String url}) =>
+    RustLib.instance.api.crateApiReleaseNetworkUrl(url: url);
+
 /// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
 /// and shows the delta as transfer speed in the playback-info panel.
 Future<BigInt> smbProxyStats() => RustLib.instance.api.crateApiSmbProxyStats();
@@ -186,6 +244,77 @@ Stream<DownloadProgress> smbDownload({
 /// other concurrent downloads are unaffected).
 Future<void> smbCancelDownload({required String smbUri}) =>
     RustLib.instance.api.crateApiSmbCancelDownload(smbUri: smbUri);
+
+Future<void> webdavSetCredentials({
+  required String baseUrl,
+  required String user,
+  required String password,
+  required String authMode,
+}) => RustLib.instance.api.crateApiWebdavSetCredentials(
+  baseUrl: baseUrl,
+  user: user,
+  password: password,
+  authMode: authMode,
+);
+
+Future<List<RemoteEntry>> webdavTestConnection() =>
+    RustLib.instance.api.crateApiWebdavTestConnection();
+
+Future<String> webdavSetupBegin({
+  required String baseUrl,
+  required String user,
+  required String password,
+  required String authMode,
+}) => RustLib.instance.api.crateApiWebdavSetupBegin(
+  baseUrl: baseUrl,
+  user: user,
+  password: password,
+  authMode: authMode,
+);
+
+Future<List<RemoteEntry>> webdavSetupListEntries({
+  required String token,
+  required String subdir,
+}) => RustLib.instance.api.crateApiWebdavSetupListEntries(
+  token: token,
+  subdir: subdir,
+);
+
+Future<void> webdavSetupCancel({required String token}) =>
+    RustLib.instance.api.crateApiWebdavSetupCancel(token: token);
+
+Future<void> webdavSetupCommit({required String token}) =>
+    RustLib.instance.api.crateApiWebdavSetupCommit(token: token);
+
+Future<List<RemoteEntry>> webdavListEntries({required String subdir}) =>
+    RustLib.instance.api.crateApiWebdavListEntries(subdir: subdir);
+
+Future<List<ScannedFile>> webdavEnumerate({required String sourceUri}) =>
+    RustLib.instance.api.crateApiWebdavEnumerate(sourceUri: sourceUri);
+
+Future<String> webdavUriForRelative({required String subdir}) =>
+    RustLib.instance.api.crateApiWebdavUriForRelative(subdir: subdir);
+
+Future<String> webdavPlayableUrl({required String remoteUri}) =>
+    RustLib.instance.api.crateApiWebdavPlayableUrl(remoteUri: remoteUri);
+
+Future<void> webdavRelease({required String url}) =>
+    RustLib.instance.api.crateApiWebdavRelease(url: url);
+
+Future<List<SubtitleCandidate>> webdavListSubtitles({
+  required String remoteUri,
+}) => RustLib.instance.api.crateApiWebdavListSubtitles(remoteUri: remoteUri);
+
+Stream<DownloadProgress> webdavDownload({
+  required String remoteUri,
+  required String destDir,
+}) => RustLib.instance.api.crateApiWebdavDownload(
+  remoteUri: remoteUri,
+  destDir: destDir,
+);
+
+Future<void> webdavCancelDownload({required String remoteUri}) =>
+    RustLib.instance.api.crateApiWebdavCancelDownload(remoteUri: remoteUri);
 
 Future<List<DownloadEntry>> listDownloads() =>
     RustLib.instance.api.crateApiListDownloads();
@@ -301,12 +430,9 @@ Future<PlatformInt64> matchEpisode({
 Future<PlatformInt64> detachEpisode({required PlatformInt64 episodeId}) =>
     RustLib.instance.api.crateApiDetachEpisode(episodeId: episodeId);
 
-/// Remove ALL manual-match configuration: the per-folder `.kurako-match.json`
-/// sidecars (local via std::fs, SMB via smb2 delete) and the app-data fallback
-/// store (which also covers SAF, whose matches only ever live there). Returns
-/// the number of physical files removed. The DB grouping isn't changed here — a
-/// subsequent rescan re-groups everything by filename as if nothing had been
-/// manually matched. Best-effort: a folder that can't be written is skipped.
+/// Remove ALL manual-match configuration and the current recognition index.
+/// Sources, downloads, blacklist, account and settings stay intact; the next
+/// scan rebuilds anime/episodes with automatic grouping and matching.
 Future<int> clearMatchConfig() =>
     RustLib.instance.api.crateApiClearMatchConfig();
 

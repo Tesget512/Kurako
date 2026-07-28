@@ -1,6 +1,7 @@
 use anitomy::{parse, ElementKind};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use unicode_normalization::UnicodeNormalization;
 
 /// Result of parsing a filename or folder name, backed by anitomy-rs.
 #[derive(Debug, Clone)]
@@ -123,7 +124,6 @@ static RE_AMBIGUOUS_EPISODE: Lazy<Regex> = Lazy::new(|| {
         .unwrap()
 });
 
-const SUBTITLE_EXTS: &[&str] = &["ass", "srt", "ssa", "sub", "vtt"];
 const WEAK_SUBTITLE_TITLES: &[&str] = &["ep", "episode", "video", "subtitle", "sub"];
 
 /// Parse a filename (with or without extension) using anitomy.
@@ -138,18 +138,21 @@ pub fn subtitle_matches_video(video_name: &str, subtitle_name: &str) -> bool {
     let Some((subtitle_stem, subtitle_ext)) = subtitle_name.rsplit_once('.') else {
         return false;
     };
-    if !SUBTITLE_EXTS.contains(&subtitle_ext.to_ascii_lowercase().as_str()) {
+    if !crate::subtitle::is_subtitle_file_name(subtitle_name) {
         return false;
     }
 
-    let video_stem = video_name
+    let video_stem: String = video_name
         .rsplit_once('.')
         .map(|(stem, _)| stem)
-        .unwrap_or(video_name);
+        .unwrap_or(video_name)
+        .nfc()
+        .collect();
+    let subtitle_stem: String = subtitle_stem.nfc().collect();
     let video_lower = video_stem.to_lowercase();
     let subtitle_lower = subtitle_stem.to_lowercase();
-    if RE_AMBIGUOUS_EPISODE.is_match(subtitle_stem)
-        && !video_stem.eq_ignore_ascii_case(subtitle_stem)
+    if RE_AMBIGUOUS_EPISODE.is_match(&subtitle_stem)
+        && !video_stem.eq_ignore_ascii_case(&subtitle_stem)
     {
         return false;
     }
@@ -166,11 +169,12 @@ pub fn subtitle_matches_video(video_name: &str, subtitle_name: &str) -> bool {
 
     // Ranges and decimal episodes are deliberately excluded from fuzzy
     // matching: reducing `01-12` or `01.5` to episode 1 would mis-attach it.
-    if RE_AMBIGUOUS_EPISODE.is_match(video_stem) {
+    if RE_AMBIGUOUS_EPISODE.is_match(&video_stem) {
         return false;
     }
-    let video = parse_filename(video_name);
-    let subtitle = parse_filename(subtitle_name);
+    let video = parse_filename(&video_stem);
+    let normalized_subtitle_name = format!("{subtitle_stem}.{subtitle_ext}");
+    let subtitle = parse_filename(&normalized_subtitle_name);
     let (Some(video_episode), Some(subtitle_episode)) = (video.episode_no, subtitle.episode_no)
     else {
         return false;

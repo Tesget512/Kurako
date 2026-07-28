@@ -81,6 +81,7 @@ Future<void> main() async {
   // Restore SMB credentials so network-share folders work without re-entering
   // the password (connection is opened lazily per operation).
   (await SmbCredentials.load()).pushToRust();
+  await (await WebDavCredentials.load()).pushToRust();
 
   // Route cover-image downloads through the same system proxy the Rust HTTP
   // client uses (Bangumi's CDN is DNS-poisoned in mainland China).

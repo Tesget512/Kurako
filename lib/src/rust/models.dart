@@ -222,6 +222,43 @@ class BlacklistEntry {
           createdAt == other.createdAt;
 }
 
+/// One file server announced by a bounded discovery protocol. Discovery never
+/// authenticates or changes the active media session.
+class DiscoveredServer {
+  final String name;
+  final String host;
+  final int port;
+  final String protocol;
+  final String discoverySource;
+
+  const DiscoveredServer({
+    required this.name,
+    required this.host,
+    required this.port,
+    required this.protocol,
+    required this.discoverySource,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      host.hashCode ^
+      port.hashCode ^
+      protocol.hashCode ^
+      discoverySource.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DiscoveredServer &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          host == other.host &&
+          port == other.port &&
+          protocol == other.protocol &&
+          discoverySource == other.discoverySource;
+}
+
 /// A download joined with its live library metadata or its retained match
 /// snapshot when the library entry has since been removed.
 class DownloadDetail {
@@ -440,6 +477,81 @@ class LibraryFolder {
           sourceType == other.sourceType;
 }
 
+/// A subtitle ready for libmpv. Text subtitles are normalized into a temporary
+/// UTF-8 file; binary/local subtitles may reuse their source; SMB binary data
+/// can still use the loopback proxy. Optional cleanup fields tell Dart what to
+/// release only after mpv unloads the track.
+class PreparedSubtitle {
+  final String uri;
+  final String? temporaryPath;
+  final String? proxyUrl;
+
+  const PreparedSubtitle({
+    required this.uri,
+    this.temporaryPath,
+    this.proxyUrl,
+  });
+
+  @override
+  int get hashCode => uri.hashCode ^ temporaryPath.hashCode ^ proxyUrl.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PreparedSubtitle &&
+          runtimeType == other.runtimeType &&
+          uri == other.uri &&
+          temporaryPath == other.temporaryPath &&
+          proxyUrl == other.proxyUrl;
+}
+
+class RemoteDirectory {
+  /// Share-relative path; empty means the share root.
+  final String path;
+  final String name;
+
+  const RemoteDirectory({required this.path, required this.name});
+
+  @override
+  int get hashCode => path.hashCode ^ name.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RemoteDirectory &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          name == other.name;
+}
+
+class RemoteEntry {
+  final String path;
+  final String name;
+  final bool isDirectory;
+  final PlatformInt64 size;
+
+  const RemoteEntry({
+    required this.path,
+    required this.name,
+    required this.isDirectory,
+    required this.size,
+  });
+
+  @override
+  int get hashCode =>
+      path.hashCode ^ name.hashCode ^ isDirectory.hashCode ^ size.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RemoteEntry &&
+          runtimeType == other.runtimeType &&
+          path == other.path &&
+          name == other.name &&
+          isDirectory == other.isDirectory &&
+          size == other.size;
+}
+
 /// Progress event streamed back to Dart during a scan.
 class ScanProgress {
   /// "scanning" | "matching" | "done" | "error"
@@ -500,8 +612,27 @@ class ScannedFile {
           relativeParent == other.relativeParent;
 }
 
-/// An external subtitle file found next to a video. `uri` is what mpv should
-/// load: a local absolute path (local sources) or a loopback proxy URL (SMB).
+class SmbShareInfo {
+  final String name;
+  final String comment;
+
+  const SmbShareInfo({required this.name, required this.comment});
+
+  @override
+  int get hashCode => name.hashCode ^ comment.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmbShareInfo &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          comment == other.comment;
+}
+
+/// An external subtitle file found next to a video. `uri` identifies the source
+/// (a local absolute path or an `smb://` URI); it is prepared for mpv separately
+/// so every platform receives normalized UTF-8 text.
 class SubtitleCandidate {
   final String fileName;
   final String uri;

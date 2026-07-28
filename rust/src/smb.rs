@@ -7,7 +7,7 @@
 //! through a local HTTP proxy (see the `proxy` section) because libmpv's bundled
 //! FFmpeg usually lacks the `smb://` protocol.
 
-use crate::models::ScannedFile;
+use crate::models::{RemoteDirectory, ScannedFile, SmbShareInfo};
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -100,6 +100,19 @@ static SESSION: Mutex<Option<std::sync::Arc<SmbSession>>> = Mutex::new(None);
 /// Serializes session (re)establishment so concurrent first operations pay for
 /// one handshake rather than racing to create several Windows SMB sessions.
 static SESSION_INIT: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+
+#[derive(Clone)]
+struct SetupSession {
+    creds: SmbCreds,
+    session: std::sync::Arc<SmbSession>,
+}
+
+/// Setup/browser sessions are intentionally separate from the active playback
+/// session. Looking at a discovered server or cancelling the wizard must never
+/// replace credentials underneath an ongoing scan or video.
+static SETUP_SESSIONS: Lazy<Mutex<HashMap<String, SetupSession>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static NEXT_SETUP_ID: AtomicU64 = AtomicU64::new(1);
 
 fn cache_session(c: SmbCreds, client: smb2::SmbClient, tree: smb2::Tree) {
     *CREDS.lock().unwrap() = Some(c);
@@ -197,6 +210,119 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("smb connect failed")))
+}
+
+/// List disk shares through a short-lived IPC$ connection. NAS devices may
+/// disable srvsvc; callers must retain a manual share-name fallback.
+pub async fn list_shares(host: &str, user: &str, password: &str) -> Result<Vec<SmbShareInfo>> {
+    let addr = normalize_addr(host);
+    let mut client = tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&addr, user, password))
+        .await
+        .context("smb connect timed out")?
+        .context("smb connect")?;
+    let shares = tokio::time::timeout(SETUP_TIMEOUT, client.list_shares())
+        .await
+        .context("smb share listing timed out")?
+        .context("smb share listing")?;
+    let mut shares: Vec<_> = shares
+        .into_iter()
+        .map(|share| SmbShareInfo {
+            name: share.name,
+            comment: share.comment,
+        })
+        .collect();
+    shares.sort_by_key(|share| share.name.to_lowercase());
+    Ok(shares)
+}
+
+/// Open one isolated share browser and return an opaque token. The connection
+/// is only promoted to the active SMB session after the user confirms folders.
+pub async fn setup_begin(host: &str, share: &str, user: &str, password: &str) -> Result<String> {
+    let creds = SmbCreds {
+        addr: normalize_addr(host),
+        share: share.trim().trim_matches('/').to_string(),
+        user: user.to_string(),
+        password: password.to_string(),
+    };
+    if creds.share.is_empty() {
+        anyhow::bail!("SMB share name is empty");
+    }
+    let (mut client, mut tree) = open(&creds).await?;
+    tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(&mut tree, ""))
+        .await
+        .context("smb root listing timed out")?
+        .context("smb root listing")?;
+    let token = format!(
+        "setup-{}-{}",
+        std::process::id(),
+        NEXT_SETUP_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let setup = SetupSession {
+        creds,
+        session: std::sync::Arc::new(SmbSession::new(client, tree)),
+    };
+    let mut sessions = SETUP_SESSIONS.lock().unwrap();
+    // A user can only have one visible wizard. Clear abandoned setup sessions
+    // defensively so repeated opens never accumulate SMB server sessions.
+    sessions.clear();
+    sessions.insert(token.clone(), setup);
+    Ok(token)
+}
+
+pub async fn setup_list_directories(token: &str, subdir: &str) -> Result<Vec<RemoteDirectory>> {
+    let setup = SETUP_SESSIONS
+        .lock()
+        .unwrap()
+        .get(token)
+        .cloned()
+        .context("SMB setup session has expired")?;
+    let path = subdir.trim_matches('/').to_string();
+    let mut guard = tokio::time::timeout(SETUP_TIMEOUT, setup.session.inner.lock())
+        .await
+        .context("smb setup session remained busy for too long")?;
+    let entries = {
+        let SmbSessionInner { client, tree } = &mut *guard;
+        tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(tree, &path))
+            .await
+            .context("smb directory listing timed out")?
+            .context("smb directory listing")?
+    };
+    drop(guard);
+    setup.session.touch();
+    let mut directories: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| entry.is_directory && entry.name != "." && entry.name != "..")
+        .map(|entry| RemoteDirectory {
+            path: if path.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{path}/{}", entry.name)
+            },
+            name: entry.name,
+        })
+        .collect();
+    directories.sort_by_key(|directory| directory.name.to_lowercase());
+    Ok(directories)
+}
+
+pub fn setup_cancel(token: &str) {
+    SETUP_SESSIONS.lock().unwrap().remove(token);
+}
+
+/// Promote the already-validated setup connection atomically. Refuse to swap
+/// the active share while a proxy stream or download is using it.
+pub fn setup_commit(token: &str) -> Result<()> {
+    if !ACTIVE_STREAMS.lock().unwrap().is_empty() || SMB_DL_CONN.available_permits() == 0 {
+        anyhow::bail!("SMB 正在播放或下载，请结束后再更换网络共享");
+    }
+    let setup = SETUP_SESSIONS
+        .lock()
+        .unwrap()
+        .remove(token)
+        .context("SMB setup session has expired")?;
+    *CREDS.lock().unwrap() = Some(setup.creds);
+    *SESSION.lock().unwrap() = Some(setup.session);
+    Ok(())
 }
 
 /// Recursively enumerate video files under `subdir` (relative to the share
@@ -361,33 +487,54 @@ async fn find_subtitle_files(smb_uri: &str) -> Result<Vec<SmbSubtitleFile>> {
     Ok(out)
 }
 
-/// List external subtitle files sitting next to an SMB video: same directory,
-/// subtitle extension, and file name starting with the video's stem (catches
-/// `video.sc.ass` / `video.tc.ass` style multi-language pairs). Each hit is
-/// registered on the proxy so mpv can load it over loopback HTTP.
+/// List external subtitle files sitting next to an SMB video. Return their real
+/// SMB URI without allocating proxy tokens; the common subtitle preparation
+/// layer reads small files once and normalizes text to UTF-8 before mpv sees it.
 pub async fn list_subtitles(smb_uri: &str) -> Result<Vec<crate::models::SubtitleCandidate>> {
-    let video_path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
     let files = find_subtitle_files(smb_uri).await?;
-    let mut out = Vec::with_capacity(files.len());
-    for file in files {
-        let url = register_playable(&file.smb_uri).await?;
-        // Associate subtitle tokens with their video path. A superseded open
-        // may release late, after the next episode has already listed its own
-        // subtitles; a process-wide flat list would delete those new tokens.
-        if let Some(token) = url.rsplit('/').next() {
-            SUBTITLE_TOKENS
-                .lock()
-                .unwrap()
-                .entry(video_path.clone())
-                .or_default()
-                .push(token.to_string());
-        }
-        out.push(crate::models::SubtitleCandidate {
+    Ok(files
+        .into_iter()
+        .map(|file| crate::models::SubtitleCandidate {
             file_name: file.file_name,
-            uri: url,
-        });
+            uri: file.smb_uri,
+        })
+        .collect())
+}
+
+/// Read a small SMB file completely with an explicit size cap. Subtitles and
+/// sidecars use this path instead of the range proxy so malformed encodings are
+/// decoded once rather than repeatedly during libmpv probes.
+pub async fn read_file_limited(smb_uri: &str, limit: usize) -> Result<Vec<u8>> {
+    let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
+    let c = creds().context("smb not connected")?;
+    let (reader, _) = open_session_reader(&c, &path).await?;
+    let size = reader.size();
+    if size > limit as u64 {
+        let _ = reader.close().await;
+        anyhow::bail!("remote file exceeds {} bytes", limit);
     }
-    Ok(out)
+    let result = async {
+        let mut out = Vec::with_capacity(size as usize);
+        let mut offset = 0u64;
+        while offset < size {
+            let want = (size - offset).min(64 * 1024);
+            let data = tokio::time::timeout(SETUP_TIMEOUT, reader.read_at(offset, want))
+                .await
+                .context("smb subtitle read timed out")??;
+            if data.is_empty() {
+                break;
+            }
+            offset += data.len() as u64;
+            out.extend_from_slice(&data);
+        }
+        if offset != size {
+            anyhow::bail!("incomplete smb read ({offset}/{size} bytes)");
+        }
+        Ok(out)
+    }
+    .await;
+    let _ = reader.close().await;
+    result
 }
 
 /// Read the `.kurako-match.json` sidecar in the SMB folder identified by
@@ -1089,7 +1236,7 @@ async fn write_http_error(stream: &mut TcpStream, status: &str, detail: &str) {
 
 /// A conservative content type lets iOS' URL loader identify MP4/MOV streams
 /// before handing them to libmpv. Unknown formats remain generic video.
-fn mime_for_path(path: &str) -> &'static str {
+pub(crate) fn mime_for_path(path: &str) -> &'static str {
     match path
         .rsplit_once('.')
         .map(|(_, ext)| ext.to_ascii_lowercase())
@@ -1100,6 +1247,11 @@ fn mime_for_path(path: &str) -> &'static str {
         Some(ext) if ext == "webm" => "video/webm",
         Some(ext) if ext == "avi" => "video/x-msvideo",
         Some(ext) if ext == "ts" || ext == "m2ts" => "video/mp2t",
+        Some(ext) if ext == "srt" => "application/x-subrip; charset=utf-8",
+        Some(ext) if ext == "ass" || ext == "ssa" => "text/x-ssa; charset=utf-8",
+        Some(ext) if ext == "vtt" => "text/vtt; charset=utf-8",
+        Some(ext) if ext == "smi" || ext == "sami" => "application/x-sami; charset=utf-8",
+        Some(ext) if ext == "lrc" || ext == "mpl" || ext == "mpl2" => "text/plain; charset=utf-8",
         _ => "video/*",
     }
 }

@@ -30,6 +30,11 @@ import 'ios_platform.dart';
 ///   http:// URL (no universal UNC equivalent, unconfirmed whether their common
 ///   players accept smb:// via ACTION_VIEW-equivalent — untested).
 Future<String> externalPlayerLocator(Episode ep) async {
+  if (ep.sourceType == 'webdav') {
+    final local = await rust.downloadedLocalPath(smbUri: ep.filePath);
+    if (local != null) return local;
+    throw Exception('WebDAV 外置播放需要先下载到本地；下载完成后再点外置播放');
+  }
   if (ep.sourceType != 'smb') return ep.filePath;
   final local = await rust.downloadedLocalPath(smbUri: ep.filePath);
   if (local != null) return local;
@@ -175,7 +180,7 @@ Future<void> launchExternalPlayer(String playerPath, String locator) async {
   // just-registered proxy token first: this error path is the only holder.
   if (locator.startsWith('http')) {
     try {
-      await rust.smbRelease(url: locator);
+      await rust.releaseNetworkUrl(url: locator);
     } catch (_) {}
     throw Exception('未配置外置播放器。请在 设置 → 播放器 中选择播放器程序（SMB 流播放需要）');
   }

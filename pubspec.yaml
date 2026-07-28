@@ -79,6 +79,10 @@ dependencies:
   # Network cover images
   cached_network_image: ^3.4.1
 
+  # Cross-platform DNS-SD / Bonjour discovery. Platform plugins only expose
+  # the OS multicast service; server selection and SMB sessions stay in Dart/Rust.
+  nsd: ^5.0.1
+
   # Local settings persistence
   shared_preferences: ^2.3.4
 
@@ -117,6 +121,7 @@ flutter:
   # (libass on Android loads the .ttf file by asset path — see player_page).
   assets:
     - assets/fonts/LXGWWenKaiGBScreen.ttf
+    - assets/images/kurako_icon_temporary.png
 
   fonts:
     - family: LXGWWenKaiGBScreen

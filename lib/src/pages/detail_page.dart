@@ -40,7 +40,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     // Riverpod 2.6.1 closes implicit watches after StatefulElement.unmount.
     // Own this subscription so dispose can close it before the defunct window.
     _downloadedUrisSubscription = ref.listenManual<AsyncValue<Set<String>>>(
-      downloadedSmbUrisProvider,
+      downloadedRemoteUrisProvider,
       (_, next) {
         final uris = next.valueOrNull;
         if (uris == null || !mounted) return;
@@ -59,8 +59,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   void _onScroll() {
     // Reveal the toolbar title once the hero has largely scrolled away.
-    final collapsed = _scrollController.hasClients &&
-        _scrollController.offset > 160;
+    final collapsed =
+        _scrollController.hasClients && _scrollController.offset > 160;
     if (collapsed != _collapsed) setState(() => _collapsed = collapsed);
   }
 
@@ -74,8 +74,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         data: (episodes) => episodes.isEmpty
             ? null
             : FloatingActionButton.extended(
-                onPressed: () =>
-                    _play(context, ref, _resumeEpisode(episodes)),
+                onPressed: () => _play(context, ref, _resumeEpisode(episodes)),
                 icon: const Icon(Icons.play_arrow),
                 label: Text(_hasProgress(episodes) ? '继续观看' : '开始观看'),
               ),
@@ -98,7 +97,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                   SliverToBoxAdapter(
                     child: CoverHeaderHero(
                       anime: anime,
-                      topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
+                      topInset:
+                          MediaQuery.paddingOf(context).top + kToolbarHeight,
                     ),
                   ),
                   SliverToBoxAdapter(
@@ -118,8 +118,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                         const Divider(height: 16),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                          child: Text('剧集',
-                              style: Theme.of(context).textTheme.titleMedium),
+                          child: Text(
+                            '剧集',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
                         ),
                       ],
                     ),
@@ -232,9 +234,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
             // old id is now gone, which used to strand the page on the bare
             // "未找到" screen. Replace this route with the surviving entry.
             Navigator.of(context).pushReplacement(
-              MaterialPageRoute(
-                builder: (_) => DetailPage(animeId: resultId),
-              ),
+              MaterialPageRoute(builder: (_) => DetailPage(animeId: resultId)),
             );
           }
         },
@@ -269,15 +269,15 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       ref.invalidate(episodesProvider(widget.animeId));
       ref.invalidate(animeListProvider);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('元数据已刷新')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('元数据已刷新')));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('刷新失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('刷新失败: $e')));
       }
     } finally {
       if (mounted) setState(() => _refreshing = false);
@@ -291,9 +291,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       ref.invalidate(animeListProvider);
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('更新收藏状态失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('更新收藏状态失败: $e')));
       }
     }
   }
@@ -315,17 +315,21 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('取消收藏失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('取消收藏失败: $e')));
       }
     }
   }
 
   /// [forceExternal]: null = follow the setting; true/false = user picked a
   /// player explicitly from the episode context menu.
-  Future<void> _play(BuildContext context, WidgetRef ref, Episode ep,
-      {bool? forceExternal}) async {
+  Future<void> _play(
+    BuildContext context,
+    WidgetRef ref,
+    Episode ep, {
+    bool? forceExternal,
+  }) async {
     // Ensure persisted settings are loaded before choosing a player — on the
     // first play right after launch the async load may not have finished, which
     // used to fall back to the built-in player on the first tap.
@@ -340,9 +344,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         await launchExternalPlayer(settings.externalPlayerPath, locator);
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('无法启动外部播放器: $e')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('无法启动外部播放器: $e')));
         }
       }
       return;
@@ -350,8 +354,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     if (!context.mounted) return;
     // Build the playlist in the same order the list shows, so 上/下集 and
     // autoplay follow what the user sees.
-    final episodes = ref.read(episodesProvider(widget.animeId)).valueOrNull ??
-        [ep];
+    final episodes =
+        ref.read(episodesProvider(widget.animeId)).valueOrNull ?? [ep];
     final playlist = orderedPlaylist(episodes);
     var index = playlist.indexWhere((e) => e.id == ep.id);
     if (index < 0) index = 0;
@@ -369,9 +373,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     ref
         .read(downloadManagerProvider.notifier)
         .start(ep, animeId: widget.animeId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已开始后台下载，可在右上角图标查看进度')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已开始后台下载，可在右上角图标查看进度')));
   }
 
   /// The episode the play button should resume: an in-progress one if any,
@@ -571,7 +575,12 @@ class _MarqueeTextState extends State<_MarqueeText>
             maxWidth: double.infinity,
             child: AnimatedBuilder(
               animation: _controller,
-              child: Text(widget.text, maxLines: 1, softWrap: false, style: style),
+              child: Text(
+                widget.text,
+                maxLines: 1,
+                softWrap: false,
+                style: style,
+              ),
               builder: (context, child) {
                 return Transform.translate(
                   offset: Offset(-overflow * _controller.value, 0),
@@ -712,15 +721,16 @@ class _EpisodeList extends StatelessWidget {
     final sources = bySource.keys.toList()..sort();
 
     Widget tile(Episode e) => _EpisodeTile(
-          episode: e,
-          isDownloaded:
-              e.sourceType == 'smb' && downloadedUris.contains(e.filePath),
-          onPlay: () => onPlay(e),
-          onPlayWith: (external) => onPlayWith(e, external),
-          onDownload: () => onDownload(e),
-          onBlocked: onBlocked,
-          onRematched: onRematched,
-        );
+      episode: e,
+      isDownloaded:
+          (e.sourceType == 'smb' || e.sourceType == 'webdav') &&
+          downloadedUris.contains(e.filePath),
+      onPlay: () => onPlay(e),
+      onPlayWith: (external) => onPlayWith(e, external),
+      onDownload: () => onDownload(e),
+      onBlocked: onBlocked,
+      onRematched: onRematched,
+    );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -771,12 +781,16 @@ class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
   final bool isDownloaded;
   final VoidCallback onPlay;
+
   /// Play with an explicitly chosen player (true = external).
   final void Function(bool external) onPlayWith;
+
   /// Download this SMB episode to local storage.
   final VoidCallback onDownload;
+
   /// Invalidate the parent's episode list after this file is blocked.
   final VoidCallback onBlocked;
+
   /// Called after a single-file manual match splits this episode into another
   /// entry (or detaches it to 未分类); the arg is that entry's anime id so the
   /// page can refresh and navigate to it.
@@ -804,8 +818,9 @@ class _EpisodeTile extends ConsumerWidget {
     return GestureDetector(
       onSecondaryTapDown: (d) => _showMenu(context, ref, d.globalPosition),
       child: ListTile(
-        leading:
-            CircleAvatar(child: Text(episode.episodeNo?.toString() ?? '?')),
+        leading: CircleAvatar(
+          child: Text(episode.episodeNo?.toString() ?? '?'),
+        ),
         title: Text(
           episode.fileName,
           maxLines: 1,
@@ -824,8 +839,10 @@ class _EpisodeTile extends ConsumerWidget {
             if (isDownloaded)
               Tooltip(
                 message: '已下载到本地',
-                child: Icon(Icons.download_done,
-                    color: theme.colorScheme.outline),
+                child: Icon(
+                  Icons.download_done,
+                  color: theme.colorScheme.outline,
+                ),
               ),
             if (episode.watched)
               Icon(Icons.check_circle, color: theme.colorScheme.primary),
@@ -847,13 +864,16 @@ class _EpisodeTile extends ConsumerWidget {
   }
 
   Future<void> _showMenu(
-      BuildContext context, WidgetRef ref, Offset position) async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox;
-    final isSmb = episode.sourceType == 'smb';
+    BuildContext context,
+    WidgetRef ref,
+    Offset position,
+  ) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final isRemote =
+        episode.sourceType == 'smb' || episode.sourceType == 'webdav';
     // Whether a local copy exists decides download vs delete-copy entries.
     String? localCopy;
-    if (isSmb) {
+    if (isRemote) {
       try {
         localCopy = await rust.downloadedLocalPath(smbUri: episode.filePath);
       } catch (_) {}
@@ -901,7 +921,8 @@ class _EpisodeTile extends ConsumerWidget {
         // generic chooser for it just leads to the same empty "没有应用可执行
         // 此操作" dead end. "用外部播放器播放" below still attempts it and now
         // gives a clear message instead.
-        if ((isPlainLocal || (isSmb && localCopy != null)) && Platform.isAndroid)
+        if ((isPlainLocal || (isRemote && localCopy != null)) &&
+            Platform.isAndroid)
           const PopupMenuItem(
             value: 'choose_app',
             child: ListTile(
@@ -910,7 +931,7 @@ class _EpisodeTile extends ConsumerWidget {
               title: Text('选择打开方式'),
             ),
           ),
-        if (isSmb && localCopy == null)
+        if (isRemote && localCopy == null)
           const PopupMenuItem(
             value: 'download',
             child: ListTile(
@@ -919,7 +940,7 @@ class _EpisodeTile extends ConsumerWidget {
               title: Text('下载到本地'),
             ),
           ),
-        if (isSmb && localCopy != null)
+        if (isRemote && localCopy != null)
           const PopupMenuItem(
             value: 'delete_copy',
             child: ListTile(
@@ -1009,9 +1030,9 @@ class _EpisodeTile extends ConsumerWidget {
       onRematched(miscId.toInt());
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('移出失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('移出失败: $e')));
       }
     }
   }
@@ -1025,15 +1046,15 @@ class _EpisodeTile extends ConsumerWidget {
         }
       }
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已删除本地副本，播放将恢复走网络')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已删除本地副本，播放将恢复走网络')));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('删除失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
       }
     }
   }
@@ -1051,8 +1072,8 @@ class _EpisodeTile extends ConsumerWidget {
 }
 
 /// AppBar badge showing this anime's download activity: a spinning ring with a
-/// count while downloading, a check when finished. Only rendered when an SMB
-/// source is configured and there's at least one tracked task. Tapping opens a
+/// count while downloading, a check when finished. Rendered when there is at
+/// least one tracked task. Tapping opens a
 /// sheet listing the anime's downloads with live progress + cancel.
 class _DownloadBadge extends ConsumerWidget {
   final int animeId;
@@ -1060,8 +1081,6 @@ class _DownloadBadge extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final smbOk = ref.watch(smbConfiguredProvider).value ?? false;
-    if (!smbOk) return const SizedBox.shrink();
     final tasks = ref
         .watch(downloadManagerProvider)
         .where((t) => t.animeId == animeId)
@@ -1089,8 +1108,10 @@ class _DownloadBadge extends ConsumerWidget {
                     value: active.length == 1 ? active.first.progress : null,
                   ),
                   if (active.length > 1)
-                    Text('${active.length}',
-                        style: Theme.of(context).textTheme.labelSmall),
+                    Text(
+                      '${active.length}',
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
                 ],
               ),
       ),
@@ -1140,18 +1161,18 @@ class _DownloadTile extends ConsumerWidget {
     final subtitle = task.error != null
         ? Text('下载失败: ${task.error}', style: TextStyle(color: cs.error))
         : task.done
-            ? const Text('已完成，播放将优先使用本地副本')
-            : Padding(
-                padding: const EdgeInsets.only(top: 6),
-                child: LinearProgressIndicator(value: task.progress),
-              );
+        ? const Text('已完成，播放将优先使用本地副本')
+        : Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: LinearProgressIndicator(value: task.progress),
+          );
     return ListTile(
       leading: Icon(
         task.error != null
             ? Icons.error_outline
             : task.done
-                ? Icons.download_done
-                : Icons.downloading,
+            ? Icons.download_done
+            : Icons.downloading,
         color: task.error != null ? cs.error : cs.primary,
       ),
       title: Text(task.fileName, maxLines: 2, overflow: TextOverflow.ellipsis),
@@ -1162,7 +1183,7 @@ class _DownloadTile extends ConsumerWidget {
               icon: const Icon(Icons.close),
               onPressed: () => ref
                   .read(downloadManagerProvider.notifier)
-                  .cancel(task.smbUri),
+                  .cancel(task.sourceUri),
             )
           : null,
     );

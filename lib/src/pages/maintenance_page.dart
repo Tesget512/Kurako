@@ -48,7 +48,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.download_outlined),
           title: const Text('下载管理'),
-          subtitle: const Text('播放与管理已下载到本地的 SMB 视频'),
+          subtitle: const Text('播放与管理已下载到本地的网络视频'),
           trailing: const Icon(Icons.chevron_right),
           onTap: _maintenanceBusy
               ? null
@@ -90,7 +90,9 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
                 )
               : const Icon(Icons.upload_file_outlined),
           title: const Text('导出配置'),
-          subtitle: const Text('导出设置、Bangumi 账号与 SMB 凭证；不包含下载、媒体来源和本机路径'),
+          subtitle: const Text(
+            '导出设置、Bangumi 账号、SMB 与 WebDAV 凭证；不包含下载、媒体来源和本机路径',
+          ),
           onTap: _maintenanceBusy ? null : _exportConfiguration,
         ),
         ListTile(
@@ -191,7 +193,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('导出包含凭证的配置'),
         content: const Text(
-          '配置文件会以明文包含 Bangumi 登录令牌和 SMB 用户名、密码。'
+          '配置文件会以明文包含 Bangumi 登录令牌、SMB 与 WebDAV 用户名和密码。'
           '任何取得该文件的人都可能使用这些凭证。\n\n'
           '请只将文件保存在可信位置，确定继续吗？',
         ),
@@ -228,7 +230,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       );
       if (path == null) return;
       if (!mobile) await File(path).writeAsBytes(bytes, flush: true);
-      _snack('配置已导出（含账号与 SMB 凭证）');
+      _snack('配置已导出（含账号、SMB 与 WebDAV 凭证）');
     } catch (error) {
       _snack('导出配置失败：$error');
     } finally {
@@ -256,7 +258,8 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
           title: const Text('导入配置'),
           content: Text(
             '将替换 ${document.settingCount} 项外观、播放器与使用偏好。\n\n'
-            '${document.includesCredentials ? '文件中的 Bangumi 账号与 SMB 凭证也会覆盖当前值。' : '这是旧版配置文件，当前账号与 SMB 凭证会保留。'}\n\n'
+            '${document.includesAccountAndSmb ? '文件中的 Bangumi 账号与 SMB 凭证也会覆盖当前值。' : '这是 v1 配置文件，当前账号与 SMB 凭证会保留。'}\n'
+            '${document.includesWebDav ? '文件中的 WebDAV 凭证也会覆盖当前值。' : '当前 WebDAV 凭证会保留。'}\n\n'
             '下载内容、媒体来源和本机路径都会保留。确定继续吗？',
           ),
           actions: [
@@ -274,12 +277,16 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       if (confirmed != true || !mounted) return;
       await document.apply();
       decodeModeStartupValue = document.settings['decode_mode']! as String;
-      Object? runtimeSyncError;
+      final runtimeSyncErrors = <Object>[];
       try {
         await rust.setBangumiMirror(
           enabled: document.settings['bangumi_mirror']! as bool,
         );
-        if (document.includesCredentials) {
+      } catch (error) {
+        runtimeSyncErrors.add(error);
+      }
+      if (document.includesAccountAndSmb) {
+        try {
           await rust.setBangumiToken(
             token: document.bangumiAccessToken.isEmpty
                 ? null
@@ -291,16 +298,28 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             user: document.smbUser,
             password: document.smbPassword,
           );
+        } catch (error) {
+          runtimeSyncErrors.add(error);
         }
-      } catch (error) {
-        runtimeSyncError = error;
+      }
+      if (document.includesWebDav) {
+        try {
+          await rust.webdavSetCredentials(
+            baseUrl: document.webDavBaseUrl,
+            user: document.webDavUser,
+            password: document.webDavPassword,
+            authMode: document.webDavAuthMode,
+          );
+        } catch (error) {
+          runtimeSyncErrors.add(error);
+        }
       }
       _invalidateConfigurationProviders();
       _snack(
-        runtimeSyncError == null
+        runtimeSyncErrors.isEmpty
             ? document.includesCredentials
-                  ? '配置、Bangumi 账号与 SMB 凭证已导入'
-                  : '旧版配置已导入，当前账号与 SMB 凭证已保留'
+                  ? '配置与文件中包含的账号、网络凭证已导入'
+                  : '旧版配置已导入，当前账号与网络凭证已保留'
             : '配置已导入；运行状态刷新失败，重启 Kurako 后生效',
       );
     } catch (error) {
@@ -446,7 +465,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
           failures.add(error);
         }
       }
-      ref.invalidate(downloadedSmbUrisProvider);
+      ref.invalidate(downloadedRemoteUrisProvider);
       _snack(
         failures.isEmpty
             ? '已删除 $removed 个本地视频及其字幕'
@@ -469,7 +488,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('清空所有配置'),
         content: const Text(
-          '将恢复全部软件选项，并清空 Bangumi 登录、SMB 凭证、媒体来源、番剧与匹配、屏蔽记录和手动匹配配置。\n\n'
+          '将恢复全部软件选项，并清空 Bangumi 登录、SMB 与 WebDAV 凭证、媒体来源、番剧与匹配、屏蔽记录和手动匹配配置。\n\n'
           '已经下载到本地的视频和下载记录会保留。此操作无法撤销。',
         ),
         actions: [
@@ -533,6 +552,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     ref.invalidate(downloadDirProvider);
     ref.invalidate(bangumiMirrorProvider);
     ref.invalidate(smbConfiguredProvider);
+    ref.invalidate(webDavConfiguredProvider);
     ref.invalidate(settingsProvider);
   }
 

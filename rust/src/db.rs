@@ -984,6 +984,17 @@ pub fn unique_smb_episode_uri(file_name: &str) -> Result<Option<String>> {
     with_conn(|c| unique_smb_episode_uri_on(c, file_name))
 }
 
+pub fn episode_uri_exists(source_type: &str, file_path: &str) -> Result<bool> {
+    with_conn(|c| {
+        c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM episodes WHERE source_type = ?1 AND file_path = ?2)",
+            params![source_type, file_path],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+    })
+}
+
 /// Recreate one missing download row from a local file when the current SMB
 /// library provides one unambiguous episode with the same filename.
 pub fn recover_download_file(

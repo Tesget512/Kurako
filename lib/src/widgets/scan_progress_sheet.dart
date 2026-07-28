@@ -19,7 +19,7 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
   ScanProgress? _progress;
   bool _done = false;
   String? _error;
-  final List<String> _smbErrors = [];
+  final List<String> _networkErrors = [];
 
   @override
   void initState() {
@@ -38,29 +38,38 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
       // 2. SAF (Android content://) and SMB (network share) folders: enumerated
       //    on the Dart/Rust side, then Rust recognizes/matches the file list.
       final folders = await rust.listLibraryFolders();
-      for (final f in folders
-          .where((f) => f.sourceType == 'saf' || f.sourceType == 'smb')) {
+      for (final f in folders.where(
+        (f) =>
+            f.sourceType == 'saf' ||
+            f.sourceType == 'smb' ||
+            f.sourceType == 'webdav',
+      )) {
         if (!mounted) return;
-        setState(() => _progress = ScanProgress(
-              stage: 'scanning',
-              current: 0,
-              total: 0,
-              message: '枚举 ${f.path}',
-            ));
-        final source = f.sourceType == 'smb'
-            ? SmbMediaSource()
-            : SafMediaSource();
+        setState(
+          () => _progress = ScanProgress(
+            stage: 'scanning',
+            current: 0,
+            total: 0,
+            message: '枚举 ${f.path}',
+          ),
+        );
+        final source = switch (f.sourceType) {
+          'smb' => SmbMediaSource(),
+          'webdav' => WebDavMediaSource(),
+          _ => SafMediaSource(),
+        };
         late final List<ScannedFile> files;
         try {
           files = await source.enumerate(f.path);
-        } catch (_) {
+        } catch (error) {
           if (!mounted) return;
           // SMB connect/auth failures are common when the device is off the
           // local network. Record the folder-level error and continue scanning
           // other folders — don't abort the whole session.
-          setState(() => _smbErrors.add(
-                'SMB 连接失败（${_smbHost(f.path)}），请确认已连接到对应的局域网',
-              ));
+          final label = f.sourceType == 'webdav'
+              ? 'WebDAV 读取失败（${Uri.tryParse(f.path)?.host ?? f.path}）'
+              : 'SMB 连接失败（${_smbHost(f.path)}）';
+          setState(() => _networkErrors.add('$label：$error'));
           continue;
         }
         final s2 = rust.scanFilesAndMatch(
@@ -131,22 +140,26 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
           LinearProgressIndicator(value: _done ? 1 : value),
           const SizedBox(height: 12),
           Text(label, maxLines: 2, overflow: TextOverflow.ellipsis),
-          if (_smbErrors.isNotEmpty) ...[
+          if (_networkErrors.isNotEmpty) ...[
             const SizedBox(height: 8),
-            for (final msg in _smbErrors)
+            for (final msg in _networkErrors)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.wifi_off_outlined,
-                        size: 16, color: theme.colorScheme.error),
+                    Icon(
+                      Icons.wifi_off_outlined,
+                      size: 16,
+                      color: theme.colorScheme.error,
+                    ),
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
                         msg,
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: theme.colorScheme.error),
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.error,
+                        ),
                       ),
                     ),
                   ],
