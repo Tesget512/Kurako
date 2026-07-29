@@ -5,6 +5,8 @@ pub struct LibraryFolder {
     pub id: i64,
     pub path: String,
     pub added_at: i64,
+    /// Smaller values are scanned first and win exact filename conflicts.
+    pub priority: i64,
     /// Unix seconds of the last scan, or None if never scanned. Used to skip
     /// unchanged folders during incremental scans.
     pub last_scanned: Option<i64>,
@@ -63,6 +65,8 @@ pub struct Episode {
     pub duration_ms: i64,
     /// "local" = file_path is a POSIX path; "saf" = file_path is a content:// URI.
     pub source_type: String,
+    /// Whether a completed download exists for this exact remote URI.
+    pub is_downloaded: bool,
 }
 
 /// A video file discovered by a Dart-side enumerator (Android SAF), handed to
@@ -72,8 +76,19 @@ pub struct ScannedFile {
     /// content:// document URI (Android) — stored as the episode's file_path.
     pub uri: String,
     pub file_name: String,
+    /// Source-reported byte size. Zero means unknown and cannot verify download
+    /// recovery or suspected-duplicate comparisons.
+    pub file_size: i64,
     /// Folder path from the library root ("" = root), "/"-separated.
     pub relative_parent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanFileBatch {
+    pub files: Vec<ScannedFile>,
+    /// True when an incremental scan reused this folder's existing database
+    /// rows instead of walking the unchanged local directory again.
+    pub skipped_unchanged: bool,
 }
 
 /// A Bangumi search candidate, shown in the manual-correction dialog.
@@ -142,6 +157,14 @@ pub struct SmbShareInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SmbShareListResult {
+    pub shares: Vec<SmbShareInfo>,
+    /// Present only after authentication succeeded but automatic share
+    /// enumeration was unavailable. The UI may then offer manual share entry.
+    pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RemoteDirectory {
     /// Share-relative path; empty means the share root.
     pub path: String,
@@ -163,8 +186,9 @@ pub struct DownloadProgress {
     pub bytes_total: i64,
 }
 
-/// A completed SMB→local download, tracked so playback can prefer the local
-/// copy and the UI can manage (list/delete) downloads.
+/// A completed remote-to-local download, tracked so playback can prefer the
+/// local copy and the UI can manage (list/delete) downloads. `smb_uri` retains
+/// its historical field name but may contain an SMB or WebDAV URI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadEntry {
     pub id: i64,
@@ -190,10 +214,44 @@ pub struct DownloadDetail {
     pub file_name: String,
 }
 
+/// One indexed video inspected by the explicit, report-only duplicate checker.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DuplicateCheckItem {
+    pub episode_id: i64,
+    pub anime_id: i64,
+    pub anime_title: String,
+    pub episode_no: Option<i64>,
+    pub file_name: String,
+    pub file_path: String,
+    /// `local` | `smb` | `webdav`. Android SAF is reported as unsupported.
+    pub source_type: String,
+    pub file_size: i64,
+}
+
+/// Files whose size and four sparse content samples match. This is evidence of
+/// a likely duplicate, not a complete-file equality guarantee.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DuplicateCandidateGroup {
+    pub file_size: i64,
+    pub sparse_hash: String,
+    pub items: Vec<DuplicateCheckItem>,
+}
+
+/// Streamed state for the manually started duplicate checker.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DuplicateCheckProgress {
+    /// `progress` | `warning` | `group` | `done` | `cancelled`
+    pub stage: String,
+    pub current: i64,
+    pub total: i64,
+    pub message: String,
+    pub group: Option<DuplicateCandidateGroup>,
+}
+
 /// Progress event streamed back to Dart during a scan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanProgress {
-    /// "scanning" | "matching" | "done" | "error"
+    /// "scanning" | "matching" | "warning" | "done"
     pub stage: String,
     pub current: i64,
     pub total: i64,

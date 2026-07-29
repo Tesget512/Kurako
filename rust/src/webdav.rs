@@ -34,12 +34,28 @@ pub struct WebDavCreds {
     pub base_url: String,
     pub user: String,
     pub password: String,
-    /// `anonymous` | `basic` | `digest`
+    /// `anonymous` | `basic`
     pub auth_mode: String,
+    /// Explicit opt-in for private-LAN servers with invalid/self-signed TLS.
+    /// This disables certificate validation, so it must never be the default.
+    pub allow_insecure_tls: bool,
 }
 
 static CREDS: Lazy<Mutex<Option<WebDavCreds>>> = Lazy::new(|| Mutex::new(None));
 static CLIENT: Lazy<Mutex<Option<(WebDavCreds, Client)>>> = Lazy::new(|| Mutex::new(None));
+/// Total response-body bytes successfully delivered by the loopback playback
+/// proxy. HEAD probes, HTTP headers, downloads, and failed socket writes are
+/// deliberately excluded so Dart can derive the actual playback throughput.
+static BYTES_SERVED: AtomicU64 = AtomicU64::new(0);
+
+/// Cumulative bytes served by the WebDAV playback proxy since process start.
+pub fn proxy_bytes_served() -> u64 {
+    BYTES_SERVED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn maintenance_read_is_busy() -> bool {
+    !PLAYABLE.lock().unwrap().is_empty() || ACTIVE_TRANSFERS.load(Ordering::Acquire) > 0
+}
 
 #[derive(Clone)]
 struct SetupProfile {
@@ -78,6 +94,11 @@ fn validate_creds(mut creds: WebDavCreds) -> Result<WebDavCreds> {
     if !matches!(creds.auth_mode.as_str(), "anonymous" | "basic") {
         anyhow::bail!("未知 WebDAV 认证方式");
     }
+    // The option has no meaning for clear-text HTTP. Normalizing it prevents
+    // two otherwise-identical HTTP profiles from producing separate clients.
+    if base.scheme() != "https" {
+        creds.allow_insecure_tls = false;
+    }
     creds.base_url = base.to_string();
     Ok(creds)
 }
@@ -112,6 +133,7 @@ fn build_client(creds: &WebDavCreds) -> Result<Client> {
     let agent = reqwest::ClientBuilder::new()
         .connect_timeout(SETUP_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(5))
+        .danger_accept_invalid_certs(creds.allow_insecure_tls)
         .build()
         .context("创建 WebDAV HTTP 客户端")?;
     let auth = match creds.auth_mode.as_str() {
@@ -146,7 +168,7 @@ async fn list_entries_with(
     let response = tokio::time::timeout(SETUP_TIMEOUT, client.list_raw(&encoded, Depth::Number(1)))
         .await
         .context("WebDAV 目录连接超时")?
-        .context("WebDAV PROPFIND 失败")?;
+        .map_err(|error| webdav_transport_error(&creds.base_url, error))?;
     if response.status() != StatusCode::MULTI_STATUS {
         anyhow::bail!("WebDAV PROPFIND 返回 HTTP {}", response.status());
     }
@@ -162,12 +184,14 @@ pub async fn setup_begin(
     user: &str,
     password: &str,
     auth_mode: &str,
+    allow_insecure_tls: bool,
 ) -> Result<String> {
     let creds = validate_creds(WebDavCreds {
         base_url: base_url.to_string(),
         user: user.to_string(),
         password: password.to_string(),
         auth_mode: auth_mode.to_string(),
+        allow_insecure_tls,
     })?;
     let client = build_client(&creds)?;
     list_entries_with(&creds, &client, "").await?;
@@ -187,6 +211,35 @@ pub async fn setup_begin(
         },
     );
     Ok(token)
+}
+
+fn webdav_transport_error(
+    base_url: &str,
+    error: impl std::error::Error + Send + Sync + 'static,
+) -> anyhow::Error {
+    let error = anyhow::Error::new(error);
+    let detail = format!("{error:#}");
+    let lower = detail.to_ascii_lowercase();
+    if base_url.starts_with("https://")
+        && (lower.contains("certificate")
+            || lower.contains("unknownissuer")
+            || lower.contains("unknown issuer")
+            || lower.contains("invalid peer certificate"))
+    {
+        return anyhow::anyhow!(
+            "HTTPS 证书不受信任。若这是可信局域网内的自签名 NAS，可返回连接页开启“忽略 HTTPS 证书错误”；否则请为服务器安装受信任证书。详细原因：{detail}"
+        );
+    }
+    if base_url.starts_with("http://")
+        && (lower.contains("connection reset")
+            || lower.contains("unexpected eof")
+            || lower.contains("error sending request"))
+    {
+        return anyhow::anyhow!(
+            "服务器中断了明文 HTTP 连接；当前端口可能只接受 HTTPS。请改用 https:// 地址，自签名证书则开启“忽略 HTTPS 证书错误”。详细原因：{detail}"
+        );
+    }
+    anyhow::anyhow!("WebDAV PROPFIND 失败：{detail}")
 }
 
 pub async fn setup_list_entries(token: &str, subdir: &str) -> Result<Vec<RemoteEntry>> {
@@ -275,10 +328,22 @@ pub async fn enumerate(subdir: &str) -> Result<Vec<ScannedFile>> {
     let mut visited = HashSet::new();
     let mut files = Vec::new();
     while let Some((directory, relative_parent)) = stack.pop() {
+        if crate::scan_control::is_cancelled() {
+            anyhow::bail!("扫描已取消");
+        }
         if !visited.insert(directory.clone()) {
             continue;
         }
-        for entry in list_entries(&directory).await? {
+        let entries = tokio::select! {
+            result = list_entries(&directory) => result?,
+            _ = crate::scan_control::wait_cancelled() => {
+                anyhow::bail!("扫描已取消");
+            }
+        };
+        for entry in entries {
+            if crate::scan_control::is_cancelled() {
+                anyhow::bail!("扫描已取消");
+            }
             if visited.len() + files.len() >= MAX_ENUMERATED_ENTRIES {
                 anyhow::bail!("WebDAV 目录项目超过安全上限");
             }
@@ -293,6 +358,7 @@ pub async fn enumerate(subdir: &str) -> Result<Vec<ScannedFile>> {
                 files.push(ScannedFile {
                     uri: uri_for_relative(&entry.path)?,
                     file_name: entry.name,
+                    file_size: entry.size,
                     relative_parent: relative_parent.clone(),
                 });
             }
@@ -505,6 +571,102 @@ async fn require_range_support(relative: &str) -> Result<u64> {
         .context("WebDAV Range 响应缺少有效 Content-Range")
 }
 
+/// Read exact ranges without registering the file with the playback proxy.
+/// Maintenance traffic must not appear in the player's live/cumulative
+/// transfer statistics.
+pub(crate) async fn read_exact_ranges(
+    remote_uri: &str,
+    expected_size: u64,
+    ranges: &[(u64, u64)],
+    cancellation: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Vec<Vec<u8>>> {
+    let relative = relative_from_uri(remote_uri)?;
+    let (_, client) = client()?;
+    let encoded = encoded_relative(&relative);
+    let mut chunks = Vec::with_capacity(ranges.len());
+    for &(offset, length) in ranges {
+        if *cancellation.borrow() {
+            anyhow::bail!("检查已取消");
+        }
+        let end = offset
+            .checked_add(length)
+            .and_then(|value| value.checked_sub(1))
+            .context("WebDAV 分块范围溢出")?;
+        let request = client
+            .start_request(Method::GET, &encoded)
+            .await
+            .context("建立 WebDAV 分块请求")?
+            .header(RANGE, format!("bytes={offset}-{end}"));
+        let response = tokio::select! {
+            _ = cancellation.changed() => anyhow::bail!("检查已取消"),
+            result = tokio::time::timeout(
+                READ_TIMEOUT,
+                request.send(),
+            ) => result.context("WebDAV 分块读取连接超时")??,
+        };
+        if response.status() != StatusCode::PARTIAL_CONTENT {
+            anyhow::bail!(
+                "WebDAV 服务器没有按 Range 返回分块（HTTP {}）",
+                response.status()
+            );
+        }
+        let (actual_start, actual_end, total) = parse_content_range_exact(
+            response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                .context("WebDAV Range 响应缺少 Content-Range")?,
+        )?;
+        if (actual_start, actual_end, total) != (offset, end, expected_size) {
+            anyhow::bail!("WebDAV 文件大小或分块范围已变化，请重新扫描");
+        }
+        let mut body = response.bytes_stream();
+        let mut bytes = Vec::with_capacity(length as usize);
+        while let Some(next) = tokio::select! {
+            _ = cancellation.changed() => anyhow::bail!("检查已取消"),
+            result = tokio::time::timeout(READ_TIMEOUT, body.next()) => {
+                result.context("WebDAV 分块接收超时")?
+            },
+        } {
+            let chunk = next.context("WebDAV 分块接收失败")?;
+            if bytes.len().saturating_add(chunk.len()) > length as usize {
+                anyhow::bail!("WebDAV Range 响应超过声明长度");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.len() != length as usize {
+            anyhow::bail!("WebDAV Range 响应内容不完整");
+        }
+        chunks.push(bytes);
+    }
+    Ok(chunks)
+}
+
+fn parse_content_range_exact(value: &str) -> Result<(u64, u64, u64)> {
+    let value = value
+        .strip_prefix("bytes ")
+        .context("WebDAV Content-Range 格式无效")?;
+    let (range, total) = value
+        .split_once('/')
+        .context("WebDAV Content-Range 缺少总大小")?;
+    let (start, end) = range
+        .split_once('-')
+        .context("WebDAV Content-Range 缺少范围")?;
+    let start = start
+        .parse::<u64>()
+        .context("WebDAV Content-Range 起点无效")?;
+    let end = end
+        .parse::<u64>()
+        .context("WebDAV Content-Range 终点无效")?;
+    let total = total
+        .parse::<u64>()
+        .context("WebDAV Content-Range 总大小无效")?;
+    if start > end || end >= total {
+        anyhow::bail!("WebDAV Content-Range 超出文件范围");
+    }
+    Ok((start, end, total))
+}
+
 async fn ensure_proxy() -> Result<u16> {
     let current = PROXY_PORT.load(Ordering::Acquire);
     if current != 0 {
@@ -666,6 +828,7 @@ async fn handle_proxy_request(mut stream: TcpStream) -> Result<()> {
         if stream.write_all(&chunk).await.is_err() {
             break;
         }
+        BYTES_SERVED.fetch_add(chunk.len() as u64, Ordering::Relaxed);
     }
     Ok(())
 }
@@ -985,12 +1148,24 @@ mod tests {
     }
 
     #[test]
+    fn maintenance_range_parser_requires_exact_valid_bounds() {
+        assert_eq!(
+            parse_content_range_exact("bytes 10-19/100").unwrap(),
+            (10, 19, 100)
+        );
+        assert!(parse_content_range_exact("bytes 20-10/100").is_err());
+        assert!(parse_content_range_exact("bytes 90-100/100").is_err());
+        assert!(parse_content_range_exact("items 10-19/100").is_err());
+    }
+
+    #[test]
     fn href_must_stay_under_configured_root() {
         let creds = validate_creds(WebDavCreds {
             base_url: "https://example.test/dav/anime".to_string(),
             user: String::new(),
             password: String::new(),
             auth_mode: "anonymous".to_string(),
+            allow_insecure_tls: false,
         })
         .unwrap();
         let valid = relative_from_href(&creds, "/dav/anime/Show%201/")
@@ -1000,6 +1175,44 @@ mod tests {
         assert!(relative_from_href(&creds, "/dav/private/")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn insecure_tls_is_explicit_and_https_only() {
+        let https = validate_creds(WebDavCreds {
+            base_url: "https://nas.example.test/dav".to_string(),
+            user: String::new(),
+            password: String::new(),
+            auth_mode: "anonymous".to_string(),
+            allow_insecure_tls: true,
+        })
+        .unwrap();
+        assert!(https.allow_insecure_tls);
+
+        let http = validate_creds(WebDavCreds {
+            base_url: "http://nas.example.test/dav".to_string(),
+            user: String::new(),
+            password: String::new(),
+            auth_mode: "anonymous".to_string(),
+            allow_insecure_tls: true,
+        })
+        .unwrap();
+        assert!(!http.allow_insecure_tls);
+    }
+
+    #[test]
+    fn transport_errors_explain_certificate_and_protocol_failures() {
+        let certificate = webdav_transport_error(
+            "https://nas.example.test/",
+            std::io::Error::other("invalid peer certificate: UnknownIssuer"),
+        );
+        assert!(certificate.to_string().contains("HTTPS 证书不受信任"));
+
+        let protocol = webdav_transport_error(
+            "http://nas.example.test:8443/",
+            std::io::Error::other("connection reset by peer"),
+        );
+        assert!(protocol.to_string().contains("当前端口可能只接受 HTTPS"));
     }
 
     #[test]
@@ -1024,12 +1237,14 @@ mod tests {
     #[tokio::test]
     async fn loopback_proxy_preserves_head_range_and_complete_get() {
         const BODY: &[u8] = b"0123456789";
+        let bytes_before = proxy_bytes_served();
         let (base_url, server) = spawn_range_server(BODY, 4).await;
         set_creds(Some(WebDavCreds {
             base_url: base_url.clone(),
             user: String::new(),
             password: String::new(),
             auth_mode: "anonymous".to_string(),
+            allow_insecure_tls: false,
         }))
         .unwrap();
         let remote = format!("{base_url}episode.mkv");
@@ -1046,6 +1261,7 @@ mod tests {
                 .unwrap(),
             BODY.len().to_string()
         );
+        assert_eq!(proxy_bytes_served(), bytes_before);
 
         let partial = client
             .get(&local)
@@ -1055,10 +1271,12 @@ mod tests {
             .unwrap();
         assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(partial.bytes().await.unwrap().as_ref(), b"123");
+        assert_eq!(proxy_bytes_served(), bytes_before + 3);
 
         let complete = client.get(&local).send().await.unwrap();
         assert_eq!(complete.status(), StatusCode::OK);
         assert_eq!(complete.bytes().await.unwrap().as_ref(), BODY);
+        assert_eq!(proxy_bytes_served(), bytes_before + 3 + BODY.len() as u64);
 
         unregister_playable(&local);
         set_creds(None).unwrap();

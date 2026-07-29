@@ -316,8 +316,9 @@ class DownloadDetail {
           fileName == other.fileName;
 }
 
-/// A completed SMB→local download, tracked so playback can prefer the local
-/// copy and the UI can manage (list/delete) downloads.
+/// A completed remote-to-local download, tracked so playback can prefer the
+/// local copy and the UI can manage (list/delete) downloads. `smb_uri` retains
+/// its historical field name but may contain an SMB or WebDAV URI.
 class DownloadEntry {
   final PlatformInt64 id;
   final String smbUri;
@@ -372,6 +373,119 @@ class DownloadProgress {
           bytesTotal == other.bytesTotal;
 }
 
+/// Files whose size and four sparse content samples match. This is evidence of
+/// a likely duplicate, not a complete-file equality guarantee.
+class DuplicateCandidateGroup {
+  final PlatformInt64 fileSize;
+  final String sparseHash;
+  final List<DuplicateCheckItem> items;
+
+  const DuplicateCandidateGroup({
+    required this.fileSize,
+    required this.sparseHash,
+    required this.items,
+  });
+
+  @override
+  int get hashCode => fileSize.hashCode ^ sparseHash.hashCode ^ items.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DuplicateCandidateGroup &&
+          runtimeType == other.runtimeType &&
+          fileSize == other.fileSize &&
+          sparseHash == other.sparseHash &&
+          items == other.items;
+}
+
+/// One indexed video inspected by the explicit, report-only duplicate checker.
+class DuplicateCheckItem {
+  final PlatformInt64 episodeId;
+  final PlatformInt64 animeId;
+  final String animeTitle;
+  final PlatformInt64? episodeNo;
+  final String fileName;
+  final String filePath;
+
+  /// `local` | `smb` | `webdav`. Android SAF is reported as unsupported.
+  final String sourceType;
+  final PlatformInt64 fileSize;
+
+  const DuplicateCheckItem({
+    required this.episodeId,
+    required this.animeId,
+    required this.animeTitle,
+    this.episodeNo,
+    required this.fileName,
+    required this.filePath,
+    required this.sourceType,
+    required this.fileSize,
+  });
+
+  @override
+  int get hashCode =>
+      episodeId.hashCode ^
+      animeId.hashCode ^
+      animeTitle.hashCode ^
+      episodeNo.hashCode ^
+      fileName.hashCode ^
+      filePath.hashCode ^
+      sourceType.hashCode ^
+      fileSize.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DuplicateCheckItem &&
+          runtimeType == other.runtimeType &&
+          episodeId == other.episodeId &&
+          animeId == other.animeId &&
+          animeTitle == other.animeTitle &&
+          episodeNo == other.episodeNo &&
+          fileName == other.fileName &&
+          filePath == other.filePath &&
+          sourceType == other.sourceType &&
+          fileSize == other.fileSize;
+}
+
+/// Streamed state for the manually started duplicate checker.
+class DuplicateCheckProgress {
+  /// `progress` | `warning` | `group` | `done` | `cancelled`
+  final String stage;
+  final PlatformInt64 current;
+  final PlatformInt64 total;
+  final String message;
+  final DuplicateCandidateGroup? group;
+
+  const DuplicateCheckProgress({
+    required this.stage,
+    required this.current,
+    required this.total,
+    required this.message,
+    this.group,
+  });
+
+  @override
+  int get hashCode =>
+      stage.hashCode ^
+      current.hashCode ^
+      total.hashCode ^
+      message.hashCode ^
+      group.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DuplicateCheckProgress &&
+          runtimeType == other.runtimeType &&
+          stage == other.stage &&
+          current == other.current &&
+          total == other.total &&
+          message == other.message &&
+          group == other.group;
+}
+
 class Episode {
   final PlatformInt64 id;
   final PlatformInt64 animeId;
@@ -388,6 +502,9 @@ class Episode {
   /// "local" = file_path is a POSIX path; "saf" = file_path is a content:// URI.
   final String sourceType;
 
+  /// Whether a completed download exists for this exact remote URI.
+  final bool isDownloaded;
+
   const Episode({
     required this.id,
     required this.animeId,
@@ -401,6 +518,7 @@ class Episode {
     required this.lastPositionMs,
     required this.durationMs,
     required this.sourceType,
+    required this.isDownloaded,
   });
 
   @override
@@ -416,7 +534,8 @@ class Episode {
       watched.hashCode ^
       lastPositionMs.hashCode ^
       durationMs.hashCode ^
-      sourceType.hashCode;
+      sourceType.hashCode ^
+      isDownloaded.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -434,13 +553,17 @@ class Episode {
           watched == other.watched &&
           lastPositionMs == other.lastPositionMs &&
           durationMs == other.durationMs &&
-          sourceType == other.sourceType;
+          sourceType == other.sourceType &&
+          isDownloaded == other.isDownloaded;
 }
 
 class LibraryFolder {
   final PlatformInt64 id;
   final String path;
   final PlatformInt64 addedAt;
+
+  /// Smaller values are scanned first and win exact filename conflicts.
+  final PlatformInt64 priority;
 
   /// Unix seconds of the last scan, or None if never scanned. Used to skip
   /// unchanged folders during incremental scans.
@@ -453,6 +576,7 @@ class LibraryFolder {
     required this.id,
     required this.path,
     required this.addedAt,
+    required this.priority,
     this.lastScanned,
     required this.sourceType,
   });
@@ -462,6 +586,7 @@ class LibraryFolder {
       id.hashCode ^
       path.hashCode ^
       addedAt.hashCode ^
+      priority.hashCode ^
       lastScanned.hashCode ^
       sourceType.hashCode;
 
@@ -473,6 +598,7 @@ class LibraryFolder {
           id == other.id &&
           path == other.path &&
           addedAt == other.addedAt &&
+          priority == other.priority &&
           lastScanned == other.lastScanned &&
           sourceType == other.sourceType;
 }
@@ -552,9 +678,30 @@ class RemoteEntry {
           size == other.size;
 }
 
+class ScanFileBatch {
+  final List<ScannedFile> files;
+
+  /// True when an incremental scan reused this folder's existing database
+  /// rows instead of walking the unchanged local directory again.
+  final bool skippedUnchanged;
+
+  const ScanFileBatch({required this.files, required this.skippedUnchanged});
+
+  @override
+  int get hashCode => files.hashCode ^ skippedUnchanged.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ScanFileBatch &&
+          runtimeType == other.runtimeType &&
+          files == other.files &&
+          skippedUnchanged == other.skippedUnchanged;
+}
+
 /// Progress event streamed back to Dart during a scan.
 class ScanProgress {
-  /// "scanning" | "matching" | "done" | "error"
+  /// "scanning" | "matching" | "warning" | "done"
   final String stage;
   final PlatformInt64 current;
   final PlatformInt64 total;
@@ -589,18 +736,26 @@ class ScannedFile {
   final String uri;
   final String fileName;
 
+  /// Source-reported byte size. Zero means unknown and cannot verify download
+  /// recovery or suspected-duplicate comparisons.
+  final PlatformInt64 fileSize;
+
   /// Folder path from the library root ("" = root), "/"-separated.
   final String relativeParent;
 
   const ScannedFile({
     required this.uri,
     required this.fileName,
+    required this.fileSize,
     required this.relativeParent,
   });
 
   @override
   int get hashCode =>
-      uri.hashCode ^ fileName.hashCode ^ relativeParent.hashCode;
+      uri.hashCode ^
+      fileName.hashCode ^
+      fileSize.hashCode ^
+      relativeParent.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -609,6 +764,7 @@ class ScannedFile {
           runtimeType == other.runtimeType &&
           uri == other.uri &&
           fileName == other.fileName &&
+          fileSize == other.fileSize &&
           relativeParent == other.relativeParent;
 }
 
@@ -628,6 +784,27 @@ class SmbShareInfo {
           runtimeType == other.runtimeType &&
           name == other.name &&
           comment == other.comment;
+}
+
+class SmbShareListResult {
+  final List<SmbShareInfo> shares;
+
+  /// Present only after authentication succeeded but automatic share
+  /// enumeration was unavailable. The UI may then offer manual share entry.
+  final String? warning;
+
+  const SmbShareListResult({required this.shares, this.warning});
+
+  @override
+  int get hashCode => shares.hashCode ^ warning.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SmbShareListResult &&
+          runtimeType == other.runtimeType &&
+          shares == other.shares &&
+          warning == other.warning;
 }
 
 /// An external subtitle file found next to a video. `uri` identifies the source

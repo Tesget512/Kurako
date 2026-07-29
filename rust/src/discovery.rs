@@ -1,50 +1,162 @@
 //! Bounded, side-effect-free local file-server discovery.
 //!
-//! DNS-SD is handled by Flutter's cross-platform `nsd` plugin. This module adds
-//! WS-Discovery for Windows 10/11 hosts which usually do not advertise SMB over
-//! Bonjour. It sends one standards-based multicast probe per active IPv4
-//! interface and only consumes responses; it never scans a subnet or connects
-//! to TCP/445.
+//! DNS-SD is handled by Flutter's cross-platform `nsd` plugin. This module uses
+//! WS-Discovery for Windows 10/11 hosts which usually do not advertise SMB
+//! over Bonjour. A bounded TCP/445 probe of the device's nearby IPv4 networks
+//! complements it for iOS (where raw multicast needs a restricted entitlement)
+//! and for NAS devices which advertise neither protocol.
 
 use crate::models::DiscoveredServer;
+use futures::stream::{self, StreamExt};
+use if_addrs::IfAddr;
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use std::collections::BTreeMap;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::net::UdpSocket;
+use tokio::net::{TcpSocket, UdpSocket};
 
 const WSD_MULTICAST: &str = "239.255.255.250:3702";
 const DISCOVERY_WINDOW: Duration = Duration::from_millis(2400);
+const TCP_CONNECT_TIMEOUT: Duration = Duration::from_millis(350);
+const TCP_PROBE_CONCURRENCY: usize = 64;
+const MAX_SCAN_NETWORKS: usize = 3;
 const MAX_DATAGRAM_BYTES: usize = 64 * 1024;
 const MAX_RESULTS: usize = 64;
 static PROBE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub async fn discover_windows_file_servers() -> Vec<DiscoveredServer> {
-    let interfaces = match if_addrs::get_if_addrs() {
-        Ok(interfaces) => interfaces,
-        Err(_) => return Vec::new(),
-    };
-    let futures = interfaces.into_iter().filter_map(|interface| {
-        let IpAddr::V4(ip) = interface.ip() else {
-            return None;
-        };
-        if ip.is_loopback() || ip.is_unspecified() || ip.is_link_local() {
-            return None;
-        }
-        Some(discover_on_interface(ip))
-    });
+    let networks = active_ipv4_networks();
+    if networks.is_empty() {
+        return Vec::new();
+    }
+
+    #[cfg(target_os = "ios")]
+    let (wsd, tcp) = (Vec::new(), discover_smb_by_tcp(&networks).await);
+    #[cfg(not(target_os = "ios"))]
+    let (wsd, tcp) = tokio::join!(discover_by_wsd(&networks), discover_smb_by_tcp(&networks));
+
     let mut by_host = BTreeMap::new();
-    for servers in futures::future::join_all(futures).await {
-        for server in servers {
-            by_host.entry(server.host.clone()).or_insert(server);
-            if by_host.len() >= MAX_RESULTS {
-                break;
-            }
+    // Prefer WS-Discovery when both methods find the same host because it
+    // proves that the endpoint actively announced itself.
+    for server in wsd.into_iter().chain(tcp) {
+        by_host.entry(server.host.clone()).or_insert(server);
+        if by_host.len() >= MAX_RESULTS {
+            break;
         }
     }
     by_host.into_values().collect()
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct Ipv4ScanNetwork {
+    local_ip: Ipv4Addr,
+    first_host: Ipv4Addr,
+    last_host: Ipv4Addr,
+}
+
+fn active_ipv4_networks() -> Vec<Ipv4ScanNetwork> {
+    let Ok(interfaces) = if_addrs::get_if_addrs() else {
+        return Vec::new();
+    };
+    let mut by_range = BTreeMap::new();
+    for interface in interfaces {
+        let IfAddr::V4(address) = interface.addr else {
+            continue;
+        };
+        if address.ip.is_loopback()
+            || address.ip.is_unspecified()
+            || address.ip.is_link_local()
+            || !address.ip.is_private()
+        {
+            continue;
+        }
+        let Some((first_host, last_host)) = bounded_host_range(address.ip, address.prefixlen)
+        else {
+            continue;
+        };
+        by_range
+            .entry((first_host, last_host))
+            .or_insert(Ipv4ScanNetwork {
+                local_ip: address.ip,
+                first_host,
+                last_host,
+            });
+    }
+    by_range.into_values().take(MAX_SCAN_NETWORKS).collect()
+}
+
+/// Respect small configured subnets, but clamp broad networks to the local /24
+/// so discovery remains bounded to at most 254 targets per interface.
+fn bounded_host_range(ip: Ipv4Addr, prefix_len: u8) -> Option<(Ipv4Addr, Ipv4Addr)> {
+    if prefix_len >= 31 {
+        return None;
+    }
+    let prefix_len = prefix_len.max(24);
+    let mask = u32::MAX << (32 - prefix_len);
+    let network = u32::from(ip) & mask;
+    let broadcast = network | !mask;
+    if broadcast <= network + 1 {
+        return None;
+    }
+    Some((Ipv4Addr::from(network + 1), Ipv4Addr::from(broadcast - 1)))
+}
+
+async fn discover_by_wsd(networks: &[Ipv4ScanNetwork]) -> Vec<DiscoveredServer> {
+    let futures = networks
+        .iter()
+        .map(|network| discover_on_interface(network.local_ip));
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+async fn discover_smb_by_tcp(networks: &[Ipv4ScanNetwork]) -> Vec<DiscoveredServer> {
+    let probes = networks.iter().flat_map(|network| {
+        let first = u32::from(network.first_host);
+        let last = u32::from(network.last_host);
+        (first..=last).filter_map(move |raw| {
+            let target = Ipv4Addr::from(raw);
+            (target != network.local_ip).then_some((network.local_ip, target))
+        })
+    });
+    stream::iter(probes)
+        .map(|(local_ip, target)| async move {
+            probe_smb_port(local_ip, target)
+                .await
+                .then(|| DiscoveredServer {
+                    name: target.to_string(),
+                    host: target.to_string(),
+                    port: 445,
+                    protocol: "smb".to_string(),
+                    discovery_source: "TCP/445".to_string(),
+                })
+        })
+        .buffer_unordered(TCP_PROBE_CONCURRENCY)
+        .filter_map(|server| async move { server })
+        .take(MAX_RESULTS)
+        .collect()
+        .await
+}
+
+async fn probe_smb_port(local_ip: Ipv4Addr, target: Ipv4Addr) -> bool {
+    let Ok(socket) = TcpSocket::new_v4() else {
+        return false;
+    };
+    if socket.bind(SocketAddr::from((local_ip, 0))).is_err() {
+        return false;
+    }
+    matches!(
+        tokio::time::timeout(
+            TCP_CONNECT_TIMEOUT,
+            socket.connect(SocketAddr::from((target, 445))),
+        )
+        .await,
+        Ok(Ok(_))
+    )
 }
 
 async fn discover_on_interface(ip: Ipv4Addr) -> Vec<DiscoveredServer> {
@@ -173,5 +285,19 @@ mod tests {
         assert!(parse_probe_response(b"not xml").is_empty());
         let xml = br#"<XAddrs>not-a-url</XAddrs>"#;
         assert!(parse_probe_response(xml).is_empty());
+    }
+
+    #[test]
+    fn broad_network_is_bounded_to_local_slash_24() {
+        let (first, last) = bounded_host_range(Ipv4Addr::new(192, 168, 77, 42), 16).unwrap();
+        assert_eq!(first, Ipv4Addr::new(192, 168, 77, 1));
+        assert_eq!(last, Ipv4Addr::new(192, 168, 77, 254));
+    }
+
+    #[test]
+    fn narrow_network_keeps_its_configured_boundary() {
+        let (first, last) = bounded_host_range(Ipv4Addr::new(192, 168, 77, 211), 26).unwrap();
+        assert_eq!(first, Ipv4Addr::new(192, 168, 77, 193));
+        assert_eq!(last, Ipv4Addr::new(192, 168, 77, 254));
     }
 }

@@ -14,13 +14,7 @@ class CollectionPage extends ConsumerWidget {
 
   // (collection type value, tab label). Ordered the way a viewer thinks about
   // their backlog: watching → plan → on-hold → done → dropped.
-  static const _tabs = [
-    (3, '在看'),
-    (1, '想看'),
-    (4, '搁置'),
-    (2, '看过'),
-    (5, '抛弃'),
-  ];
+  static const _tabs = [(3, '在看'), (1, '想看'), (4, '搁置'), (2, '看过'), (5, '抛弃')];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -59,9 +53,7 @@ class CollectionPage extends ConsumerWidget {
               for (final t in _tabs)
                 _CollectionTab(
                   items: sortAnime(
-                    list
-                        .where((a) => a.collection.toInt() == t.$1)
-                        .toList(),
+                    list.where((a) => a.collection.toInt() == t.$1).toList(),
                     sort,
                     pinCollected: false,
                   ),
@@ -100,7 +92,10 @@ class _CollectionTab extends StatelessWidget {
           anime: anime,
           onTap: () {
             Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => DetailPage(animeId: anime.id)),
+              MaterialPageRoute(
+                builder: (_) =>
+                    DetailPage(animeId: anime.id, initialAnime: anime),
+              ),
             );
           },
         );

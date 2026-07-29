@@ -403,10 +403,18 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
           _update(ep.filePath, (t) => t.copyWith(error: '$e')),
       onDone: () {
         _subs.remove(ep.filePath);
+        var completed = false;
         _update(ep.filePath, (t) {
           final ok = t.error == null && t.bytesTotal > 0;
+          completed = ok;
           return t.copyWith(done: true, bytesDone: ok ? t.bytesTotal : null);
         });
+        if (completed) {
+          final affectedAnimeId = animeId;
+          if (affectedAnimeId != null) {
+            _ref.invalidate(episodesProvider(affectedAnimeId));
+          }
+        }
       },
     );
   }
@@ -451,23 +459,6 @@ final downloadManagerProvider =
 final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
   final creds = await SmbCredentials.load();
   return creds.isConfigured;
-});
-
-/// Only active-task membership changes require a completed-download DB query.
-/// Progress ticks and later dismissal of completed/failed tasks are irrelevant.
-String activeDownloadFingerprint(List<DownloadTask> tasks) =>
-    tasks.where((task) => task.active).map((task) => task.sourceUri).join('\n');
-
-/// The smbUri of every SMB episode with a completed local download — lets the
-/// episode list show a "downloaded" badge without an async round-trip per
-/// tile. A task entering/leaving the active set refreshes the DB result, so a
-/// just-finished download's badge appears without progress-tick query storms.
-final downloadedRemoteUrisProvider = FutureProvider.autoDispose<Set<String>>((
-  ref,
-) async {
-  ref.watch(downloadManagerProvider.select(activeDownloadFingerprint));
-  final list = await rust.listDownloads();
-  return list.map((d) => d.smbUri).toSet();
 });
 
 // ---- Bangumi API mirror (default on; routes API through the China mirror) ----
@@ -551,12 +542,14 @@ class WebDavCredentials {
   final String user;
   final String password;
   final String authMode;
+  final bool allowInsecureTls;
 
   const WebDavCredentials({
     required this.baseUrl,
     required this.user,
     required this.password,
     required this.authMode,
+    this.allowInsecureTls = false,
   });
 
   bool get isConfigured => baseUrl.isNotEmpty;
@@ -568,6 +561,7 @@ class WebDavCredentials {
       user: prefs.getString('webdav_user') ?? '',
       password: prefs.getString('webdav_password') ?? '',
       authMode: prefs.getString('webdav_auth_mode') ?? 'basic',
+      allowInsecureTls: prefs.getBool('webdav_allow_insecure_tls') ?? false,
     );
   }
 
@@ -577,6 +571,7 @@ class WebDavCredentials {
     await prefs.setString('webdav_user', user);
     await prefs.setString('webdav_password', password);
     await prefs.setString('webdav_auth_mode', authMode);
+    await prefs.setBool('webdav_allow_insecure_tls', allowInsecureTls);
   }
 
   Future<void> pushToRust() => rust.webdavSetCredentials(
@@ -584,6 +579,7 @@ class WebDavCredentials {
     user: user,
     password: password,
     authMode: authMode,
+    allowInsecureTls: allowInsecureTls,
   );
 }
 
@@ -769,6 +765,7 @@ Future<void> resetPersistedAppSettings() async {
     user: '',
     password: '',
     authMode: 'basic',
+    allowInsecureTls: false,
   );
   final downloadDir = effectiveDownloadDir('');
   if (downloadDir.isNotEmpty) {

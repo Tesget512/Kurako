@@ -16,7 +16,8 @@ import 'player_page.dart';
 
 class DetailPage extends ConsumerStatefulWidget {
   final int animeId;
-  const DetailPage({super.key, required this.animeId});
+  final Anime? initialAnime;
+  const DetailPage({super.key, required this.animeId, this.initialAnime});
 
   @override
   ConsumerState<DetailPage> createState() => _DetailPageState();
@@ -25,36 +26,27 @@ class DetailPage extends ConsumerStatefulWidget {
 class _DetailPageState extends ConsumerState<DetailPage> {
   bool _refreshing = false;
   final _scrollController = ScrollController();
+  Anime? _animeSnapshot;
   // Whether the header has scrolled far enough to show the toolbar title.
   bool _collapsed = false;
-  Set<String> _downloadedUris = const {};
-  ProviderSubscription<AsyncValue<Set<String>>>? _downloadedUrisSubscription;
 
   @override
   void initState() {
     super.initState();
+    _animeSnapshot = widget.initialAnime;
     _scrollController.addListener(_onScroll);
-    // Clear completed/failed tasks left by the previous visit before this page
-    // starts observing download state. Active downloads continue in background.
-    ref.read(downloadManagerProvider.notifier).dismissAnime(widget.animeId);
-    // Riverpod 2.6.1 closes implicit watches after StatefulElement.unmount.
-    // Own this subscription so dispose can close it before the defunct window.
-    _downloadedUrisSubscription = ref.listenManual<AsyncValue<Set<String>>>(
-      downloadedRemoteUrisProvider,
-      (_, next) {
-        final uris = next.valueOrNull;
-        if (uris == null || !mounted) return;
-        if (_downloadedUris.length == uris.length &&
-            _downloadedUris.containsAll(uris)) {
-          return;
-        }
-        setState(() => _downloadedUris = uris);
-      },
-      fireImmediately: true,
-    );
     // Metadata is no longer refreshed per-anime on open; the whole library is
     // refreshed once at startup (see HomePage._refreshAllMetadataOnce). The
     // manual refresh button below still force-refetches this one subject.
+  }
+
+  @override
+  void didUpdateWidget(covariant DetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.animeId != widget.animeId ||
+        oldWidget.initialAnime != widget.initialAnime) {
+      _animeSnapshot = widget.initialAnime;
+    }
   }
 
   void _onScroll() {
@@ -66,7 +58,12 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final animeAsync = ref.watch(animeDetailProvider(widget.animeId));
+    // Library and collection routes already carry the complete Anime row. Use
+    // it directly so opening a detail page does not rebuild the blurred hero
+    // midway through its transition when a duplicate database Future resolves.
+    final animeAsync = _animeSnapshot == null
+        ? ref.watch(animeDetailProvider(widget.animeId))
+        : AsyncValue<Anime?>.data(_animeSnapshot);
     final episodesAsync = ref.watch(episodesProvider(widget.animeId));
 
     return Scaffold(
@@ -142,16 +139,16 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                     data: (episodes) => SliverToBoxAdapter(
                       child: _EpisodeList(
                         episodes: episodes,
-                        downloadedUris: _downloadedUris,
                         onPlay: (e) => _play(context, ref, e),
                         onPlayWith: (e, external) =>
                             _play(context, ref, e, forceExternal: external),
                         onDownload: (e) => _downloadEpisode(context, e),
-                        onBlocked: () {
+                        onBlocked: () async {
                           ref.invalidate(episodesProvider(widget.animeId));
                           ref.invalidate(animeDetailProvider(widget.animeId));
+                          await _reloadAnimeSnapshot();
                         },
-                        onRematched: (newAnimeId) {
+                        onRematched: (newAnimeId) async {
                           // A single file was split into its own (or an
                           // existing) entry, or detached to 未分类 — refresh
                           // this list so it drops out, refresh the library, and
@@ -159,7 +156,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                           ref.invalidate(episodesProvider(widget.animeId));
                           ref.invalidate(animeDetailProvider(widget.animeId));
                           ref.invalidate(animeListProvider);
-                          if (newAnimeId != widget.animeId && context.mounted) {
+                          if (newAnimeId == widget.animeId) {
+                            await _reloadAnimeSnapshot();
+                          } else if (context.mounted) {
                             Navigator.of(context).push(
                               MaterialPageRoute(
                                 builder: (_) => DetailPage(animeId: newAnimeId),
@@ -226,9 +225,11 @@ class _DetailPageState extends ConsumerState<DetailPage> {
           );
           if (resultId == null || !context.mounted) return;
           ref.invalidate(animeListProvider);
+          ref.invalidate(episodesProvider(widget.animeId));
           if (resultId == widget.animeId) {
             // Same entry survived — just refresh it in place.
             ref.invalidate(animeDetailProvider(widget.animeId));
+            await _reloadAnimeSnapshot();
           } else {
             // A merge folded this entry into another (deleting this one). The
             // old id is now gone, which used to strand the page on the bare
@@ -250,7 +251,6 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   @override
   void dispose() {
-    _downloadedUrisSubscription?.close();
     _scrollController.dispose();
     super.dispose();
   }
@@ -268,6 +268,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       ref.invalidate(animeDetailProvider(widget.animeId));
       ref.invalidate(episodesProvider(widget.animeId));
       ref.invalidate(animeListProvider);
+      await _reloadAnimeSnapshot();
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
@@ -289,6 +290,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       await rust.setCollection(animeId: widget.animeId, collectionType: type);
       ref.invalidate(animeDetailProvider(widget.animeId));
       ref.invalidate(animeListProvider);
+      await _reloadAnimeSnapshot();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(
@@ -305,6 +307,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       await rust.clearCollection(animeId: widget.animeId);
       ref.invalidate(animeDetailProvider(widget.animeId));
       ref.invalidate(animeListProvider);
+      await _reloadAnimeSnapshot();
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -320,6 +323,12 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         ).showSnackBar(SnackBar(content: Text('取消收藏失败: $e')));
       }
     }
+  }
+
+  Future<void> _reloadAnimeSnapshot() async {
+    final anime = await rust.getAnime(id: widget.animeId);
+    if (!mounted) return;
+    setState(() => _animeSnapshot = anime);
   }
 
   /// [forceExternal]: null = follow the setting; true/false = user picked a
@@ -685,7 +694,6 @@ class _CollectionRow extends StatelessWidget {
 
 class _EpisodeList extends StatelessWidget {
   final List<Episode> episodes;
-  final Set<String> downloadedUris;
   final void Function(Episode) onPlay;
   final void Function(Episode, bool external) onPlayWith;
   final void Function(Episode) onDownload;
@@ -694,7 +702,6 @@ class _EpisodeList extends StatelessWidget {
 
   const _EpisodeList({
     required this.episodes,
-    required this.downloadedUris,
     required this.onPlay,
     required this.onPlayWith,
     required this.onDownload,
@@ -722,9 +729,6 @@ class _EpisodeList extends StatelessWidget {
 
     Widget tile(Episode e) => _EpisodeTile(
       episode: e,
-      isDownloaded:
-          (e.sourceType == 'smb' || e.sourceType == 'webdav') &&
-          downloadedUris.contains(e.filePath),
       onPlay: () => onPlay(e),
       onPlayWith: (external) => onPlayWith(e, external),
       onDownload: () => onDownload(e),
@@ -779,7 +783,6 @@ class _EpisodeList extends StatelessWidget {
 
 class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
-  final bool isDownloaded;
   final VoidCallback onPlay;
 
   /// Play with an explicitly chosen player (true = external).
@@ -798,7 +801,6 @@ class _EpisodeTile extends ConsumerWidget {
 
   const _EpisodeTile({
     required this.episode,
-    required this.isDownloaded,
     required this.onPlay,
     required this.onPlayWith,
     required this.onDownload,
@@ -836,7 +838,7 @@ class _EpisodeTile extends ConsumerWidget {
         trailing: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isDownloaded)
+            if (episode.isDownloaded)
               Tooltip(
                 message: '已下载到本地',
                 child: Icon(
@@ -997,7 +999,7 @@ class _EpisodeTile extends ConsumerWidget {
       case 'detach':
         await _detachEpisode(context);
       case 'delete_copy':
-        await _deleteLocalCopy(context);
+        await _deleteLocalCopy(context, ref);
       case 'block':
         await _block(context, ref);
     }
@@ -1037,7 +1039,7 @@ class _EpisodeTile extends ConsumerWidget {
     }
   }
 
-  Future<void> _deleteLocalCopy(BuildContext context) async {
+  Future<void> _deleteLocalCopy(BuildContext context, WidgetRef ref) async {
     try {
       final list = await rust.listDownloads();
       for (final d in list) {
@@ -1045,6 +1047,7 @@ class _EpisodeTile extends ConsumerWidget {
           await rust.removeDownload(id: d.id);
         }
       }
+      ref.invalidate(episodesProvider(episode.animeId.toInt()));
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,

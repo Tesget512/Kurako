@@ -12,6 +12,13 @@ import '../rust/models.dart';
 import 'external_player.dart' show smbUncPath, ensureUncAuth;
 import 'ios_platform.dart';
 
+class _SafScanCancelled implements Exception {
+  const _SafScanCancelled();
+
+  @override
+  String toString() => '扫描已取消';
+}
+
 /// Abstracts where the library's video files live and how to reach them, so the
 /// scan + playback code is identical across desktop (POSIX paths) and Android
 /// (Storage Access Framework content:// URIs). Future: an SMB source.
@@ -26,7 +33,10 @@ abstract class MediaSource {
   /// Enumerate all video files under [folderUri] as ScannedFile (uri +
   /// filename + folder-relative path). Empty for the local source, which lets
   /// Rust's walkdir do the enumeration instead.
-  Future<List<ScannedFile>> enumerate(String folderUri);
+  Future<List<ScannedFile>> enumerate(
+    String folderUri, {
+    bool Function()? isCancelled,
+  });
 
   /// Resolve an episode's stored path into a URI media_kit can open. May open a
   /// file descriptor that must stay alive during playback — release it via
@@ -78,6 +88,24 @@ class PlayableHandle {
   }
 }
 
+/// Human-readable transport derived from the active handle, rather than only
+/// the library row. Remote episodes may currently be reading a downloaded local
+/// copy, in which case reporting SMB/WebDAV would be misleading.
+String playbackTransportLabel(Episode episode, PlayableHandle? handle) {
+  final uri = handle?.uri.toLowerCase();
+  final readsLocalFile = uri?.startsWith('file:') == true;
+  if (readsLocalFile &&
+      (episode.sourceType == 'smb' || episode.sourceType == 'webdav')) {
+    return '本地文件（已下载副本）';
+  }
+  return switch (episode.sourceType) {
+    'smb' => 'SMB',
+    'webdav' => 'WebDAV',
+    'saf' => 'Android SAF',
+    _ => '本地文件',
+  };
+}
+
 /// Desktop (and any POSIX-path) source. Enumeration is delegated to Rust's
 /// walkdir, so [enumerate] returns empty and callers use `scanAndMatch`.
 class LocalMediaSource extends MediaSource {
@@ -90,7 +118,10 @@ class LocalMediaSource extends MediaSource {
       : FilePicker.platform.getDirectoryPath();
 
   @override
-  Future<List<ScannedFile>> enumerate(String folderUri) async => const [];
+  Future<List<ScannedFile>> enumerate(
+    String folderUri, {
+    bool Function()? isCancelled,
+  }) async => const [];
 
   @override
   Future<PlayableHandle> resolvePlayable(Episode episode) async {
@@ -169,9 +200,12 @@ class SafMediaSource extends MediaSource {
   }
 
   @override
-  Future<List<ScannedFile>> enumerate(String folderUri) async {
+  Future<List<ScannedFile>> enumerate(
+    String folderUri, {
+    bool Function()? isCancelled,
+  }) async {
     final out = <ScannedFile>[];
-    await _walk(folderUri, '', out);
+    await _walk(folderUri, '', out, isCancelled);
     return out;
   }
 
@@ -179,28 +213,65 @@ class SafMediaSource extends MediaSource {
     String dirUri,
     String relativeParent,
     List<ScannedFile> out,
+    bool Function()? isCancelled,
   ) async {
-    late final List<SafDocumentFile> children;
-    try {
-      children = await _saf.list(dirUri);
-    } catch (_) {
-      return;
-    }
+    if (isCancelled?.call() == true) return;
+    final children = await _listDirectoryForScan(dirUri, isCancelled);
     for (final c in children) {
+      if (isCancelled?.call() == true) return;
       if (c.isDir) {
         final childRel = relativeParent.isEmpty
             ? c.name
             : '$relativeParent/${c.name}';
-        await _walk(c.uri, childRel, out);
+        await _walk(c.uri, childRel, out, isCancelled);
       } else if (_isVideo(c.name)) {
         out.add(
           ScannedFile(
             uri: c.uri,
             fileName: c.name,
+            fileSize: c.length,
             relativeParent: relativeParent,
           ),
         );
       }
+    }
+  }
+
+  Future<List<SafDocumentFile>> _listDirectoryForScan(
+    String dirUri,
+    bool Function()? isCancelled,
+  ) async {
+    final completer = Completer<List<SafDocumentFile>>();
+    final startedAt = DateTime.now();
+    final timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (completer.isCompleted) return;
+      if (isCancelled?.call() == true) {
+        completer.completeError(const _SafScanCancelled());
+      } else if (DateTime.now().difference(startedAt) >=
+          const Duration(seconds: 20)) {
+        completer.completeError(
+          TimeoutException('Android 文件夹读取超过 20 秒', const Duration(seconds: 20)),
+        );
+      }
+    });
+    _saf
+        .list(dirUri)
+        .then(
+          (children) {
+            if (!completer.isCompleted) {
+              completer.complete(children);
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!completer.isCompleted) {
+              completer.completeError(error, stackTrace);
+            }
+          },
+        );
+    try {
+      return await completer.future;
+    } finally {
+      timer.cancel();
     }
   }
 
@@ -235,7 +306,10 @@ class SmbMediaSource extends MediaSource {
   }
 
   @override
-  Future<List<ScannedFile>> enumerate(String folderUri) async {
+  Future<List<ScannedFile>> enumerate(
+    String folderUri, {
+    bool Function()? isCancelled,
+  }) async {
     // folderUri is smb://host/share/subdir — enumerate the sub-path.
     final sub = _subPath(folderUri);
     return rust.smbEnumerate(subdir: sub);
@@ -331,7 +405,10 @@ class WebDavMediaSource extends MediaSource {
   }
 
   @override
-  Future<List<ScannedFile>> enumerate(String folderUri) {
+  Future<List<ScannedFile>> enumerate(
+    String folderUri, {
+    bool Function()? isCancelled,
+  }) {
     return rust.webdavEnumerate(sourceUri: folderUri);
   }
 

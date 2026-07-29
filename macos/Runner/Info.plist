@@ -35,8 +35,6 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_smb._tcp</string>
-		<string>_webdav._tcp</string>
-		<string>_webdavs._tcp</string>
 	</array>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>

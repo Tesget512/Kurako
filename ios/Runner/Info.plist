@@ -46,8 +46,6 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_smb._tcp</string>
-		<string>_webdav._tcp</string>
-		<string>_webdavs._tcp</string>
 	</array>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Kurako 需要将播放器截图保存到您的系统相册。</string>

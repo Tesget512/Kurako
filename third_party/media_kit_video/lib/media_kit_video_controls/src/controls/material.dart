@@ -589,9 +589,14 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   Timer? _timerSeekBackwardButton;
   Timer? _timerSeekForwardButton;
   int _seekPreviewGeneration = 0;
+  int _horizontalSeekGeneration = 0;
+  Duration? _horizontalDragStartPosition;
+  Duration? _horizontalDragTarget;
 
   final ValueNotifier<Duration> _seekBarDeltaValueNotifier =
       ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<Duration?> _seekBarPositionPreviewValueNotifier =
+      ValueNotifier<Duration?>(null);
 
   final List<StreamSubscription> subscriptions = [];
 
@@ -725,6 +730,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     _timerSeekBackwardButton?.cancel();
     _timerSeekForwardButton?.cancel();
     _seekBarDeltaValueNotifier.dispose();
+    _seekBarPositionPreviewValueNotifier.dispose();
     super.dispose();
   }
 
@@ -806,6 +812,15 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     return KeyEventResult.handled;
   }
 
+  void onHorizontalDragStart() {
+    final position = controller(context).player.state.position;
+    _horizontalSeekGeneration++;
+    _horizontalDragStartPosition = position;
+    _horizontalDragTarget = position;
+    _dragInitialDelta = Offset.zero;
+    _seekBarDeltaValueNotifier.value = Duration.zero;
+  }
+
   void onHorizontalDragUpdate(DragUpdateDetails details) {
     if (_dragInitialDelta == Offset.zero) {
       _dragInitialDelta = details.localPosition;
@@ -813,49 +828,87 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     }
 
     final diff = _dragInitialDelta.dx - details.localPosition.dx;
-    final duration = controller(context).player.state.duration.inSeconds;
-    final position = controller(context).player.state.position.inSeconds;
+    final duration = controller(context).player.state.duration;
+    if (duration <= Duration.zero) return;
+    final start = _horizontalDragStartPosition ??
+        controller(context).player.state.position;
 
-    final seconds =
-        -(diff * duration / _theme(context).horizontalGestureSensitivity)
+    final milliseconds = -(diff *
+            duration.inMilliseconds /
+            _theme(context).horizontalGestureSensitivity)
             .round();
-    final relativePosition = position + seconds;
+    final target = (start + Duration(milliseconds: milliseconds)).clamp(
+      Duration.zero,
+      duration,
+    );
 
-    if (relativePosition <= duration && relativePosition >= 0) {
-      setState(() {
-        swipeDuration = seconds;
-        showSwipeDuration = true;
-        _seekBarDeltaValueNotifier.value = Duration(seconds: seconds);
-      });
-    }
+    setState(() {
+      _horizontalDragTarget = target;
+      swipeDuration = (target - start).inSeconds;
+      showSwipeDuration = true;
+      _seekBarPositionPreviewValueNotifier.value = target;
+    });
   }
 
-  void onHorizontalDragEnd() {
-    if (swipeDuration != 0) {
-      Duration newPosition = controller(context).player.state.position +
-          Duration(seconds: swipeDuration);
-      newPosition = newPosition.clamp(
-        Duration.zero,
-        controller(context).player.state.duration,
-      );
-      controller(context).player.seek(newPosition);
-    }
+  Future<void> onHorizontalDragEnd() async {
+    final player = controller(context).player;
+    final start = _horizontalDragStartPosition;
+    final target = _horizontalDragTarget;
+    final generation = ++_horizontalSeekGeneration;
 
     setState(() {
       _dragInitialDelta = Offset.zero;
+      _horizontalDragStartPosition = null;
+      _horizontalDragTarget = null;
       swipeDuration = 0;
       showSwipeDuration = false;
-      _seekBarDeltaValueNotifier.value = Duration.zero;
     });
+
+    if (start == null || target == null || target == start) {
+      if (generation == _horizontalSeekGeneration) {
+        _seekBarPositionPreviewValueNotifier.value = null;
+      }
+      return;
+    }
+
+    final applied = Completer<void>();
+    void accept(Duration position) {
+      if ((position - target).abs() <= const Duration(milliseconds: 750) &&
+          !applied.isCompleted) {
+        applied.complete();
+      }
+    }
+
+    final subscription = player.stream.position.listen(accept);
+    try {
+      await player.seek(target);
+      accept(player.state.position);
+      await applied.future.timeout(
+        const Duration(seconds: 4),
+        onTimeout: () {},
+      );
+    } catch (_) {
+      // A failed seek is reported by the player's normal error channel. The
+      // preview still has to be released so the bar can resume live updates.
+    } finally {
+      await subscription.cancel();
+      if (generation == _horizontalSeekGeneration) {
+        _seekBarPositionPreviewValueNotifier.value = null;
+      }
+    }
   }
 
   void onHorizontalDragCancel() {
     _horizontalDragWasMouse = false;
+    _horizontalSeekGeneration++;
     setState(() {
       _dragInitialDelta = Offset.zero;
+      _horizontalDragStartPosition = null;
+      _horizontalDragTarget = null;
       swipeDuration = 0;
       showSwipeDuration = false;
       _seekBarDeltaValueNotifier.value = Duration.zero;
+      _seekBarPositionPreviewValueNotifier.value = null;
     });
   }
 
@@ -906,7 +959,17 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
         // on the already-disposed instance (dispose's removeListener would
         // have run before this microtask got here).
         if (!mounted) return;
+        var firstVolumeEvent = true;
         _volumeController.addListener((value) {
+          // Some platforms replay the current system volume immediately when
+          // a listener is attached. It is initialization, not a user action,
+          // so do not flash the volume OSD as soon as the player opens. If the
+          // first event already differs (e.g. a hardware key was pressed while
+          // awaiting getVolume), it remains a real change and is shown.
+          if (firstVolumeEvent) {
+            firstVolumeEvent = false;
+            if ((value - _volumeValue).abs() < 0.0001) return;
+          }
           if (mounted && !_volumeInterceptEventStream) {
             setState(() {
               _volumeValue = value;
@@ -1253,6 +1316,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                           // preview; stale double-tap timers must
                                           // not clear it mid-gesture.
                                           _seekPreviewGeneration++;
+                                          onHorizontalDragStart();
                                         }
                                         if (_horizontalDragControlsWereVisible) {
                                           _timer?.cancel();
@@ -1264,7 +1328,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                     final ignored = _horizontalDragWasMouse;
                                     _horizontalDragWasMouse = false;
                                     if (ignored) return;
-                                    onHorizontalDragEnd();
+                                    unawaited(onHorizontalDragEnd());
                                         if (_horizontalDragControlsWereVisible &&
                                             visible) {
                                           _scheduleControlsHide();
@@ -1386,6 +1450,8 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                   if (_theme(context).displaySeekBar)
                                     MaterialSeekBar(
                                           delta: _seekBarDeltaValueNotifier,
+                                          previewPosition:
+                                              _seekBarPositionPreviewValueNotifier,
                                       onSeekStart: () {
                                         _timer?.cancel();
                                       },
@@ -1440,6 +1506,8 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                             if (_theme(context).displaySeekBar)
                               MaterialSeekBar(
                                 delta: _seekBarDeltaValueNotifier,
+                                previewPosition:
+                                    _seekBarPositionPreviewValueNotifier,
                               ),
                             Container(
                               height: _theme(context).buttonBarHeight,
@@ -1882,12 +1950,14 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
 /// Material design seek bar.
 class MaterialSeekBar extends StatefulWidget {
   final ValueNotifier<Duration>? delta;
+  final ValueNotifier<Duration?>? previewPosition;
   final VoidCallback? onSeekStart;
   final VoidCallback? onSeekEnd;
 
   const MaterialSeekBar({
     super.key,
     this.delta,
+    this.previewPosition,
     this.onSeekStart,
     this.onSeekEnd,
   });
@@ -1916,8 +1986,20 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
 
   void listener() {
     setState(() {
-      position = _previewPosition(controller(context).player.state.position);
+      position = _presentedPosition(controller(context).player.state.position);
     });
+  }
+
+  Duration _presentedPosition(Duration base) {
+    final absolutePreview = widget.previewPosition?.value;
+    if (absolutePreview != null) {
+      if (absolutePreview < Duration.zero) return Duration.zero;
+      if (duration > Duration.zero && absolutePreview > duration) {
+        return duration;
+      }
+      return absolutePreview;
+    }
+    return _previewPosition(base);
   }
 
   Duration _previewPosition(Duration base) {
@@ -1931,15 +2013,22 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
   void initState() {
     super.initState();
     widget.delta?.addListener(listener);
+    widget.previewPosition?.addListener(listener);
   }
 
   @override
   void didUpdateWidget(covariant MaterialSeekBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.delta == widget.delta) return;
-    oldWidget.delta?.removeListener(listener);
-    widget.delta?.addListener(listener);
-    listener();
+    if (oldWidget.delta != widget.delta) {
+      oldWidget.delta?.removeListener(listener);
+      widget.delta?.addListener(listener);
+      listener();
+    }
+    if (oldWidget.previewPosition != widget.previewPosition) {
+      oldWidget.previewPosition?.removeListener(listener);
+      widget.previewPosition?.addListener(listener);
+      listener();
+    }
   }
 
   @override
@@ -1955,20 +2044,20 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
           }),
           controller(context).player.stream.completed.listen((event) {
             setState(() {
-              position = _previewPosition(Duration.zero);
+              position = _presentedPosition(Duration.zero);
             });
           }),
           controller(context).player.stream.position.listen((event) {
             setState(() {
               if (!tapped) {
-                position = _previewPosition(event);
+                position = _presentedPosition(event);
               }
             });
           }),
           controller(context).player.stream.duration.listen((event) {
             setState(() {
               duration = event;
-              position = _previewPosition(
+              position = _presentedPosition(
                 controller(context).player.state.position,
               );
             });
@@ -1986,6 +2075,7 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
   @override
   void dispose() {
     widget.delta?.removeListener(listener);
+    widget.previewPosition?.removeListener(listener);
     for (final subscription in subscriptions) {
       subscription.cancel();
     }
@@ -2008,14 +2098,38 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
     });
   }
 
-  void onPointerUp() {
-    widget.onSeekEnd?.call();
+  Future<void> onPointerUp() async {
+    final target = duration * slider;
+    final player = controller(context).player;
     setState(() {
-      // Explicitly set the position to prevent the slider from jumping.
-      tapped = false;
-      position = duration * slider;
+      position = target;
     });
-    controller(context).player.seek(duration * slider);
+    final applied = Completer<void>();
+    void accept(Duration current) {
+      if ((current - target).abs() <= const Duration(milliseconds: 750) &&
+          !applied.isCompleted) {
+        applied.complete();
+      }
+    }
+    final subscription = player.stream.position.listen(accept);
+    try {
+      await player.seek(target);
+      accept(player.state.position);
+      await applied.future.timeout(
+        const Duration(seconds: 4),
+        onTimeout: () {},
+      );
+    } catch (_) {
+      // The player surfaces seek failures separately; always restore live UI.
+    } finally {
+      await subscription.cancel();
+      setState(() {
+        // Keep ignoring stale position events until the final seek is accepted.
+        tapped = false;
+        position = target;
+      });
+      widget.onSeekEnd?.call();
+    }
   }
 
   void onPanStart(DragStartDetails e, BoxConstraints constraints) {
@@ -2078,7 +2192,7 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
             child: Listener(
               onPointerMove: (e) => onPointerMove(e, constraints),
               onPointerDown: (e) => onPointerDown(),
-              onPointerUp: (e) => onPointerUp(),
+              onPointerUp: (e) => unawaited(onPointerUp()),
               child: Container(
                 color: Colors.transparent,
                 width: constraints.maxWidth,

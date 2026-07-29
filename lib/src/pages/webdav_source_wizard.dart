@@ -5,9 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
-import '../services/network_discovery.dart';
 import '../services/remote_path_selection.dart';
 import '../state/providers.dart';
+import '../widgets/remote_folder_selection_header.dart';
 
 class WebDavSourceWizardPage extends ConsumerStatefulWidget {
   const WebDavSourceWizardPage({super.key});
@@ -25,13 +25,13 @@ class _WebDavSourceWizardPageState
 
   int _step = 0;
   String _authMode = 'basic';
+  bool _allowInsecureTls = false;
   String _currentPath = '';
   String? _setupToken;
   bool _busy = false;
   bool _committed = false;
   String? _error;
   List<RemoteEntry> _entries = const [];
-  List<WebDavServerCandidate> _servers = const [];
   final Set<String> _selectedPaths = {};
 
   @override
@@ -46,14 +46,10 @@ class _WebDavSourceWizardPageState
     _address.text = credentials.baseUrl;
     _user.text = credentials.user;
     _password.text = credentials.password;
-    setState(() => _authMode = credentials.authMode);
-    await _discover();
-  }
-
-  Future<void> _discover() async {
-    final servers = await discoverWebDavServers();
-    if (!mounted) return;
-    setState(() => _servers = servers);
+    setState(() {
+      _authMode = credentials.authMode;
+      _allowInsecureTls = credentials.allowInsecureTls;
+    });
   }
 
   @override
@@ -119,6 +115,7 @@ class _WebDavSourceWizardPageState
         user: _authMode == 'anonymous' ? '' : _user.text,
         password: _authMode == 'anonymous' ? '' : _password.text,
         authMode: _authMode,
+        allowInsecureTls: baseUrl.startsWith('https://') && _allowInsecureTls,
       );
       final entries = await rust.webdavSetupListEntries(
         token: token,
@@ -184,6 +181,8 @@ class _WebDavSourceWizardPageState
         user: _authMode == 'anonymous' ? '' : _user.text,
         password: _authMode == 'anonymous' ? '' : _password.text,
         authMode: _authMode,
+        allowInsecureTls:
+            _address.text.startsWith('https://') && _allowInsecureTls,
       );
       await credentials.save();
       final existing = (await rust.listLibraryFolders())
@@ -265,13 +264,15 @@ class _WebDavSourceWizardPageState
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 760),
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    if (_error != null) _errorBanner(_error!),
-                    if (_step == 0) _credentialsStep() else _directoryStep(),
-                  ],
-                ),
+                child: _step == 0
+                    ? ListView(
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          if (_error != null) _errorBanner(_error!),
+                          _credentialsStep(),
+                        ],
+                      )
+                    : _directoryStep(),
               ),
             ),
           ),
@@ -287,32 +288,20 @@ class _WebDavSourceWizardPageState
         controller: _address,
         keyboardType: TextInputType.url,
         autocorrect: false,
+        onChanged: (value) {
+          if (!value.trim().toLowerCase().startsWith('https://') &&
+              _allowInsecureTls) {
+            setState(() => _allowInsecureTls = false);
+          } else {
+            setState(() {});
+          }
+        },
         decoration: const InputDecoration(
           labelText: 'WebDAV 地址',
           hintText: 'https://nas.example.com/dav/',
           prefixIcon: Icon(Icons.cloud_outlined),
         ),
       ),
-      const SizedBox(height: 8),
-      Row(
-        children: [
-          Text('局域网中的 WebDAV', style: Theme.of(context).textTheme.titleMedium),
-          const Spacer(),
-          IconButton(
-            tooltip: '重新扫描',
-            onPressed: _busy ? null : _discover,
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
-      ),
-      for (final server in _servers)
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.dns_outlined),
-          title: Text(server.name),
-          subtitle: Text('${server.url} · ${server.source}'),
-          onTap: () => setState(() => _address.text = server.url),
-        ),
       const SizedBox(height: 12),
       DropdownButtonFormField<String>(
         initialValue: _authMode,
@@ -347,9 +336,32 @@ class _WebDavSourceWizardPageState
           ),
         ),
       ],
+      if (_address.text.trim().toLowerCase().startsWith('https://')) ...[
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          value: _allowInsecureTls,
+          title: const Text('忽略 HTTPS 证书错误'),
+          subtitle: Text(
+            _allowInsecureTls
+                ? '已降低连接安全性：会接受自签名、过期或名称不匹配的证书，仅限可信局域网。'
+                : '仅在可信 NAS 使用自签名证书且严格连接失败时开启。',
+          ),
+          secondary: Icon(
+            _allowInsecureTls
+                ? Icons.warning_amber_outlined
+                : Icons.verified_user_outlined,
+          ),
+          onChanged: _busy
+              ? null
+              : (value) => setState(() => _allowInsecureTls = value),
+        ),
+      ],
       const SizedBox(height: 12),
       Text(
-        '凭证只保存在当前设备；HTTPS 会严格校验证书。当前版本支持一组 WebDAV 根地址。',
+        _allowInsecureTls
+            ? '凭证只保存在当前设备；当前 HTTPS 连接不会校验证书。当前版本支持一组 WebDAV 根地址。'
+            : '凭证只保存在当前设备；HTTPS 会严格校验证书。当前版本支持一组 WebDAV 根地址。',
         style: Theme.of(context).textTheme.bodySmall,
       ),
       const SizedBox(height: 20),
@@ -367,67 +379,80 @@ class _WebDavSourceWizardPageState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Wrap(spacing: 4, runSpacing: 4, children: _breadcrumbs()),
-        const SizedBox(height: 8),
-        CheckboxListTile(
-          contentPadding: EdgeInsets.zero,
-          value: _selectedPaths.contains(_currentPath),
-          title: Text(_currentPath.isEmpty ? '选择整个 WebDAV 根目录' : '选择当前文件夹'),
-          subtitle: Text(_currentPath.isEmpty ? '/' : _currentPath),
-          onChanged: (selected) => setState(() {
-            selected == true
-                ? _selectedPaths.add(_currentPath)
-                : _selectedPaths.remove(_currentPath);
-          }),
-        ),
-        const Divider(),
-        if (directories.isEmpty && files.isEmpty)
-          const ListTile(
-            leading: Icon(Icons.folder_off_outlined),
-            title: Text('当前目录为空'),
-          ),
-        for (final directory in directories)
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: Checkbox(
-              value: _selectedPaths.contains(directory.path),
-              onChanged: (selected) => setState(() {
-                selected == true
-                    ? _selectedPaths.add(directory.path)
-                    : _selectedPaths.remove(directory.path);
-              }),
-            ),
-            title: Text(directory.name),
-            subtitle: Text(directory.path),
-            trailing: IconButton(
-              tooltip: '进入文件夹',
-              icon: const Icon(Icons.chevron_right),
-              onPressed: _busy ? null : () => _browse(directory.path),
-            ),
-            onTap: _busy ? null : () => _browse(directory.path),
-          ),
-        for (final file in files.take(40))
-          ListTile(
-            dense: true,
-            contentPadding: const EdgeInsets.only(left: 16),
-            leading: const Icon(Icons.insert_drive_file_outlined),
-            title: Text(
-              file.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        if (files.length > 40)
+        if (_error != null)
           Padding(
-            padding: const EdgeInsets.only(left: 16, top: 4),
-            child: Text('另有 ${files.length - 40} 个文件未展开显示'),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            child: _errorBanner(_error!),
           ),
-        const SizedBox(height: 20),
-        FilledButton.icon(
-          onPressed: _busy || _selectedPaths.isEmpty ? null : _finish,
-          icon: const Icon(Icons.add),
-          label: Text(
-            '添加 ${compactSelectedRemotePaths(_selectedPaths).length} 个文件夹',
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: RemoteFolderSelectionHeader(
+            breadcrumbs: _breadcrumbs(),
+            selectedCount: compactSelectedRemotePaths(_selectedPaths).length,
+            onConfirm: _busy || _selectedPaths.isEmpty ? null : _finish,
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            children: [
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _selectedPaths.contains(_currentPath),
+                title: Text(
+                  _currentPath.isEmpty ? '选择整个 WebDAV 根目录' : '选择当前文件夹',
+                ),
+                subtitle: Text(_currentPath.isEmpty ? '/' : _currentPath),
+                onChanged: (selected) => setState(() {
+                  selected == true
+                      ? _selectedPaths.add(_currentPath)
+                      : _selectedPaths.remove(_currentPath);
+                }),
+              ),
+              const Divider(),
+              if (directories.isEmpty && files.isEmpty)
+                const ListTile(
+                  leading: Icon(Icons.folder_off_outlined),
+                  title: Text('当前目录为空'),
+                ),
+              for (final directory in directories)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Checkbox(
+                    value: _selectedPaths.contains(directory.path),
+                    onChanged: (selected) => setState(() {
+                      selected == true
+                          ? _selectedPaths.add(directory.path)
+                          : _selectedPaths.remove(directory.path);
+                    }),
+                  ),
+                  title: Text(directory.name),
+                  subtitle: Text(directory.path),
+                  trailing: IconButton(
+                    tooltip: '进入文件夹',
+                    icon: const Icon(Icons.chevron_right),
+                    onPressed: _busy ? null : () => _browse(directory.path),
+                  ),
+                  onTap: _busy ? null : () => _browse(directory.path),
+                ),
+              for (final file in files.take(40))
+                ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.only(left: 16),
+                  leading: const Icon(Icons.insert_drive_file_outlined),
+                  title: Text(
+                    file.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              if (files.length > 40)
+                Padding(
+                  padding: const EdgeInsets.only(left: 16, top: 4),
+                  child: Text('另有 ${files.length - 40} 个文件未展开显示'),
+                ),
+            ],
           ),
         ),
       ],

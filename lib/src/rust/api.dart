@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `configured_download_directory`, `ensure_anime_for_subject`, `finish_scan`, `is_nonempty_file`, `now_secs`, `persist_match`, `prune_prefixes_for`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `bind_anime_during_scan`, `binding_survivor`, `configured_download_directory`, `ensure_anime_for_subject_during_scan`, `ensure_anime_for_subject`, `finish_scan_session`, `is_nonempty_file`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -65,6 +65,9 @@ Future<void> removeLibraryFolder({required PlatformInt64 id}) =>
 Future<List<LibraryFolder>> listLibraryFolders() =>
     RustLib.instance.api.crateApiListLibraryFolders();
 
+Future<void> reorderLibraryFolders({required Int64List ids}) =>
+    RustLib.instance.api.crateApiReorderLibraryFolders(ids: ids);
+
 Future<List<Anime>> listAnime() => RustLib.instance.api.crateApiListAnime();
 
 Future<Anime?> getAnime({required PlatformInt64 id}) =>
@@ -72,6 +75,16 @@ Future<Anime?> getAnime({required PlatformInt64 id}) =>
 
 Future<List<Episode>> listEpisodes({required PlatformInt64 animeId}) =>
     RustLib.instance.api.crateApiListEpisodes(animeId: animeId);
+
+Future<PlatformInt64> duplicateCheckBegin() =>
+    RustLib.instance.api.crateApiDuplicateCheckBegin();
+
+Stream<DuplicateCheckProgress> duplicateCheckRun({
+  required PlatformInt64 token,
+}) => RustLib.instance.api.crateApiDuplicateCheckRun(token: token);
+
+Future<void> duplicateCheckCancel({required PlatformInt64 token}) =>
+    RustLib.instance.api.crateApiDuplicateCheckCancel(token: token);
 
 Future<void> updateProgress({
   required PlatformInt64 episodeId,
@@ -89,6 +102,26 @@ Future<void> setWatched({
 }) => RustLib.instance.api.crateApiSetWatched(
   episodeId: episodeId,
   watched: watched,
+);
+
+Future<void> scanSessionBegin() =>
+    RustLib.instance.api.crateApiScanSessionBegin();
+
+Future<void> scanSessionCancel() =>
+    RustLib.instance.api.crateApiScanSessionCancel();
+
+Future<bool> scanSessionIsCancelled() =>
+    RustLib.instance.api.crateApiScanSessionIsCancelled();
+
+Future<void> scanSessionClose() =>
+    RustLib.instance.api.crateApiScanSessionClose();
+
+Future<ScanFileBatch> enumerateLocalFolder({
+  required PlatformInt64 folderId,
+  required bool incremental,
+}) => RustLib.instance.api.crateApiEnumerateLocalFolder(
+  folderId: folderId,
+  incremental: incremental,
 );
 
 /// Scan all library folders, group files into anime, then auto-match each new
@@ -114,6 +147,13 @@ Stream<ScanProgress> scanFilesAndMatch({
   sourceType: sourceType,
 );
 
+Stream<ScanProgress> finishScanAndMatch() =>
+    RustLib.instance.api.crateApiFinishScanAndMatch();
+
+Future<PlatformInt64> claimExistingFolderFiles({
+  required PlatformInt64 folderId,
+}) => RustLib.instance.api.crateApiClaimExistingFolderFiles(folderId: folderId);
+
 /// Test-connect an SMB share and cache the credentials. Returns Err with a
 /// human-readable message on failure so the UI can show it.
 Future<void> smbConnect({
@@ -128,12 +168,13 @@ Future<void> smbConnect({
   password: password,
 );
 
-/// Discover Windows file servers through bounded WS-Discovery multicast. This
-/// does not scan addresses, authenticate, or alter the active SMB session.
+/// Discover Windows/NAS file servers through Bonjour's companion discovery
+/// layer, WS-Discovery, and a bounded local TCP/445 fallback. This never
+/// authenticates or alters the active SMB session.
 Future<List<DiscoveredServer>> discoverWindowsFileServers() =>
     RustLib.instance.api.crateApiDiscoverWindowsFileServers();
 
-Future<List<SmbShareInfo>> smbListShares({
+Future<SmbShareListResult> smbListShares({
   required String host,
   required String user,
   required String password,
@@ -232,6 +273,11 @@ Future<void> releaseNetworkUrl({required String url}) =>
 /// and shows the delta as transfer speed in the playback-info panel.
 Future<BigInt> smbProxyStats() => RustLib.instance.api.crateApiSmbProxyStats();
 
+/// Cumulative bytes streamed by the WebDAV loopback playback proxy. Downloads
+/// use a separate transfer path and are not included.
+Future<BigInt> webdavProxyStats() =>
+    RustLib.instance.api.crateApiWebdavProxyStats();
+
 /// Download an SMB file to `dest_dir`, streaming progress. On success the
 /// download is recorded so playback prefers the local copy from then on.
 Stream<DownloadProgress> smbDownload({
@@ -250,11 +296,13 @@ Future<void> webdavSetCredentials({
   required String user,
   required String password,
   required String authMode,
+  required bool allowInsecureTls,
 }) => RustLib.instance.api.crateApiWebdavSetCredentials(
   baseUrl: baseUrl,
   user: user,
   password: password,
   authMode: authMode,
+  allowInsecureTls: allowInsecureTls,
 );
 
 Future<List<RemoteEntry>> webdavTestConnection() =>
@@ -265,11 +313,13 @@ Future<String> webdavSetupBegin({
   required String user,
   required String password,
   required String authMode,
+  required bool allowInsecureTls,
 }) => RustLib.instance.api.crateApiWebdavSetupBegin(
   baseUrl: baseUrl,
   user: user,
   password: password,
   authMode: authMode,
+  allowInsecureTls: allowInsecureTls,
 );
 
 Future<List<RemoteEntry>> webdavSetupListEntries({
@@ -327,8 +377,9 @@ Future<List<DownloadDetail>> listDownloadsDetailed() =>
 Future<void> removeDownload({required PlatformInt64 id}) =>
     RustLib.instance.api.crateApiRemoveDownload(id: id);
 
-/// The local copy of an SMB file if it was downloaded and still exists on disk
-/// (a stale record whose file vanished is cleaned up and returns None).
+/// The verified local copy recorded for this exact SMB/WebDAV URI. Exact
+/// records retain their stale path long enough for Apple app-container rebasing
+/// before returning `None`.
 Future<String?> downloadedLocalPath({required String smbUri}) =>
     RustLib.instance.api.crateApiDownloadedLocalPath(smbUri: smbUri);
 
@@ -394,12 +445,6 @@ Future<void> removeBlacklist({required PlatformInt64 id}) =>
 Future<List<BangumiSubject>> searchBangumi({required String keyword}) =>
     RustLib.instance.api.crateApiSearchBangumi(keyword: keyword);
 
-/// Bind an anime to a chosen Bangumi subject (manual correction). Returns the
-/// id of the entry that survives — a re-match can point this entry at a subject
-/// another entry already holds, and the merge below folds the smaller into the
-/// larger, DELETING one of them. The detail page navigates to the returned id
-/// so it never strands the user on a now-deleted (null) entry — the old bug
-/// behind the bare "未找到" screen.
 Future<PlatformInt64> bindAnime({
   required PlatformInt64 animeId,
   required PlatformInt64 bangumiId,

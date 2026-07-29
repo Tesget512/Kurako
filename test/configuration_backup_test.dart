@@ -33,6 +33,7 @@ void main() {
       'webdav_user': 'dav-user',
       'webdav_password': 'dav-password',
       'webdav_auth_mode': 'basic',
+      'webdav_allow_insecure_tls': true,
       'download_dir': '/private/downloads',
       'external_player_path': '/private/player',
       'sub_pref_42': 7,
@@ -65,6 +66,7 @@ void main() {
       expect(webdav['baseUrl'], 'https://dav.example.test/anime/');
       expect(webdav['user'], 'dav-user');
       expect(webdav['password'], 'dav-password');
+      expect(webdav['allowInsecureTls'], isTrue);
       expect(settings, isNot(contains('download_dir')));
       expect(settings, isNot(contains('external_player_path')));
       expect(settings, isNot(contains('sub_pref_42')));
@@ -73,32 +75,37 @@ void main() {
     },
   );
 
-  test('validated v3 document restores settings and credentials', () async {
-    final source = await ConfigurationBackupDocument.exportJson();
-    final document = ConfigurationBackupDocument.parse(source);
-    final prefs = await SharedPreferences.getInstance();
+  test(
+    'validated current document restores settings and credentials',
+    () async {
+      final source = await ConfigurationBackupDocument.exportJson();
+      final document = ConfigurationBackupDocument.parse(source);
+      final prefs = await SharedPreferences.getInstance();
 
-    await prefs.setInt('library_sort', 0);
-    await prefs.setString('decode_mode', 'auto');
-    await prefs.setString('bangumi_token', 'other-token');
-    await prefs.setString('smb_password', 'other-password');
-    await prefs.setString('webdav_password', 'other-dav-password');
-    await document.apply();
+      await prefs.setInt('library_sort', 0);
+      await prefs.setString('decode_mode', 'auto');
+      await prefs.setString('bangumi_token', 'other-token');
+      await prefs.setString('smb_password', 'other-password');
+      await prefs.setString('webdav_password', 'other-dav-password');
+      await prefs.setBool('webdav_allow_insecure_tls', false);
+      await document.apply();
 
-    expect(prefs.getInt('library_sort'), 3);
-    expect(prefs.getString('decode_mode'), 'sw');
-    expect(prefs.getString('bangumi_token'), 'secret-access-token');
-    expect(prefs.getString('bangumi_refresh_token'), 'secret-refresh-token');
-    expect(prefs.getInt('bangumi_token_expires_at'), 1782604800);
-    expect(prefs.getString('smb_host'), '192.0.2.1');
-    expect(prefs.getString('smb_share'), 'Anime');
-    expect(prefs.getString('smb_password'), 'private-password');
-    expect(
-      prefs.getString('webdav_base_url'),
-      'https://dav.example.test/anime/',
-    );
-    expect(prefs.getString('webdav_password'), 'dav-password');
-  });
+      expect(prefs.getInt('library_sort'), 3);
+      expect(prefs.getString('decode_mode'), 'sw');
+      expect(prefs.getString('bangumi_token'), 'secret-access-token');
+      expect(prefs.getString('bangumi_refresh_token'), 'secret-refresh-token');
+      expect(prefs.getInt('bangumi_token_expires_at'), 1782604800);
+      expect(prefs.getString('smb_host'), '192.0.2.1');
+      expect(prefs.getString('smb_share'), 'Anime');
+      expect(prefs.getString('smb_password'), 'private-password');
+      expect(
+        prefs.getString('webdav_base_url'),
+        'https://dav.example.test/anime/',
+      );
+      expect(prefs.getString('webdav_password'), 'dav-password');
+      expect(prefs.getBool('webdav_allow_insecure_tls'), isTrue);
+    },
+  );
 
   test('v2 document imports account and SMB but preserves WebDAV', () async {
     final source = await ConfigurationBackupDocument.exportJson();

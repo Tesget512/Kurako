@@ -12,6 +12,7 @@ import '../state/providers.dart';
 import '../widgets/window_caption.dart';
 import 'blacklist_page.dart';
 import 'downloads_page.dart';
+import 'duplicate_check_page.dart';
 
 class MaintenancePage extends ConsumerStatefulWidget {
   const MaintenancePage({super.key});
@@ -66,6 +67,18 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
         ),
         const Divider(height: 32),
         _section(context, '内容管理'),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.content_copy_outlined),
+          title: const Text('疑似重复检查'),
+          subtitle: const Text('独立检查已扫描视频，不改变扫描、匹配或文件'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: _maintenanceBusy
+              ? null
+              : () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const DuplicateCheckPage()),
+                ),
+        ),
         ListTile(
           key: const ValueKey('maintenance-blacklist'),
           contentPadding: EdgeInsets.zero,
@@ -309,6 +322,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             user: document.webDavUser,
             password: document.webDavPassword,
             authMode: document.webDavAuthMode,
+            allowInsecureTls: document.webDavAllowInsecureTls,
           );
         } catch (error) {
           runtimeSyncErrors.add(error);
@@ -465,7 +479,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
           failures.add(error);
         }
       }
-      ref.invalidate(downloadedRemoteUrisProvider);
+      ref.invalidate(episodesProvider);
       _snack(
         failures.isEmpty
             ? '已删除 $removed 个本地视频及其字幕'

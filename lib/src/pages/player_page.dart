@@ -19,6 +19,7 @@ import '../rust/models.dart';
 import '../services/anime4k_shader_assets.dart';
 import '../services/ios_platform.dart';
 import '../services/media_source.dart';
+import '../services/playback_metadata.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
 
@@ -2201,14 +2202,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   // Episode picker moved to the right-side endDrawer (_episodeDrawer); opened
   // via the playlist button / overflow menu.
 
-  // ---- Playback info (video params / decoder / SMB transfer) ----
+  // ---- Playback info (video params / decoder / network transfer) ----
 
   Widget _infoPanel() {
-    final isSmb = _handle != null && _ep.sourceType == 'smb';
+    final proxySourceType =
+        _handle != null &&
+            (_ep.sourceType == 'smb' || _ep.sourceType == 'webdav') &&
+            _handle!.uri.startsWith('http://127.0.0.1')
+        ? _ep.sourceType
+        : null;
     return _PlaybackInfoSheet(
       player: _player,
       episode: _ep,
-      smbActive: isSmb && _handle!.uri.startsWith('http://127.0.0.1'),
+      proxySourceType: proxySourceType,
+      transportLabel: playbackTransportLabel(_ep, _handle),
     );
   }
 
@@ -2318,16 +2325,18 @@ class _PlayerPlayPauseButtonState extends State<_PlayerPlayPauseButton>
   );
 }
 
-/// Live playback-info panel: video/audio parameters, decoder state, and — for
-/// SMB streams — proxy transfer speed. Refreshes once a second while open.
+/// Live playback-info panel: video/audio parameters, decoder state, and network
+/// proxy transfer speed. Refreshes once a second while open.
 class _PlaybackInfoSheet extends StatefulWidget {
   final Player player;
   final Episode episode;
-  final bool smbActive;
+  final String? proxySourceType;
+  final String transportLabel;
   const _PlaybackInfoSheet({
     required this.player,
     required this.episode,
-    required this.smbActive,
+    required this.proxySourceType,
+    required this.transportLabel,
   });
 
   @override
@@ -2337,10 +2346,12 @@ class _PlaybackInfoSheet extends StatefulWidget {
 class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
   Timer? _timer;
   String _hwdec = '…';
-  // Audio bitrate fallback: state.audioBitrate is null for some containers
-  // (e.g. FLAC/lossless in MKV); query mpv's audio-bitrate property instead.
   double? _audioBitrateProp;
-  // SMB proxy counters: previous sample and derived speed.
+  double? _videoBitrateProp;
+  String? _containerFormat;
+  String? _videoCodecProp;
+  String? _audioCodecProp;
+  // Network proxy counters: previous sample and derived speed.
   BigInt? _lastBytes;
   double _speedBps = 0;
   BigInt _totalBytes = BigInt.zero;
@@ -2361,19 +2372,18 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
               as String?;
       if (hw != null && hw.isNotEmpty) _hwdec = hw;
     } catch (_) {}
-    // Fallback bitrate when state.audioBitrate is unset for the container.
-    try {
-      final raw =
-          await (widget.player.platform as dynamic)?.getProperty(
-                'audio-bitrate',
-              )
-              as String?;
-      final v = raw == null ? null : double.tryParse(raw);
-      if (v != null && v > 0) _audioBitrateProp = v;
-    } catch (_) {}
-    if (widget.smbActive) {
+    _audioBitrateProp = await _numericProperty('audio-bitrate');
+    _videoBitrateProp = await _numericProperty('video-bitrate');
+    _containerFormat = await _stringProperty('file-format');
+    _videoCodecProp = await _stringProperty('video-codec');
+    _audioCodecProp = await _stringProperty('audio-codec');
+    if (widget.proxySourceType != null) {
       try {
-        final bytes = await rust.smbProxyStats();
+        final bytes = switch (widget.proxySourceType) {
+          'smb' => await rust.smbProxyStats(),
+          'webdav' => await rust.webdavProxyStats(),
+          _ => BigInt.zero,
+        };
         if (_lastBytes != null) {
           _speedBps = (bytes - _lastBytes!).toDouble();
         }
@@ -2382,6 +2392,22 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
       } catch (_) {}
     }
     if (mounted) setState(() {});
+  }
+
+  Future<String?> _stringProperty(String name) async {
+    try {
+      final value =
+          await (widget.player.platform as dynamic)?.getProperty(name)
+              as String?;
+      return nonEmptyMediaProperty(value);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<double?> _numericProperty(String name) async {
+    final raw = await _stringProperty(name);
+    return raw == null ? null : double.tryParse(raw);
   }
 
   @override
@@ -2410,16 +2436,37 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
     final vp = widget.player.state.videoParams;
     final ap = widget.player.state.audioParams;
     final tracks = widget.player.state.track;
-    final videoCodec = widget.player.state.tracks.video
+    final videoTrack = widget.player.state.tracks.video
         .where((t) => t.id == tracks.video.id)
-        .map((t) => t.codec)
         .firstOrNull;
-    final audioBitrate = widget.player.state.audioBitrate ?? _audioBitrateProp;
+    final audioTrack = widget.player.state.tracks.audio
+        .where((t) => t.id == tracks.audio.id)
+        .firstOrNull;
+    final videoCodec =
+        nonEmptyMediaProperty(videoTrack?.codec) ?? _videoCodecProp;
+    final audioCodec =
+        nonEmptyMediaProperty(audioTrack?.codec) ?? _audioCodecProp;
+    final videoBitrate = firstReliableMediaBitrate([
+      videoTrack?.bitrate,
+      _videoBitrateProp,
+    ]);
+    final audioBitrate = firstReliableMediaBitrate([
+      audioTrack?.bitrate,
+      widget.player.state.audioBitrate,
+      _audioBitrateProp,
+    ]);
 
     final hwActive = vp.hwPixelformat != null && vp.hwPixelformat!.isNotEmpty;
     final rows = <(String, String)>[
+      ('读取方式', widget.transportLabel),
+      if (_containerFormat != null) ('封装格式', _containerFormat!),
       if (vp.w != null && vp.h != null) ('分辨率', '${vp.w} × ${vp.h}'),
       if (videoCodec != null && videoCodec.isNotEmpty) ('视频编码', videoCodec),
+      if (videoTrack?.decoder case final decoder? when decoder.isNotEmpty)
+        ('视频解码器', decoder),
+      ('视频码率', formatMediaBitrate(videoBitrate)),
+      if (videoTrack?.fps case final fps? when fps > 0)
+        ('帧率', '${fps.toStringAsFixed(3)} FPS'),
       ('解码方式', _hwdec == 'no' || _hwdec == '' ? '软件解码' : '硬件解码（$_hwdec）'),
       if (vp.pixelformat != null) ('像素格式', vp.pixelformat!),
       if (hwActive) ('硬解像素格式', vp.hwPixelformat!),
@@ -2427,14 +2474,22 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
       if (vp.colormatrix != null) ('色彩矩阵', vp.colormatrix!),
       if (vp.primaries != null) ('色域', vp.primaries!),
       if (vp.gamma != null) ('传递函数', vp.gamma!),
+      if (audioCodec != null && audioCodec.isNotEmpty) ('音频编码', audioCodec),
+      if (audioTrack?.decoder case final decoder? when decoder.isNotEmpty)
+        ('音频解码器', decoder),
       if (ap.format != null) ('音频格式', ap.format!),
       if (ap.sampleRate != null) ('采样率', '${ap.sampleRate} Hz'),
       if (ap.channels != null) ('声道', ap.channels!),
-      if (audioBitrate != null && audioBitrate > 0)
-        ('音频码率', '${(audioBitrate / 1000).round()} kbps'),
-      if (widget.smbActive) ...[
-        ('SMB 传输速度', _fmtBytes(_speedBps)),
-        ('SMB 累计流量', _fmtTotal(_totalBytes)),
+      ('音频码率', formatMediaBitrate(audioBitrate)),
+      if (widget.proxySourceType case final sourceType?) ...[
+        (
+          '${sourceType == 'webdav' ? 'WebDAV' : 'SMB'} 传输速度',
+          _fmtBytes(_speedBps),
+        ),
+        (
+          '${sourceType == 'webdav' ? 'WebDAV' : 'SMB'} 累计流量',
+          _fmtTotal(_totalBytes),
+        ),
       ],
     ];
 

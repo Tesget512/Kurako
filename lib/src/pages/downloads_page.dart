@@ -10,9 +10,9 @@ import '../widgets/cover_image.dart';
 import '../widgets/window_caption.dart';
 import 'player_page.dart';
 
-/// Management page for SMB downloads. Downloads are grouped by anime (like the
-/// library → detail view): each anime shows its cover, and its episodes list as
-/// expandable rows. In-flight downloads show a live progress bar (from the
+/// Management page for network downloads. Downloads are grouped by anime (like
+/// the library → detail view): each anime shows its cover, and its episodes list
+/// as expandable rows. In-flight downloads show a live progress bar (from the
 /// background [downloadManagerProvider]); completed ones show size + delete.
 class DownloadsPage extends ConsumerStatefulWidget {
   const DownloadsPage({super.key});
@@ -46,7 +46,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除本地副本'),
-        content: Text('删除「${e.fileName}」的本地文件？\n之后播放该视频将恢复走 SMB 网络。'),
+        content: Text('删除「${e.fileName}」的本地文件？\n之后播放该视频将恢复使用原网络来源。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -67,6 +67,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
     });
     try {
       await rust.removeDownload(id: e.id);
+      ref.invalidate(episodesProvider);
       if (!mounted) return;
       _reload();
       ScaffoldMessenger.of(
@@ -125,6 +126,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
           lastPositionMs: 0,
           durationMs: 0,
           sourceType: 'local',
+          isDownloaded: false,
         ),
     ];
     await Navigator.of(context).push(

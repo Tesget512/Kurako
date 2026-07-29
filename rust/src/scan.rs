@@ -22,6 +22,7 @@ fn title_strength(s: &str) -> usize {
 pub struct FoundFile {
     pub path: String,
     pub file_name: String,
+    pub file_size: i64,
     pub parsed: ParsedName,
 }
 
@@ -40,18 +41,22 @@ pub struct AnimeGroup {
 pub struct ScannedFile {
     pub uri: String,
     pub file_name: String,
+    pub file_size: i64,
     pub relative_parent: String,
 }
 
 /// Recursively collect every video file under `root`.
-pub fn scan_folder(root: &str) -> Vec<(String, String, String)> {
-    // returns (full_path, file_name, parent_dir)
+pub fn scan_folder(root: &str) -> Vec<(String, String, String, i64)> {
+    // returns (full_path, file_name, parent_dir, file_size)
     let mut out = Vec::new();
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        if crate::scan_control::is_cancelled() {
+            break;
+        }
         if !entry.file_type().is_file() {
             continue;
         }
@@ -64,10 +69,15 @@ pub fn scan_folder(root: &str) -> Vec<(String, String, String)> {
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
+        let file_size = entry
+            .metadata()
+            .map(|metadata| metadata.len() as i64)
+            .unwrap_or(0);
         out.push((
             entry.path().to_string_lossy().to_string(),
             file_name,
             parent,
+            file_size,
         ));
     }
     out
@@ -83,6 +93,9 @@ pub fn folder_max_mtime(root: &str) -> i64 {
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        if crate::scan_control::is_cancelled() {
+            break;
+        }
         if let Ok(meta) = entry.metadata() {
             if let Ok(modified) = meta.modified() {
                 if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
@@ -226,13 +239,20 @@ fn strip_special_suffix(name: &str) -> Option<String> {
 /// title is derived from the (non-generic) folder name. Only when the folder
 /// name yields nothing usable do we fall back to per-file parsing.
 pub fn group_library(library_root: &str) -> Vec<AnimeGroup> {
+    group_files(enumerate_library(library_root))
+}
+
+/// Enumerate one local root into the same portable shape used by SAF, SMB and
+/// WebDAV. Keeping this separate lets Flutter process every source in one
+/// explicit priority order before recognition and matching.
+pub fn enumerate_library(library_root: &str) -> Vec<ScannedFile> {
     let files = scan_folder(library_root);
     // Convert absolute paths into ScannedFile with a relative parent path, so
     // the grouping logic is shared with the SAF (Android) path.
     let root = Path::new(library_root);
-    let scanned: Vec<ScannedFile> = files
+    files
         .into_iter()
-        .map(|(path, name, parent)| {
+        .map(|(path, name, parent, file_size)| {
             let rel = Path::new(&parent)
                 .strip_prefix(root)
                 .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -240,11 +260,11 @@ pub fn group_library(library_root: &str) -> Vec<AnimeGroup> {
             ScannedFile {
                 uri: path,
                 file_name: name,
+                file_size,
                 relative_parent: rel,
             }
         })
-        .collect();
-    group_files(scanned)
+        .collect()
 }
 
 /// Group a list of already-discovered files into anime. Shared by the desktop
@@ -253,17 +273,20 @@ pub fn group_library(library_root: &str) -> Vec<AnimeGroup> {
 /// ("" = root), using "/" separators.
 pub fn group_files(files: Vec<ScannedFile>) -> Vec<AnimeGroup> {
     // Bucket files by their (relative) parent directory.
-    let mut by_dir: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut by_dir: BTreeMap<String, Vec<(String, String, i64)>> = BTreeMap::new();
     for f in files {
         by_dir
             .entry(f.relative_parent)
             .or_default()
-            .push((f.uri, f.file_name));
+            .push((f.uri, f.file_name, f.file_size));
     }
 
     let mut groups: BTreeMap<String, AnimeGroup> = BTreeMap::new();
 
     for (dir, entries) in by_dir {
+        if crate::scan_control::is_cancelled() {
+            break;
+        }
         // Root files (empty relative parent) have no folder title.
         let folder_parsed = if dir.is_empty() {
             None
@@ -271,7 +294,10 @@ pub fn group_files(files: Vec<ScannedFile>) -> Vec<AnimeGroup> {
             folder_title(&dir)
         };
 
-        for (path, name) in entries {
+        for (path, name, file_size) in entries {
+            if crate::scan_control::is_cancelled() {
+                break;
+            }
             let file_parsed = parse_filename(&name);
 
             // Decide the title. Release groups put the real anime name in the
@@ -315,6 +341,7 @@ pub fn group_files(files: Vec<ScannedFile>) -> Vec<AnimeGroup> {
             entry.files.push(FoundFile {
                 path,
                 file_name: name,
+                file_size,
                 parsed: file_parsed,
             });
         }

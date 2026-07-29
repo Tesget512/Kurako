@@ -50,7 +50,12 @@ class LibraryPage extends ConsumerWidget {
                 case 'full':
                   _startScan(context, ref, incremental: false);
                 case 'clear':
-                  _startScan(context, ref, incremental: false, clearFirst: true);
+                  _startScan(
+                    context,
+                    ref,
+                    incremental: false,
+                    clearFirst: true,
+                  );
               }
             },
             itemBuilder: (context) => const [
@@ -106,8 +111,13 @@ class LibraryPage extends ConsumerWidget {
     );
   }
 
-  Widget _sortMenu(BuildContext context, WidgetRef ref, LibrarySort sort,
-      bool grouping, bool pinCollected) {
+  Widget _sortMenu(
+    BuildContext context,
+    WidgetRef ref,
+    LibrarySort sort,
+    bool grouping,
+    bool pinCollected,
+  ) {
     return PopupMenuButton<String>(
       tooltip: '排序 / 分组',
       icon: const Icon(Icons.sort),
@@ -117,8 +127,9 @@ class LibraryPage extends ConsumerWidget {
         } else if (v == '__pin__') {
           ref.read(pinCollectedProvider.notifier).toggle();
         } else {
-          ref.read(librarySortProvider.notifier).set(
-              LibrarySort.values.firstWhere((e) => e.name == v));
+          ref
+              .read(librarySortProvider.notifier)
+              .set(LibrarySort.values.firstWhere((e) => e.name == v));
         }
       },
       itemBuilder: (context) => [
@@ -158,7 +169,10 @@ class LibraryPage extends ConsumerWidget {
   }
 
   Widget _groupedGrid(
-      BuildContext context, WidgetRef ref, List<AnimeSection> sections) {
+    BuildContext context,
+    WidgetRef ref,
+    List<AnimeSection> sections,
+  ) {
     return CustomScrollView(
       slivers: [
         for (final section in sections) ...[
@@ -170,8 +184,8 @@ class LibraryPage extends ConsumerWidget {
                   Text(
                     section.label,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   const SizedBox(width: 8),
                   Text(
@@ -214,17 +228,23 @@ class LibraryPage extends ConsumerWidget {
         anime: anime,
         onTap: () {
           Navigator.of(context).push(
-            MaterialPageRoute(builder: (_) => DetailPage(animeId: anime.id)),
+            MaterialPageRoute(
+              builder: (_) =>
+                  DetailPage(animeId: anime.id, initialAnime: anime),
+            ),
           );
         },
       ),
     );
   }
 
-  Future<void> _showBlockMenu(BuildContext context, WidgetRef ref, Anime anime,
-      Offset position) async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox;
+  Future<void> _showBlockMenu(
+    BuildContext context,
+    WidgetRef ref,
+    Anime anime,
+    Offset position,
+  ) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final choice = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -263,22 +283,26 @@ class LibraryPage extends ConsumerWidget {
       ref.invalidate(animeListProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('收藏状态已同步（$n 部）')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('收藏状态已同步（$n 部）')));
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('同步失败: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('同步失败: $e')));
       }
     }
   }
 
-  Future<void> _startScan(BuildContext context, WidgetRef ref,
-      {bool clearFirst = false, bool incremental = false}) async {
+  Future<void> _startScan(
+    BuildContext context,
+    WidgetRef ref, {
+    bool clearFirst = false,
+    bool incremental = false,
+  }) async {
     final folders = await rust.listLibraryFolders();
     if (folders.isEmpty) {
       if (context.mounted) {

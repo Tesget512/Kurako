@@ -8,6 +8,7 @@ import '../rust/models.dart';
 import '../services/network_discovery.dart';
 import '../services/remote_path_selection.dart';
 import '../state/providers.dart';
+import '../widgets/remote_folder_selection_header.dart';
 
 /// Remove nested selections when an ancestor folder is already selected. This
 /// prevents scanning the same tree twice while retaining independent siblings.
@@ -31,6 +32,7 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
 
   int _step = 0;
   bool _busy = false;
+  bool _discovering = false;
   bool _committed = false;
   String? _error;
   String? _selectedShare;
@@ -71,16 +73,19 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
   }
 
   Future<void> _discover() async {
-    _setBusy(true);
+    if (_discovering) return;
+    if (mounted) setState(() => _discovering = true);
     try {
       final servers = await discoverSmbServers();
       if (!mounted) return;
       setState(() {
         _servers = servers;
-        _error = servers.isEmpty ? '未发现广播中的 SMB 服务，仍可手动填写主机' : null;
+        if (_step == 0) {
+          _error = servers.isEmpty ? '未发现局域网中的 SMB 服务，仍可手动填写主机' : null;
+        }
       });
     } finally {
-      _setBusy(false);
+      if (mounted) setState(() => _discovering = false);
     }
   }
 
@@ -92,24 +97,33 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
     }
     _setBusy(true);
     try {
-      List<SmbShareInfo> shares = const [];
-      String? error;
       try {
-        shares = await rust.smbListShares(
+        final result = await rust.smbListShares(
           host: host,
           user: _user.text,
           password: _password.text,
         );
+        if (!mounted) return;
+        setState(() {
+          _shares = result.shares;
+          _selectedShare = result.shares.length == 1
+              ? result.shares.single.name
+              : null;
+          _step = 2;
+          _error = result.warning != null
+              ? '${result.warning}\n可以继续手动填写共享名。'
+              : result.shares.isEmpty
+              ? '账号验证成功，但没有发现可枚举的磁盘共享，可以手动填写共享名。'
+              : null;
+        });
       } catch (e) {
-        error = '服务器未提供共享列表：$e\n可以继续手动填写共享名。';
+        if (!mounted) return;
+        setState(() {
+          _shares = const [];
+          _selectedShare = null;
+          _error = '无法登录或连接 SMB 服务器：$e';
+        });
       }
-      if (!mounted) return;
-      setState(() {
-        _shares = shares;
-        _selectedShare = shares.length == 1 ? shares.single.name : null;
-        _step = 2;
-        _error = error;
-      });
     } finally {
       _setBusy(false);
     }
@@ -273,21 +287,23 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
       ),
       body: Column(
         children: [
-          if (_busy) const LinearProgressIndicator(),
+          if (_busy || (_step == 0 && _discovering))
+            const LinearProgressIndicator(),
           Expanded(
             child: Center(
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 760),
-                child: ListView(
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    if (_error != null) _errorBanner(context, _error!),
-                    if (_step == 0) _serverStep(),
-                    if (_step == 1) _credentialsStep(),
-                    if (_step == 2) _shareStep(),
-                    if (_step == 3) _directoryStep(),
-                  ],
-                ),
+                child: _step == 3
+                    ? _directoryStep()
+                    : ListView(
+                        padding: const EdgeInsets.all(16),
+                        children: [
+                          if (_error != null) _errorBanner(context, _error!),
+                          if (_step == 0) _serverStep(),
+                          if (_step == 1) _credentialsStep(),
+                          if (_step == 2) _shareStep(),
+                        ],
+                      ),
               ),
             ),
           ),
@@ -301,6 +317,7 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
     children: [
       TextField(
         controller: _host,
+        onChanged: (_) => setState(() => _error = null),
         decoration: const InputDecoration(
           labelText: '服务器地址',
           hintText: '192.168.1.100 或 server.local',
@@ -314,14 +331,17 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
           const Spacer(),
           IconButton(
             tooltip: '重新扫描',
-            onPressed: _busy ? null : _discover,
+            onPressed: _discovering ? null : _discover,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
       RadioGroup<String>(
         groupValue: _host.text.trim(),
-        onChanged: (value) => setState(() => _host.text = value ?? ''),
+        onChanged: (value) => setState(() {
+          _host.text = value ?? '';
+          _error = null;
+        }),
         child: Column(
           children: [
             for (final server in _servers)
@@ -431,53 +451,66 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
   Widget _directoryStep() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Wrap(spacing: 4, runSpacing: 4, children: _breadcrumbs()),
-      const SizedBox(height: 8),
-      CheckboxListTile(
-        contentPadding: EdgeInsets.zero,
-        value: _selectedPaths.contains(_currentPath),
-        title: Text(_currentPath.isEmpty ? '选择整个共享' : '选择当前文件夹'),
-        subtitle: Text(
-          _currentPath.isEmpty ? '/${_selectedShare ?? ''}' : _currentPath,
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: _errorBanner(context, _error!),
         ),
-        onChanged: (selected) => setState(() {
-          selected == true
-              ? _selectedPaths.add(_currentPath)
-              : _selectedPaths.remove(_currentPath);
-        }),
+      Padding(
+        padding: const EdgeInsets.all(16),
+        child: RemoteFolderSelectionHeader(
+          breadcrumbs: _breadcrumbs(),
+          selectedCount: compactSelectedSmbPaths(_selectedPaths).length,
+          onConfirm: _busy || _selectedPaths.isEmpty ? null : _finish,
+        ),
       ),
-      const Divider(),
-      if (_directories.isEmpty)
-        const ListTile(
-          leading: Icon(Icons.folder_off_outlined),
-          title: Text('当前目录没有子文件夹'),
-        ),
-      for (final directory in _directories)
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Checkbox(
-            value: _selectedPaths.contains(directory.path),
-            onChanged: (selected) => setState(() {
-              selected == true
-                  ? _selectedPaths.add(directory.path)
-                  : _selectedPaths.remove(directory.path);
-            }),
-          ),
-          title: Text(directory.name),
-          subtitle: Text(directory.path),
-          trailing: IconButton(
-            tooltip: '进入文件夹',
-            icon: const Icon(Icons.chevron_right),
-            onPressed: _busy ? null : () => _browse(directory.path),
-          ),
-          onTap: _busy ? null : () => _browse(directory.path),
-        ),
-      const SizedBox(height: 20),
-      FilledButton.icon(
-        onPressed: _busy || _selectedPaths.isEmpty ? null : _finish,
-        icon: const Icon(Icons.add),
-        label: Text(
-          '添加 ${compactSelectedSmbPaths(_selectedPaths).length} 个文件夹',
+      const Divider(height: 1),
+      Expanded(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          children: [
+            CheckboxListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _selectedPaths.contains(_currentPath),
+              title: Text(_currentPath.isEmpty ? '选择整个共享' : '选择当前文件夹'),
+              subtitle: Text(
+                _currentPath.isEmpty
+                    ? '/${_selectedShare ?? ''}'
+                    : _currentPath,
+              ),
+              onChanged: (selected) => setState(() {
+                selected == true
+                    ? _selectedPaths.add(_currentPath)
+                    : _selectedPaths.remove(_currentPath);
+              }),
+            ),
+            const Divider(),
+            if (_directories.isEmpty)
+              const ListTile(
+                leading: Icon(Icons.folder_off_outlined),
+                title: Text('当前目录没有子文件夹'),
+              ),
+            for (final directory in _directories)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Checkbox(
+                  value: _selectedPaths.contains(directory.path),
+                  onChanged: (selected) => setState(() {
+                    selected == true
+                        ? _selectedPaths.add(directory.path)
+                        : _selectedPaths.remove(directory.path);
+                  }),
+                ),
+                title: Text(directory.name),
+                subtitle: Text(directory.path),
+                trailing: IconButton(
+                  tooltip: '进入文件夹',
+                  icon: const Icon(Icons.chevron_right),
+                  onPressed: _busy ? null : () => _browse(directory.path),
+                ),
+                onTap: _busy ? null : () => _browse(directory.path),
+              ),
+          ],
         ),
       ),
     ],

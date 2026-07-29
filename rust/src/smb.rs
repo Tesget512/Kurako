@@ -7,7 +7,7 @@
 //! through a local HTTP proxy (see the `proxy` section) because libmpv's bundled
 //! FFmpeg usually lacks the `smb://` protocol.
 
-use crate::models::{RemoteDirectory, ScannedFile, SmbShareInfo};
+use crate::models::{RemoteDirectory, ScannedFile, SmbShareInfo, SmbShareListResult};
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -212,18 +212,54 @@ pub async fn connect(host: &str, share: &str, user: &str, password: &str) -> Res
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("smb connect failed")))
 }
 
-/// List disk shares through a short-lived IPC$ connection. NAS devices may
-/// disable srvsvc; callers must retain a manual share-name fallback.
-pub async fn list_shares(host: &str, user: &str, password: &str) -> Result<Vec<SmbShareInfo>> {
+fn connect_error(error: smb2::Error) -> anyhow::Error {
+    match error.kind() {
+        smb2::ErrorKind::AuthRequired
+        | smb2::ErrorKind::AccessDenied
+        | smb2::ErrorKind::SigningRequired => {
+            anyhow::anyhow!("SMB 登录失败：请检查账号、密码与账户权限")
+        }
+        smb2::ErrorKind::TimedOut => anyhow::anyhow!("SMB 服务器连接超时"),
+        _ => anyhow::anyhow!("SMB 服务器连接失败：{error}"),
+    }
+}
+
+fn share_listing_allows_manual_entry(error: &smb2::Error) -> bool {
+    matches!(
+        error.kind(),
+        smb2::ErrorKind::AuthRequired
+            | smb2::ErrorKind::AccessDenied
+            | smb2::ErrorKind::NotFound
+            | smb2::ErrorKind::Unsupported
+            | smb2::ErrorKind::InvalidData
+            | smb2::ErrorKind::Other
+    )
+}
+
+/// Authenticate first, then list disk shares through IPC$/srvsvc. A NAS may
+/// disable this optional enumeration path even though direct share access is
+/// valid; only that post-authentication case permits manual share-name entry.
+pub async fn list_shares(host: &str, user: &str, password: &str) -> Result<SmbShareListResult> {
     let addr = normalize_addr(host);
-    let mut client = tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&addr, user, password))
-        .await
-        .context("smb connect timed out")?
-        .context("smb connect")?;
-    let shares = tokio::time::timeout(SETUP_TIMEOUT, client.list_shares())
-        .await
-        .context("smb share listing timed out")?
-        .context("smb share listing")?;
+    let mut client =
+        match tokio::time::timeout(SETUP_TIMEOUT, smb2::connect(&addr, user, password)).await {
+            Ok(Ok(client)) => client,
+            Ok(Err(error)) => return Err(connect_error(error)),
+            Err(_) => anyhow::bail!("SMB 服务器连接超时，请检查地址与网络"),
+        };
+    let shares = match tokio::time::timeout(SETUP_TIMEOUT, client.list_shares()).await {
+        Ok(Ok(shares)) => shares,
+        Ok(Err(error)) if share_listing_allows_manual_entry(&error) => {
+            return Ok(SmbShareListResult {
+                shares: Vec::new(),
+                warning: Some(format!(
+                    "账号验证成功，但服务器不提供自动共享枚举（{error}）"
+                )),
+            });
+        }
+        Ok(Err(error)) => return Err(error).context("SMB 共享列表读取失败"),
+        Err(_) => anyhow::bail!("SMB 共享列表读取超时，请检查服务器状态"),
+    };
     let mut shares: Vec<_> = shares
         .into_iter()
         .map(|share| SmbShareInfo {
@@ -232,7 +268,10 @@ pub async fn list_shares(host: &str, user: &str, password: &str) -> Result<Vec<S
         })
         .collect();
     shares.sort_by_key(|share| share.name.to_lowercase());
-    Ok(shares)
+    Ok(SmbShareListResult {
+        shares,
+        warning: None,
+    })
 }
 
 /// Open one isolated share browser and return an opaque token. The connection
@@ -347,6 +386,9 @@ async fn walk(
     rel: &str,
     out: &mut Vec<ScannedFile>,
 ) -> Result<()> {
+    if crate::scan_control::is_cancelled() {
+        anyhow::bail!("扫描已取消");
+    }
     // Do not hold the session mutex over the entire recursive scan. A single
     // folder request may stall after Wi-Fi sleep or an SMB server timeout; if
     // that used to happen mid-walk, every later playback/refresh queued behind
@@ -360,7 +402,15 @@ async fn walk(
     };
     let entries = {
         let SmbSessionInner { client, tree } = &mut *guard;
-        tokio::time::timeout(SETUP_TIMEOUT, client.list_directory(tree, smb_path)).await
+        tokio::select! {
+            result = tokio::time::timeout(
+                SETUP_TIMEOUT,
+                client.list_directory(tree, smb_path),
+            ) => result,
+            _ = crate::scan_control::wait_cancelled() => {
+                anyhow::bail!("扫描已取消");
+            }
+        }
     };
     let entries = match entries {
         Ok(Ok(entries)) => {
@@ -380,6 +430,9 @@ async fn walk(
     };
     drop(guard);
     for e in entries {
+        if crate::scan_control::is_cancelled() {
+            anyhow::bail!("扫描已取消");
+        }
         if e.name == "." || e.name == ".." {
             continue;
         }
@@ -404,6 +457,7 @@ async fn walk(
             out.push(ScannedFile {
                 uri: format!("smb://{}/{}/{}", creds.addr, creds.share, child_smb),
                 file_name: e.name.clone(),
+                file_size: e.size as i64,
                 relative_parent: parent,
             });
         }
@@ -798,6 +852,76 @@ async fn open_session_reader(
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("smb open file failed")))
 }
 
+/// Read a small set of exact byte ranges through the reusable SMB session.
+///
+/// This is intentionally separate from the loopback playback proxy: maintenance
+/// jobs such as the explicit duplicate checker must not change playback traffic
+/// counters or allocate proxy tokens. The caller owns an independent
+/// cancellation channel and the remote handle is always closed before return.
+pub(crate) async fn read_exact_ranges(
+    smb_uri: &str,
+    expected_size: u64,
+    ranges: &[(u64, u64)],
+    cancellation: &mut tokio::sync::watch::Receiver<bool>,
+) -> Result<Vec<Vec<u8>>> {
+    let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
+    let creds = creds().context("smb not connected")?;
+    if *cancellation.borrow() {
+        anyhow::bail!("检查已取消");
+    }
+    let _permit = tokio::select! {
+        _ = cancellation.changed() => anyhow::bail!("检查已取消"),
+        permit = SMB_CONN.acquire() => permit.context("SMB 读取队列已关闭")?,
+    };
+    let (reader, session) = tokio::select! {
+        _ = cancellation.changed() => anyhow::bail!("检查已取消"),
+        result = open_session_reader(&creds, &path) => result?,
+    };
+    if reader.size() != expected_size {
+        let _ = reader.close().await;
+        anyhow::bail!("SMB 文件大小已变化，请重新扫描");
+    }
+
+    let read_result: Result<Vec<Vec<u8>>> = async {
+        let mut chunks = Vec::with_capacity(ranges.len());
+        for &(offset, length) in ranges {
+            if *cancellation.borrow() {
+                anyhow::bail!("检查已取消");
+            }
+            let bytes = match tokio::select! {
+                _ = cancellation.changed() => anyhow::bail!("检查已取消"),
+                result = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    reader.read_at(offset, length),
+                ) => result,
+            } {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(error)) => {
+                    invalidate_session_if(&session);
+                    return Err(error).context("SMB 分块读取失败");
+                }
+                Err(_) => {
+                    invalidate_session_if(&session);
+                    anyhow::bail!("SMB 分块读取超时");
+                }
+            };
+            if bytes.len() != length as usize {
+                anyhow::bail!("SMB 分块读取不完整");
+            }
+            session.touch();
+            chunks.push(bytes);
+        }
+        Ok(chunks)
+    }
+    .await;
+    let close_result = reader.close().await.context("关闭 SMB 文件失败");
+    match (read_result, close_result) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(chunks), Ok(())) => Ok(chunks),
+    }
+}
+
 /// Unconditionally drop the cached session. Reserved for explicit
 /// reconfiguration (credentials changed / user-initiated reconnect), where any
 /// cached session must not survive regardless of which task created it.
@@ -900,6 +1024,10 @@ static BYTES_SERVED: AtomicU64 = AtomicU64::new(0);
 /// Cumulative bytes served by the proxy (monotonic counter).
 pub fn proxy_bytes_served() -> u64 {
     BYTES_SERVED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn maintenance_read_is_busy() -> bool {
+    !ACTIVE_STREAMS.lock().unwrap().is_empty() || SMB_DL_CONN.available_permits() == 0
 }
 
 /// Register an SMB URI for playback and return `http://127.0.0.1:port/<token>`.
@@ -1539,6 +1667,33 @@ pub fn remove_downloaded_subtitles(video_path: impl AsRef<std::path::Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn protocol_error(status: smb2::types::status::NtStatus) -> smb2::Error {
+        smb2::Error::Protocol {
+            status,
+            command: smb2::types::Command::Ioctl,
+        }
+    }
+
+    #[test]
+    fn only_post_auth_enumeration_compatibility_errors_allow_manual_entry() {
+        assert!(share_listing_allows_manual_entry(&protocol_error(
+            smb2::types::status::NtStatus::NOT_SUPPORTED,
+        )));
+        assert!(share_listing_allows_manual_entry(&protocol_error(
+            smb2::types::status::NtStatus::ACCESS_DENIED,
+        )));
+        assert!(!share_listing_allows_manual_entry(
+            &smb2::Error::Disconnected,
+        ));
+        assert!(!share_listing_allows_manual_entry(&smb2::Error::Timeout));
+    }
+
+    #[test]
+    fn authentication_errors_are_reported_as_login_failures() {
+        let error = connect_error(protocol_error(smb2::types::status::NtStatus::LOGON_FAILURE));
+        assert!(error.to_string().contains("SMB 登录失败"));
+    }
 
     #[tokio::test]
     async fn queued_download_slot_can_be_cancelled() {

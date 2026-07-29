@@ -43,6 +43,9 @@ dependencies:
   media_kit_video:
     path: third_party/media_kit_video
   media_kit_libs_video: ^1.0.6
+  # Keep long scans awake; the player already brings this plugin transitively,
+  # but scan_progress_sheet imports it directly so it must be declared here.
+  wakelock_plus: ^1.5.2
   # media_kit_video supplies gesture code but only depends on Android's
   # brightness implementation. Add the federated package so iOS/iPadOS gets
   # its UIScreen brightness plugin too.

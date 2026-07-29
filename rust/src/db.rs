@@ -1,12 +1,16 @@
-use crate::models::{Anime, Episode, LibraryFolder};
+use crate::models::{Anime, DuplicateCheckItem, Episode, LibraryFolder};
 use anyhow::Result;
 use once_cell::sync::OnceCell;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 static DB: OnceCell<Mutex<Connection>> = OnceCell::new();
+const ADD_FOLDER_PRIORITY: &str = "ALTER TABLE library_folders ADD COLUMN priority INTEGER";
+const ADD_EPISODE_FOLDER_ID: &str = "ALTER TABLE episodes ADD COLUMN folder_id INTEGER";
+const ADD_EPISODE_FILE_SIZE: &str =
+    "ALTER TABLE episodes ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0";
 
 pub fn init(db_path: &str) -> Result<()> {
     let conn = Connection::open(db_path)?;
@@ -17,6 +21,7 @@ pub fn init(db_path: &str) -> Result<()> {
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             path        TEXT NOT NULL UNIQUE,
             added_at    INTEGER NOT NULL,
+            priority    INTEGER NOT NULL DEFAULT 0,
             source_type TEXT NOT NULL DEFAULT 'local'
         );
         CREATE TABLE IF NOT EXISTS anime (
@@ -45,11 +50,13 @@ pub fn init(db_path: &str) -> Result<()> {
             anime_id         INTEGER NOT NULL,
             file_path        TEXT NOT NULL UNIQUE,
             file_name        TEXT NOT NULL,
+            file_size        INTEGER NOT NULL DEFAULT 0,
             episode_no       INTEGER,
             title            TEXT,
             resolution       TEXT,
             release_group    TEXT,
             source_type      TEXT NOT NULL DEFAULT 'local',
+            folder_id        INTEGER,
             watched          INTEGER NOT NULL DEFAULT 0,
             last_position_ms INTEGER NOT NULL DEFAULT 0,
             duration_ms      INTEGER NOT NULL DEFAULT 0,
@@ -100,7 +107,67 @@ pub fn init(db_path: &str) -> Result<()> {
     ] {
         let _ = conn.execute(ddl, []);
     }
+    migrate_source_priority_schema(&conn)?;
     let _ = DB.set(Mutex::new(conn));
+    Ok(())
+}
+
+fn migrate_source_priority_schema(c: &Connection) -> Result<()> {
+    ensure_column(c, "library_folders", "priority", ADD_FOLDER_PRIORITY)?;
+    let added_folder_id = ensure_column(c, "episodes", "folder_id", ADD_EPISODE_FOLDER_ID)?;
+    let added_file_size = ensure_column(c, "episodes", "file_size", ADD_EPISODE_FILE_SIZE)?;
+    migrate_folder_priorities(c)?;
+    // A checkout may already have the priority migration but not the newer
+    // episode metadata columns. Force one fresh enumeration so legacy rows get
+    // ownership and source-reported sizes instead of staying at zero forever.
+    if added_folder_id || added_file_size {
+        c.execute("UPDATE library_folders SET last_scanned = NULL", [])?;
+    }
+    Ok(())
+}
+
+fn ensure_column(c: &Connection, table: &str, column: &str, ddl: &str) -> Result<bool> {
+    let mut stmt = c.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<HashSet<_>, _>>()?;
+    if !columns.contains(column) {
+        c.execute(ddl, [])?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+// Existing installations had no explicit order and were displayed newest
+// first. Preserve that visible order exactly once, then force one rescan so
+// old cross-source duplicates can be assigned to their winning folder.
+fn migrate_folder_priorities(c: &Connection) -> Result<()> {
+    let missing_priorities: i64 = c.query_row(
+        "SELECT COUNT(*) FROM library_folders WHERE priority IS NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    if missing_priorities == 0 {
+        return Ok(());
+    }
+
+    let tx = c.unchecked_transaction()?;
+    let ids = {
+        let mut stmt =
+            tx.prepare("SELECT id FROM library_folders ORDER BY added_at DESC, id ASC")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        ids
+    };
+    for (index, id) in ids.into_iter().enumerate() {
+        tx.execute(
+            "UPDATE library_folders SET priority = ?2 WHERE id = ?1",
+            params![id, index as i64],
+        )?;
+    }
+    tx.execute("UPDATE library_folders SET last_scanned = NULL", [])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -115,7 +182,8 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
 pub fn add_folder(path: &str, now: i64, source_type: &str) -> Result<i64> {
     with_conn(|c| {
         c.execute(
-            "INSERT OR IGNORE INTO library_folders(path, added_at, source_type) VALUES (?1, ?2, ?3)",
+            "INSERT OR IGNORE INTO library_folders(path, added_at, source_type, priority)
+             VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(priority), -1) + 1 FROM library_folders))",
             params![path, now, source_type],
         )?;
         let id: i64 = c.query_row(
@@ -127,17 +195,35 @@ pub fn add_folder(path: &str, now: i64, source_type: &str) -> Result<i64> {
     })
 }
 
-pub fn remove_folder(id: i64) -> Result<()> {
-    with_conn(|c| {
-        c.execute("DELETE FROM library_folders WHERE id = ?1", params![id])?;
-        Ok(())
-    })
+pub fn remove_folder(id: i64, source_type: &str, legacy_prefixes: &[String]) -> Result<()> {
+    with_conn(|c| remove_folder_on(c, id, source_type, legacy_prefixes))
+}
+
+fn remove_folder_on(
+    c: &Connection,
+    id: i64,
+    source_type: &str,
+    legacy_prefixes: &[String],
+) -> Result<()> {
+    let tx = c.unchecked_transaction()?;
+    let entries = episode_entries_for_folder_on(&tx, id, source_type, legacy_prefixes)?;
+    for (path, _) in entries {
+        tx.execute("DELETE FROM episodes WHERE file_path = ?1", params![path])?;
+    }
+    tx.execute("DELETE FROM library_folders WHERE id = ?1", params![id])?;
+    tx.execute(
+        "DELETE FROM anime WHERE id NOT IN (SELECT DISTINCT anime_id FROM episodes)",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn list_folders() -> Result<Vec<LibraryFolder>> {
     with_conn(|c| {
         let mut stmt = c.prepare(
-            "SELECT id, path, added_at, last_scanned, source_type FROM library_folders ORDER BY added_at DESC",
+            "SELECT id, path, added_at, last_scanned, source_type, priority
+             FROM library_folders ORDER BY priority ASC, id ASC",
         )?;
         let rows = stmt
             .query_map([], |r| {
@@ -149,11 +235,138 @@ pub fn list_folders() -> Result<Vec<LibraryFolder>> {
                     source_type: r
                         .get::<_, Option<String>>(4)?
                         .unwrap_or_else(|| "local".to_string()),
+                    priority: r.get::<_, Option<i64>>(5)?.unwrap_or(i64::MAX),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     })
+}
+
+pub fn reorder_folders(ids: &[i64]) -> Result<()> {
+    with_conn(|c| reorder_folders_on(c, ids))
+}
+
+fn reorder_folders_on(c: &Connection, ids: &[i64]) -> Result<()> {
+    let existing = {
+        let mut stmt = c.prepare("SELECT id FROM library_folders")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<std::result::Result<HashSet<_>, _>>()?;
+        ids
+    };
+    let requested = ids.iter().copied().collect::<HashSet<_>>();
+    if ids.len() != requested.len() || requested != existing {
+        anyhow::bail!("folder order must contain every library folder exactly once");
+    }
+    let tx = c.unchecked_transaction()?;
+    for (priority, id) in ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE library_folders SET priority = ?2 WHERE id = ?1",
+            params![id, priority as i64],
+        )?;
+    }
+    tx.execute("UPDATE library_folders SET last_scanned = NULL", [])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Existing filenames owned by one folder. Rows created before `folder_id`
+/// was introduced are included only when their path falls under this folder's
+/// legacy locator prefix.
+pub fn episode_entries_for_folder(
+    folder_id: i64,
+    source_type: &str,
+    legacy_prefixes: &[String],
+) -> Result<Vec<(String, String)>> {
+    with_conn(|c| episode_entries_for_folder_on(c, folder_id, source_type, legacy_prefixes))
+}
+
+fn episode_entries_for_folder_on(
+    c: &Connection,
+    folder_id: i64,
+    source_type: &str,
+    legacy_prefixes: &[String],
+) -> Result<Vec<(String, String)>> {
+    let mut stmt = c.prepare(
+        "SELECT folder_id, file_path, file_name FROM episodes
+         WHERE folder_id = ?1 OR (folder_id IS NULL AND source_type = ?2)",
+    )?;
+    let rows = stmt
+        .query_map(params![folder_id, source_type], |row| {
+            Ok((
+                row.get::<_, Option<i64>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows
+        .into_iter()
+        .filter(|(owner, path, _)| {
+            owner.is_some()
+                || legacy_prefixes
+                    .iter()
+                    .any(|prefix| path_is_within_prefix(path, prefix))
+        })
+        .map(|(_, path, file_name)| (path, file_name))
+        .collect())
+}
+
+fn path_is_within_prefix(path: &str, prefix: &str) -> bool {
+    if prefix.is_empty() || !path.starts_with(prefix) {
+        return false;
+    }
+    if path.len() == prefix.len() || prefix.ends_with(['/', '\\']) {
+        return true;
+    }
+    matches!(path.as_bytes().get(prefix.len()), Some(b'/') | Some(b'\\'))
+}
+
+pub fn delete_episode_paths(paths: &[String]) -> Result<usize> {
+    with_conn(|c| {
+        let tx = c.unchecked_transaction()?;
+        let mut removed = 0usize;
+        for path in paths {
+            removed += tx.execute("DELETE FROM episodes WHERE file_path = ?1", params![path])?;
+        }
+        tx.commit()?;
+        Ok(removed)
+    })
+}
+
+pub fn adopt_episode_entries_for_folder(
+    folder_id: i64,
+    source_type: &str,
+    legacy_prefixes: &[String],
+) -> Result<Vec<(String, String)>> {
+    with_conn(|c| {
+        let tx = c.unchecked_transaction()?;
+        let entries = episode_entries_for_folder_on(&tx, folder_id, source_type, legacy_prefixes)?;
+        let paths = entries
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        adopt_unowned_episode_paths_on(&tx, folder_id, &paths)?;
+        tx.commit()?;
+        Ok(entries)
+    })
+}
+
+fn adopt_unowned_episode_paths_on(
+    c: &Connection,
+    folder_id: i64,
+    paths: &[String],
+) -> Result<usize> {
+    let mut adopted = 0usize;
+    for path in paths {
+        adopted += c.execute(
+            "UPDATE episodes SET folder_id = ?2
+             WHERE file_path = ?1 AND folder_id IS NULL",
+            params![path, folder_id],
+        )?;
+    }
+    Ok(adopted)
 }
 
 /// Record the time a folder was last scanned (Unix seconds), for incremental
@@ -187,8 +400,10 @@ pub fn upsert_anime(group_key: &str, title_raw: &str) -> Result<i64> {
 
 pub fn upsert_episode(
     anime_id: i64,
+    folder_id: i64,
     file_path: &str,
     file_name: &str,
+    file_size: i64,
     episode_no: Option<i64>,
     resolution: Option<&str>,
     release_group: Option<&str>,
@@ -196,15 +411,18 @@ pub fn upsert_episode(
 ) -> Result<()> {
     with_conn(|c| {
         c.execute(
-            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, resolution, release_group, source_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_size, episode_no, resolution, release_group, source_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(file_path) DO UPDATE SET
                 anime_id=excluded.anime_id,
+                folder_id=excluded.folder_id,
+                file_name=excluded.file_name,
+                file_size=excluded.file_size,
                 episode_no=excluded.episode_no,
                 resolution=excluded.resolution,
                 release_group=excluded.release_group,
                 source_type=excluded.source_type",
-            params![anime_id, file_path, file_name, episode_no, resolution, release_group, source_type],
+            params![anime_id, folder_id, file_path, file_name, file_size, episode_no, resolution, release_group, source_type],
         )?;
         Ok(())
     })
@@ -271,30 +489,66 @@ pub fn get_anime(id: i64) -> Result<Option<Anime>> {
 }
 
 pub fn list_episodes(anime_id: i64) -> Result<Vec<Episode>> {
+    with_conn(|c| list_episodes_on(c, anime_id))
+}
+
+fn list_episodes_on(c: &Connection, anime_id: i64) -> Result<Vec<Episode>> {
+    let mut stmt = c.prepare(
+        "SELECT e.id, e.anime_id, e.file_path, e.file_name, e.episode_no, e.title,
+                e.resolution, e.release_group, e.watched, e.last_position_ms,
+                e.duration_ms, e.source_type,
+                EXISTS(SELECT 1 FROM downloads d WHERE d.smb_uri = e.file_path)
+         FROM episodes e WHERE e.anime_id = ?1
+         ORDER BY e.episode_no IS NULL, e.episode_no, e.file_name",
+    )?;
+    let rows = stmt
+        .query_map(params![anime_id], |r| {
+            Ok(Episode {
+                id: r.get(0)?,
+                anime_id: r.get(1)?,
+                file_path: r.get(2)?,
+                file_name: r.get(3)?,
+                episode_no: r.get(4)?,
+                title: r.get(5)?,
+                resolution: r.get(6)?,
+                release_group: r.get(7)?,
+                watched: r.get::<_, i64>(8)? != 0,
+                last_position_ms: r.get(9)?,
+                duration_ms: r.get(10)?,
+                source_type: r
+                    .get::<_, Option<String>>(11)?
+                    .unwrap_or_else(|| "local".to_string()),
+                is_downloaded: r.get::<_, i64>(12)? != 0,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Snapshot the indexed media used by the explicit duplicate checker. This is
+/// read-only and never participates in normal scan or match decisions.
+pub fn duplicate_check_items() -> Result<Vec<DuplicateCheckItem>> {
     with_conn(|c| {
         let mut stmt = c.prepare(
-            "SELECT id, anime_id, file_path, file_name, episode_no, title, resolution,
-                    release_group, watched, last_position_ms, duration_ms, source_type
-             FROM episodes WHERE anime_id = ?1
-             ORDER BY episode_no IS NULL, episode_no, file_name",
+            "SELECT e.id, e.anime_id,
+                    COALESCE(NULLIF(a.name_cn, ''), NULLIF(a.name, ''), a.title_raw),
+                    e.episode_no, e.file_name, e.file_path, e.source_type,
+                    e.file_size
+             FROM episodes e
+             JOIN anime a ON a.id = e.anime_id
+             ORDER BY e.id",
         )?;
         let rows = stmt
-            .query_map(params![anime_id], |r| {
-                Ok(Episode {
-                    id: r.get(0)?,
-                    anime_id: r.get(1)?,
-                    file_path: r.get(2)?,
-                    file_name: r.get(3)?,
-                    episode_no: r.get(4)?,
-                    title: r.get(5)?,
-                    resolution: r.get(6)?,
-                    release_group: r.get(7)?,
-                    watched: r.get::<_, i64>(8)? != 0,
-                    last_position_ms: r.get(9)?,
-                    duration_ms: r.get(10)?,
-                    source_type: r
-                        .get::<_, Option<String>>(11)?
-                        .unwrap_or_else(|| "local".to_string()),
+            .query_map([], |row| {
+                Ok(DuplicateCheckItem {
+                    episode_id: row.get(0)?,
+                    anime_id: row.get(1)?,
+                    anime_title: row.get(2)?,
+                    episode_no: row.get(3)?,
+                    file_name: row.get(4)?,
+                    file_path: row.get(5)?,
+                    source_type: row.get(6)?,
+                    file_size: row.get(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -559,6 +813,7 @@ pub fn set_watched(episode_id: i64, watched: bool) -> Result<()> {
 /// that skipped a folder never prunes that folder's still-present episodes.
 /// Returns the number of episodes deleted.
 pub fn prune_missing(
+    folder_id: i64,
     source_type: &str,
     prefixes: &[String],
     kept: &std::collections::HashSet<String>,
@@ -566,22 +821,38 @@ pub fn prune_missing(
     if prefixes.is_empty() {
         return Ok(0);
     }
-    with_conn(|c| {
-        let mut stmt = c.prepare("SELECT file_path FROM episodes WHERE source_type = ?1")?;
-        let paths: Vec<String> = stmt
-            .query_map(params![source_type], |r| r.get::<_, String>(0))?
+    with_conn(|c| prune_missing_on(c, folder_id, source_type, prefixes, &kept))
+}
+
+fn prune_missing_on(
+    c: &Connection,
+    folder_id: i64,
+    source_type: &str,
+    prefixes: &[String],
+    kept: &std::collections::HashSet<String>,
+) -> Result<usize> {
+    let tx = c.unchecked_transaction()?;
+    let paths: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT file_path FROM episodes
+             WHERE folder_id = ?1 OR (folder_id IS NULL AND source_type = ?2)",
+        )?;
+        let paths = stmt
+            .query_map(params![folder_id, source_type], |r| r.get::<_, String>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        drop(stmt);
-        let mut deleted = 0usize;
-        for path in paths {
-            let in_scope = prefixes.iter().any(|pre| path.starts_with(pre.as_str()));
-            if in_scope && !kept.contains(&path) {
-                c.execute("DELETE FROM episodes WHERE file_path = ?1", params![path])?;
-                deleted += 1;
-            }
+        paths
+    };
+    let mut deleted = 0usize;
+    for path in paths {
+        let in_scope = prefixes
+            .iter()
+            .any(|prefix| path_is_within_prefix(&path, prefix));
+        if in_scope && !kept.contains(&path) {
+            deleted += tx.execute("DELETE FROM episodes WHERE file_path = ?1", params![path])?;
         }
-        Ok(deleted)
-    })
+    }
+    tx.commit()?;
+    Ok(deleted)
 }
 
 /// Delete anime rows left with no episodes (e.g. after [prune_missing] removed
@@ -785,20 +1056,34 @@ pub fn list_downloads() -> Result<Vec<crate::models::DownloadEntry>> {
     })
 }
 
-/// Remove a download record, returning its local path so the caller can delete
-/// the file too.
+/// Remove one download record. Return the local path only when no other legacy
+/// alias still references it, so callers never delete a shared physical file.
 pub fn remove_download(id: i64) -> Result<Option<String>> {
-    with_conn(|c| {
-        let path: Option<String> = c
-            .query_row(
-                "SELECT local_path FROM downloads WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )
-            .optional()?;
-        c.execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
-        Ok(path)
-    })
+    with_conn(|c| remove_download_on(c, id))
+}
+
+fn remove_download_on(c: &Connection, id: i64) -> Result<Option<String>> {
+    let tx = c.unchecked_transaction()?;
+    let path: Option<String> = tx
+        .query_row(
+            "SELECT local_path FROM downloads WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    tx.execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
+    let removable = if let Some(path) = path {
+        let remaining: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM downloads WHERE local_path = ?1",
+            params![path],
+            |row| row.get(0),
+        )?;
+        (remaining == 0).then_some(path)
+    } else {
+        None
+    };
+    tx.commit()?;
+    Ok(removable)
 }
 
 /// Downloads joined with their library episode + anime for the management UI.
@@ -847,18 +1132,22 @@ fn list_downloads_detailed_on(c: &Connection) -> Result<Vec<crate::models::Downl
     Ok(rows)
 }
 
-/// The local copy of an SMB file, if one was downloaded.
-pub fn download_local_path(smb_uri: &str) -> Result<Option<String>> {
-    with_conn(|c| {
-        let path: Option<String> = c
-            .query_row(
-                "SELECT local_path FROM downloads WHERE smb_uri = ?1",
-                params![smb_uri],
-                |r| r.get(0),
-            )
-            .optional()?;
-        Ok(path)
-    })
+/// Resolve the downloaded local copy recorded for this exact remote URI.
+pub fn download_local_path(remote_uri: &str) -> Result<Option<String>> {
+    with_conn(|c| download_local_path_on(c, remote_uri))
+}
+
+fn download_local_path_on(c: &Connection, remote_uri: &str) -> Result<Option<String>> {
+    // Preserve the stored exact path even when it is currently stale. The API
+    // layer needs that value to detect an Apple app-container UUID change,
+    // rebase all records into the current Documents directory, and retry.
+    c.query_row(
+        "SELECT local_path FROM downloads WHERE smb_uri = ?1",
+        params![remote_uri],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(Into::into)
 }
 
 /// Rebase completed downloads whose persisted absolute path points at an old
@@ -977,11 +1266,10 @@ fn rebase_download_paths_on(c: &Connection, download_dir: &Path) -> Result<i64> 
     Ok(rebased)
 }
 
-/// Return the SMB episode URI for [file_name] only when it is unambiguous in
-/// the current library. Directory recovery must never guess between two shows
-/// which happen to use the same generic episode filename.
-pub fn unique_smb_episode_uri(file_name: &str) -> Result<Option<String>> {
-    with_conn(|c| unique_smb_episode_uri_on(c, file_name))
+/// Return the SMB episode URI only when its normalized filename is unique and
+/// its source-reported size matches the local file being recovered.
+pub fn unique_smb_episode_uri(file_name: &str, bytes_total: i64) -> Result<Option<String>> {
+    with_conn(|c| unique_smb_episode_uri_on(c, file_name, bytes_total))
 }
 
 pub fn episode_uri_exists(source_type: &str, file_path: &str) -> Result<bool> {
@@ -993,6 +1281,34 @@ pub fn episode_uri_exists(source_type: &str, file_path: &str) -> Result<bool> {
         )
         .map_err(Into::into)
     })
+}
+
+pub(crate) fn episode_uri_matches_size(
+    source_type: &str,
+    file_path: &str,
+    file_size: i64,
+) -> Result<bool> {
+    with_conn(|c| episode_uri_matches_size_on(c, source_type, file_path, file_size))
+}
+
+fn episode_uri_matches_size_on(
+    c: &Connection,
+    source_type: &str,
+    file_path: &str,
+    file_size: i64,
+) -> Result<bool> {
+    if file_size <= 0 {
+        return Ok(false);
+    }
+    c.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM episodes
+             WHERE source_type = ?1 AND file_path = ?2 AND file_size = ?3
+         )",
+        params![source_type, file_path, file_size],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
 }
 
 /// Recreate one missing download row from a local file when the current SMB
@@ -1021,7 +1337,7 @@ fn recover_download_file_on(
     if already_recorded {
         return Ok(false);
     }
-    let Some(smb_uri) = unique_smb_episode_uri_on(c, file_name)? else {
+    let Some(smb_uri) = unique_smb_episode_uri_on(c, file_name, bytes_total)? else {
         return Ok(false);
     };
     let smb_uri_recorded: bool = c.query_row(
@@ -1036,20 +1352,35 @@ fn recover_download_file_on(
     Ok(true)
 }
 
-fn unique_smb_episode_uri_on(c: &Connection, file_name: &str) -> Result<Option<String>> {
+fn unique_smb_episode_uri_on(
+    c: &Connection,
+    file_name: &str,
+    bytes_total: i64,
+) -> Result<Option<String>> {
+    if bytes_total <= 0 {
+        return Ok(None);
+    }
     let mut stmt = c.prepare(
-        "SELECT file_path FROM episodes
-         WHERE source_type = 'smb' AND file_name = ?1
-         LIMIT 2",
+        "SELECT file_path, file_name, file_size FROM episodes
+         WHERE source_type = 'smb'",
     )?;
-    let paths = stmt
-        .query_map(params![file_name], |r| r.get::<_, String>(0))?
+    let normalized = crate::scan_control::normalized_file_name(file_name);
+    let candidates = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(if paths.len() == 1 {
-        paths.into_iter().next()
-    } else {
-        None
-    })
+    let matching = candidates
+        .into_iter()
+        .filter(|(_, candidate_name, _)| {
+            crate::scan_control::normalized_file_name(candidate_name) == normalized
+        })
+        .collect::<Vec<_>>();
+    Ok((matching.len() == 1 && matching[0].2 == bytes_total).then(|| matching[0].0.clone()))
 }
 
 #[cfg(test)]
@@ -1064,8 +1395,13 @@ mod download_tests {
                  name TEXT, name_cn TEXT, cover_url TEXT
              );
              CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                  anime_id INTEGER NOT NULL, file_path TEXT NOT NULL UNIQUE,
-                 file_name TEXT NOT NULL, episode_no INTEGER, title TEXT,
+                 file_name TEXT NOT NULL, file_size INTEGER NOT NULL DEFAULT 0,
+                 episode_no INTEGER, title TEXT, resolution TEXT,
+                 release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
+                 last_position_ms INTEGER NOT NULL DEFAULT 0,
+                 duration_ms INTEGER NOT NULL DEFAULT 0,
                  source_type TEXT NOT NULL DEFAULT 'smb'
              );
              CREATE TABLE downloads (
@@ -1078,6 +1414,391 @@ mod download_tests {
         )
         .unwrap();
         c
+    }
+
+    #[test]
+    fn list_episodes_reads_the_exact_download_record() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY, anime_id INTEGER NOT NULL,
+                 file_path TEXT NOT NULL, file_name TEXT NOT NULL,
+                 episode_no INTEGER, title TEXT, resolution TEXT,
+                 release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
+                 last_position_ms INTEGER NOT NULL DEFAULT 0,
+                 duration_ms INTEGER NOT NULL DEFAULT 0,
+                 source_type TEXT NOT NULL
+             );
+             CREATE TABLE downloads (smb_uri TEXT NOT NULL UNIQUE);
+             INSERT INTO episodes VALUES
+                 (1, 7, 'smb://server/01.mkv', '01.mkv', 1, NULL, NULL,
+                  NULL, 0, 0, 0, 'smb'),
+                 (2, 7, 'smb://server/02.mkv', '02.mkv', 2, NULL, NULL,
+                  NULL, 0, 0, 0, 'smb');
+             INSERT INTO downloads VALUES ('smb://server/01.mkv');",
+        )
+        .unwrap();
+
+        let episodes = list_episodes_on(&c, 7).unwrap();
+        assert_eq!(episodes.len(), 2);
+        assert!(episodes[0].is_downloaded);
+        assert!(!episodes[1].is_downloaded);
+    }
+
+    #[test]
+    fn legacy_download_id_is_ignored_without_an_exact_uri_record() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY, anime_id INTEGER NOT NULL,
+                 file_path TEXT NOT NULL, file_name TEXT NOT NULL,
+                 episode_no INTEGER, title TEXT, resolution TEXT,
+                 release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
+                 last_position_ms INTEGER NOT NULL DEFAULT 0,
+                 duration_ms INTEGER NOT NULL DEFAULT 0,
+                 source_type TEXT NOT NULL, download_id INTEGER
+             );
+             CREATE TABLE downloads (smb_uri TEXT NOT NULL UNIQUE);
+             INSERT INTO episodes VALUES
+                 (1, 7, 'https://dav.example/01.mkv', '01.mkv', 1, NULL, NULL,
+                  NULL, 0, 0, 0, 'webdav', 42);
+             INSERT INTO downloads VALUES ('smb://server/01.mkv');",
+        )
+        .unwrap();
+
+        let episodes = list_episodes_on(&c, 7).unwrap();
+        assert_eq!(episodes.len(), 1);
+        assert!(!episodes[0].is_downloaded);
+    }
+
+    #[test]
+    fn folder_reorder_is_complete_atomic_and_resets_incremental_state() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE library_folders (
+                 id INTEGER PRIMARY KEY, priority INTEGER NOT NULL,
+                 last_scanned INTEGER
+             );
+             INSERT INTO library_folders VALUES (1, 0, 10);
+             INSERT INTO library_folders VALUES (2, 1, 20);
+             INSERT INTO library_folders VALUES (3, 2, 30);
+             CREATE TRIGGER block_reorder BEFORE UPDATE OF priority ON library_folders
+             WHEN OLD.id = 3 AND NEW.priority = 1
+             BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+
+        assert!(reorder_folders_on(&c, &[2, 3, 1]).is_err());
+        let before_retry: Vec<(i64, i64, Option<i64>)> = {
+            let mut stmt = c
+                .prepare(
+                    "SELECT id, priority, last_scanned
+                     FROM library_folders ORDER BY priority",
+                )
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            before_retry,
+            vec![(1, 0, Some(10)), (2, 1, Some(20)), (3, 2, Some(30))]
+        );
+        c.execute("DROP TRIGGER block_reorder", []).unwrap();
+
+        reorder_folders_on(&c, &[2, 3, 1]).unwrap();
+        let ordered: Vec<i64> = {
+            let mut stmt = c
+                .prepare("SELECT id FROM library_folders ORDER BY priority")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(ordered, vec![2, 3, 1]);
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM library_folders WHERE last_scanned IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        assert!(reorder_folders_on(&c, &[2, 2, 1]).is_err());
+        let unchanged: Vec<(i64, i64, Option<i64>)> = {
+            let mut stmt = c
+                .prepare(
+                    "SELECT id, priority, last_scanned
+                     FROM library_folders ORDER BY priority",
+                )
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(unchanged, vec![(2, 0, None), (3, 1, None), (1, 2, None)]);
+    }
+
+    #[test]
+    fn source_priority_migration_preserves_legacy_order_and_is_idempotent() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE library_folders (
+                 id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE,
+                 added_at INTEGER NOT NULL, last_scanned INTEGER,
+                 source_type TEXT NOT NULL DEFAULT 'local'
+             );
+             CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY, anime_id INTEGER NOT NULL,
+                 file_path TEXT NOT NULL UNIQUE, file_name TEXT NOT NULL,
+                 source_type TEXT NOT NULL DEFAULT 'local'
+             );
+             INSERT INTO library_folders VALUES (1, '/old', 100, 10, 'local');
+             INSERT INTO library_folders VALUES (2, '/new-a', 200, 20, 'local');
+             INSERT INTO library_folders VALUES (3, '/new-b', 200, 30, 'local');
+             INSERT INTO episodes VALUES (4, 5, '/old/01.mkv', '01.mkv', 'local');
+             CREATE TRIGGER block_priority_migration
+             BEFORE UPDATE OF priority ON library_folders
+             WHEN OLD.id = 3 AND NEW.priority IS NOT NULL
+             BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+
+        assert!(migrate_source_priority_schema(&c).is_err());
+        assert_eq!(
+            c.query_row(
+                "SELECT COUNT(*) FROM library_folders WHERE priority IS NOT NULL",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            c.query_row("SELECT SUM(last_scanned) FROM library_folders", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            60
+        );
+        c.execute("DROP TRIGGER block_priority_migration", [])
+            .unwrap();
+        migrate_source_priority_schema(&c).unwrap();
+        c.execute(
+            "UPDATE library_folders SET last_scanned = 999 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        migrate_source_priority_schema(&c).unwrap();
+
+        let ordered: Vec<(i64, i64, Option<i64>)> = {
+            let mut stmt = c
+                .prepare(
+                    "SELECT id, priority, last_scanned
+                     FROM library_folders ORDER BY priority",
+                )
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(ordered, vec![(2, 0, None), (3, 1, None), (1, 2, Some(999))]);
+        let folder_id: Option<i64> = c
+            .query_row("SELECT folder_id FROM episodes WHERE id = 4", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(folder_id, None);
+        let file_size: i64 = c
+            .query_row("SELECT file_size FROM episodes WHERE id = 4", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(file_size, 0);
+    }
+
+    #[test]
+    fn adding_file_size_forces_one_fresh_enumeration() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE library_folders (
+                 id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE,
+                 added_at INTEGER NOT NULL, last_scanned INTEGER,
+                 source_type TEXT NOT NULL DEFAULT 'local', priority INTEGER
+             );
+             CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY, anime_id INTEGER NOT NULL,
+                 file_path TEXT NOT NULL UNIQUE, file_name TEXT NOT NULL,
+                 source_type TEXT NOT NULL DEFAULT 'local', folder_id INTEGER
+             );
+             INSERT INTO library_folders VALUES (1, '/Anime', 1, 99, 'local', 0);
+             INSERT INTO episodes VALUES (1, 1, '/Anime/01.mkv', '01.mkv', 'local', 1);",
+        )
+        .unwrap();
+
+        migrate_source_priority_schema(&c).unwrap();
+        assert_eq!(
+            c.query_row("SELECT last_scanned FROM library_folders", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .unwrap(),
+            None
+        );
+        assert_eq!(
+            c.query_row("SELECT file_size FROM episodes", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+            0
+        );
+
+        c.execute("UPDATE library_folders SET last_scanned = 123", [])
+            .unwrap();
+        migrate_source_priority_schema(&c).unwrap();
+        assert_eq!(
+            c.query_row("SELECT last_scanned FROM library_folders", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })
+            .unwrap(),
+            Some(123)
+        );
+    }
+
+    #[test]
+    fn legacy_folder_scope_requires_a_path_boundary() {
+        assert!(path_is_within_prefix("/Anime/A/01.mkv", "/Anime/A"));
+        assert!(!path_is_within_prefix("/Anime/AB/01.mkv", "/Anime/A"));
+        assert!(path_is_within_prefix(r"C:\Anime\A\01.mkv", r"C:\Anime\A"));
+        assert!(!path_is_within_prefix(r"C:\Anime\AB\01.mkv", r"C:\Anime\A"));
+        assert!(path_is_within_prefix(
+            "smb://server/Anime/A/01.mkv",
+            "smb://server/Anime/A/"
+        ));
+    }
+
+    #[test]
+    fn higher_priority_folder_adopts_legacy_rows_before_overlapping_folder_reads() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE episodes (
+                 file_path TEXT NOT NULL UNIQUE, file_name TEXT NOT NULL,
+                 source_type TEXT NOT NULL, folder_id INTEGER
+             );
+             INSERT INTO episodes VALUES
+                 ('/Anime/Show/01.mkv', '01.mkv', 'local', NULL),
+                 ('/Other/02.mkv', '02.mkv', 'local', NULL);",
+        )
+        .unwrap();
+
+        let higher = episode_entries_for_folder_on(&c, 1, "local", &["/Anime".into()]).unwrap();
+        let higher_paths = higher
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            adopt_unowned_episode_paths_on(&c, 1, &higher_paths).unwrap(),
+            1
+        );
+
+        let overlapping =
+            episode_entries_for_folder_on(&c, 2, "local", &["/Anime/Show".into()]).unwrap();
+        assert!(overlapping.is_empty());
+        assert_eq!(
+            c.query_row(
+                "SELECT folder_id FROM episodes WHERE file_path = '/Anime/Show/01.mkv'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn removing_folder_is_atomic_and_does_not_delete_adjacent_legacy_folder() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE library_folders (id INTEGER PRIMARY KEY);
+             CREATE TABLE anime (id INTEGER PRIMARY KEY);
+             CREATE TABLE episodes (
+                 anime_id INTEGER NOT NULL, file_path TEXT NOT NULL UNIQUE,
+                 file_name TEXT NOT NULL, source_type TEXT NOT NULL, folder_id INTEGER
+             );
+             INSERT INTO library_folders VALUES (1);
+             INSERT INTO library_folders VALUES (2);
+             INSERT INTO anime VALUES (10);
+             INSERT INTO anime VALUES (11);
+             INSERT INTO episodes VALUES
+                 (10, '/Anime/A/01.mkv', '01.mkv', 'local', NULL),
+                 (11, '/Anime/AB/01.mkv', '01.mkv', 'local', NULL);
+             CREATE TRIGGER block_folder_delete BEFORE DELETE ON library_folders
+             WHEN OLD.id = 1 BEGIN SELECT RAISE(ABORT, 'blocked'); END;",
+        )
+        .unwrap();
+
+        assert!(remove_folder_on(&c, 1, "local", &["/Anime/A".into()]).is_err());
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM episodes", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        c.execute("DROP TRIGGER block_folder_delete", []).unwrap();
+
+        remove_folder_on(&c, 1, "local", &["/Anime/A".into()]).unwrap();
+        let remaining_path: String = c
+            .query_row("SELECT file_path FROM episodes", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining_path, "/Anime/AB/01.mkv");
+        assert_eq!(
+            c.query_row("SELECT id FROM anime", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            11
+        );
+    }
+
+    #[test]
+    fn prune_missing_only_removes_owned_rows_inside_the_folder_boundary() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE episodes (
+                 file_path TEXT NOT NULL UNIQUE, source_type TEXT NOT NULL,
+                 folder_id INTEGER
+             );
+             INSERT INTO episodes VALUES ('/Anime/A/old.mkv', 'local', 1);
+             INSERT INTO episodes VALUES ('/Anime/A/keep.mkv', 'local', 1);
+             INSERT INTO episodes VALUES ('/Anime/AB/other.mkv', 'local', NULL);
+             INSERT INTO episodes VALUES ('/Anime/A2/other.mkv', 'local', 1);",
+        )
+        .unwrap();
+        let kept = HashSet::from(["/Anime/A/keep.mkv".to_string()]);
+
+        assert_eq!(
+            prune_missing_on(&c, 1, "local", &["/Anime/A".into()], &kept).unwrap(),
+            1
+        );
+        let remaining: Vec<String> = {
+            let mut stmt = c
+                .prepare("SELECT file_path FROM episodes ORDER BY file_path")
+                .unwrap();
+            stmt.query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            remaining,
+            vec![
+                "/Anime/A/keep.mkv",
+                "/Anime/A2/other.mkv",
+                "/Anime/AB/other.mkv",
+            ]
+        );
     }
 
     #[test]
@@ -1302,7 +2023,7 @@ mod download_tests {
     }
 
     #[test]
-    fn download_recovery_requires_unique_smb_filename() {
+    fn download_recovery_requires_unique_remote_filename_and_size() {
         let c = connection();
         c.execute(
             "INSERT INTO anime(id, title_raw, name_cn)
@@ -1311,13 +2032,13 @@ mod download_tests {
         )
         .unwrap();
         c.execute(
-            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
-             VALUES (1, 'smb://server/Anime/A/Episode 01.mkv', 'Episode 01.mkv', 1, NULL)",
+            "INSERT INTO episodes(anime_id, file_path, file_name, file_size, episode_no, title)
+             VALUES (1, 'smb://server/Anime/A/Episode 01.mkv', 'Episode 01.mkv', 123, 1, NULL)",
             [],
         )
         .unwrap();
         assert_eq!(
-            unique_smb_episode_uri_on(&c, "Episode 01.mkv")
+            unique_smb_episode_uri_on(&c, "Episode 01.mkv", 123)
                 .unwrap()
                 .as_deref(),
             Some("smb://server/Anime/A/Episode 01.mkv")
@@ -1357,13 +2078,13 @@ mod download_tests {
         )
         .unwrap();
         c.execute(
-            "INSERT INTO episodes(anime_id, file_path, file_name, episode_no, title)
-             VALUES (2, 'smb://server/Anime/B/Episode 01.mkv', 'Episode 01.mkv', 1, NULL)",
+            "INSERT INTO episodes(anime_id, file_path, file_name, file_size, episode_no, title)
+             VALUES (2, 'smb://server/Anime/B/Episode 01.mkv', 'Episode 01.mkv', 456, 1, NULL)",
             [],
         )
         .unwrap();
         assert_eq!(
-            unique_smb_episode_uri_on(&c, "Episode 01.mkv").unwrap(),
+            unique_smb_episode_uri_on(&c, "Episode 01.mkv", 123).unwrap(),
             None
         );
         assert!(!recover_download_file_on(
@@ -1374,5 +2095,184 @@ mod download_tests {
             3,
         )
         .unwrap());
+    }
+
+    #[test]
+    fn cross_protocol_download_is_not_reused() {
+        let c = connection();
+        c.execute(
+            "INSERT INTO anime(id, title_raw, bangumi_id, name_cn)
+             VALUES (1, 'Same show', 1234, '同一番剧')",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_size, episode_no, title,
+                 source_type
+             ) VALUES (
+                 1, 'https://dav.example/Anime/Episode%2001.mkv',
+                 'Episode 01.mkv', 5, 1, NULL, 'webdav'
+             )",
+            [],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, anime_id,
+                 bangumi_id, episode_no, file_name
+             ) VALUES (
+                 'smb://server/Anime/Episode 01.mkv', ?1, 5, 1, 1, 1234, 1,
+                 'episode 01.MKV'
+             )",
+            params!["/downloads/Episode 01.mkv"],
+        )
+        .unwrap();
+
+        assert_eq!(
+            download_local_path_on(&c, "https://dav.example/Anime/Episode%2001.mkv").unwrap(),
+            None
+        );
+        assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+    }
+
+    #[test]
+    fn exact_download_keeps_stale_path_for_container_rebase() {
+        let c = connection();
+        let uri = "smb://server/Anime/Episode 01.mkv";
+        let stale =
+            "/var/mobile/Containers/Data/Application/OLD/Documents/KURAKO Downloads/Episode 01.mkv";
+        c.execute("INSERT INTO anime(id, title_raw) VALUES (1, 'Show')", [])
+            .unwrap();
+        c.execute(
+            "INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_size, episode_no,
+                 source_type
+             ) VALUES (1, ?1, 'Episode 01.mkv', 5, 1, 'smb')",
+            params![uri],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, file_name
+             ) VALUES (?1, ?2, 5, 1, 'Episode 01.mkv')",
+            params![uri, stale],
+        )
+        .unwrap();
+
+        assert_eq!(
+            download_local_path_on(&c, uri).unwrap().as_deref(),
+            Some(stale)
+        );
+        assert!(list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+    }
+
+    #[test]
+    fn download_status_uses_exact_uri_without_reading_local_files() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO anime(id, title_raw, bangumi_id) VALUES
+                 (1, 'First show', 100), (2, 'Second show', 200);
+             INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_size, episode_no,
+                 source_type
+             ) VALUES
+                 (1, 'smb://server/First/01.mkv', 'First 01.mkv', 5, 1, 'smb'),
+                 (2, 'smb://server/Second/01.mkv', 'Second 01.mkv', 6, 1, 'smb');",
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, anime_id,
+                 bangumi_id, episode_no, file_name
+             ) VALUES
+                 ('smb://server/First/01.mkv', '/missing/First 01.mkv', 5, 1, 1, 100, 1,
+                  'First 01.mkv'),
+                 ('smb://server/Second/01.mkv', '/missing/Second 01.mkv', 6, 1,
+                  2, 200, 1, 'Second 01.mkv')",
+            [],
+        )
+        .unwrap();
+
+        assert!(list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+        assert!(list_episodes_on(&c, 2).unwrap()[0].is_downloaded);
+    }
+
+    #[test]
+    fn webdav_exact_recovery_requires_the_scanned_remote_size() {
+        let c = connection();
+        let uri = "https://dav.example/Anime/Episode%2001.mkv";
+        c.execute("INSERT INTO anime(id, title_raw) VALUES (1, 'Show')", [])
+            .unwrap();
+        c.execute(
+            "INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_size, episode_no,
+                 source_type
+             ) VALUES (1, ?1, 'Episode 01.mkv', 5, 1, 'webdav')",
+            params![uri],
+        )
+        .unwrap();
+
+        assert!(episode_uri_matches_size_on(&c, "webdav", uri, 5).unwrap());
+        assert!(!episode_uri_matches_size_on(&c, "webdav", uri, 4).unwrap());
+        assert!(!episode_uri_matches_size_on(&c, "smb", uri, 5).unwrap());
+    }
+
+    #[test]
+    fn removing_one_legacy_alias_keeps_the_shared_file_reference() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO downloads(
+                 id, smb_uri, local_path, bytes_total, created_at
+             ) VALUES
+                 (1, 'smb://server/01.mkv', '/downloads/01.mkv', 5, 1),
+                 (2, 'https://dav.example/01.mkv', '/downloads/01.mkv', 5, 2);",
+        )
+        .unwrap();
+        assert_eq!(remove_download_on(&c, 1).unwrap(), None);
+        assert_eq!(
+            remove_download_on(&c, 2).unwrap().as_deref(),
+            Some("/downloads/01.mkv")
+        );
+    }
+
+    #[test]
+    fn recording_same_local_path_keeps_protocol_sources_independent() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO anime(id, title_raw, bangumi_id) VALUES (1, 'Show', 100);
+             INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_size, episode_no,
+                 source_type
+             ) VALUES (
+                 1, 'https://dav.example/01.mkv', '01.mkv', 5, 1, 'webdav'
+             );
+             INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, anime_id,
+                 bangumi_id, episode_no, file_name
+             ) VALUES (
+                 'smb://server/01.mkv', '/downloads/01.mkv', 5, 1, 1, 100,
+                 1, '01.mkv'
+             );",
+        )
+        .unwrap();
+
+        add_download_on(&c, "https://dav.example/01.mkv", "/downloads/01.mkv", 5, 2).unwrap();
+        let uris = {
+            let mut stmt = c
+                .prepare("SELECT smb_uri FROM downloads ORDER BY smb_uri")
+                .unwrap();
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            uris,
+            vec![
+                "https://dav.example/01.mkv".to_string(),
+                "smb://server/01.mkv".to_string(),
+            ]
+        );
     }
 }

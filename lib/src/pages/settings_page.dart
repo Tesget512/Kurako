@@ -4,8 +4,11 @@ import 'dart:io' show Platform;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
+    show Int64List;
 
 import '../rust/api.dart' as rust;
+import '../rust/models.dart';
 import '../services/bangumi_oauth.dart';
 import '../services/external_player.dart';
 import '../services/media_source.dart';
@@ -54,27 +57,27 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             error: (e, _) => Text('加载失败: $e'),
             data: (folders) => Column(
               children: [
-                ...folders.map(
-                  (f) => ListTile(
-                    leading: Icon(switch (f.sourceType) {
-                      'smb' => Icons.lan_outlined,
-                      'webdav' => Icons.cloud_outlined,
-                      _ => Icons.folder,
-                    }),
-                    title: Text(f.path),
-                    subtitle: switch (f.sourceType) {
-                      'smb' => const Text('SMB 网络共享'),
-                      'webdav' => const Text('WebDAV 网络共享'),
-                      _ => null,
-                    },
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () async {
-                        await rust.removeLibraryFolder(id: f.id);
-                        ref.invalidate(foldersProvider);
-                      },
-                    ),
+                if (folders.length > 1)
+                  const ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.low_priority),
+                    title: Text('文件夹优先级'),
+                    subtitle: Text('拖动左侧把手调整；位置越高，同名视频越优先'),
                   ),
+                _FolderPriorityList(
+                  folders: folders,
+                  onReorder: (ordered) async {
+                    await rust.reorderLibraryFolders(
+                      ids: Int64List.fromList(
+                        ordered.map((folder) => folder.id).toList(),
+                      ),
+                    );
+                    ref.invalidate(foldersProvider);
+                  },
+                  onDelete: (folder) async {
+                    await rust.removeLibraryFolder(id: folder.id);
+                    ref.invalidate(foldersProvider);
+                  },
                 ),
                 Align(
                   alignment: Alignment.centerLeft,
@@ -601,5 +604,113 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     if (path == null) return;
     _playerPathController.text = path;
     ref.read(settingsProvider.notifier).setExternalPlayerPath(path);
+  }
+}
+
+class _FolderPriorityList extends StatefulWidget {
+  final List<LibraryFolder> folders;
+  final Future<void> Function(List<LibraryFolder> ordered) onReorder;
+  final Future<void> Function(LibraryFolder folder) onDelete;
+
+  const _FolderPriorityList({
+    required this.folders,
+    required this.onReorder,
+    required this.onDelete,
+  });
+
+  @override
+  State<_FolderPriorityList> createState() => _FolderPriorityListState();
+}
+
+class _FolderPriorityListState extends State<_FolderPriorityList> {
+  late List<LibraryFolder> _folders = List.of(widget.folders);
+  bool _saving = false;
+
+  @override
+  void didUpdateWidget(covariant _FolderPriorityList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_saving && oldWidget.folders != widget.folders) {
+      _folders = List.of(widget.folders);
+    }
+  }
+
+  Future<void> _reorder(int oldIndex, int newIndex) async {
+    if (_saving || oldIndex == newIndex) return;
+    final previous = List<LibraryFolder>.of(_folders);
+    setState(() {
+      _folders.insert(newIndex, _folders.removeAt(oldIndex));
+      _saving = true;
+    });
+    try {
+      await widget.onReorder(List.unmodifiable(_folders));
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _folders = previous);
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('保存文件夹优先级失败：$error')));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ReorderableListView.builder(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      buildDefaultDragHandles: false,
+      itemCount: _folders.length,
+      onReorderItem: _reorder,
+      itemBuilder: (context, index) {
+        final folder = _folders[index];
+        final sourceIcon = switch (folder.sourceType) {
+          'smb' => Icons.lan_outlined,
+          'webdav' => Icons.cloud_outlined,
+          _ => Icons.folder_outlined,
+        };
+        final sourceLabel = switch (folder.sourceType) {
+          'smb' => 'SMB 网络共享',
+          'webdav' => 'WebDAV 网络共享',
+          'saf' => 'Android 本地文件夹',
+          _ => '本地文件夹',
+        };
+        return ListTile(
+          key: ValueKey(folder.id),
+          contentPadding: EdgeInsets.zero,
+          leading: ReorderableDragStartListener(
+            index: index,
+            enabled: !_saving,
+            child: const Tooltip(
+              message: '拖动调整优先级',
+              child: SizedBox(
+                width: 40,
+                height: 48,
+                child: Icon(Icons.drag_handle),
+              ),
+            ),
+          ),
+          title: Row(
+            children: [
+              Icon(sourceIcon, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  folder.path,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          subtitle: Text(index == 0 ? '$sourceLabel · 最高优先级' : sourceLabel),
+          trailing: IconButton(
+            tooltip: '删除文件夹',
+            icon: const Icon(Icons.delete_outline),
+            onPressed: _saving ? null : () => widget.onDelete(folder),
+          ),
+        );
+      },
+    );
   }
 }

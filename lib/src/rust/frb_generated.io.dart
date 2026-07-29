@@ -28,6 +28,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<DuplicateCheckProgress>
+  dco_decode_StreamSink_duplicate_check_progress_Sse(dynamic raw);
+
+  @protected
   RustStreamSink<ScanProgress> dco_decode_StreamSink_scan_progress_Sse(
     dynamic raw,
   );
@@ -51,6 +55,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Anime dco_decode_box_autoadd_anime(dynamic raw);
 
   @protected
+  DuplicateCandidateGroup dco_decode_box_autoadd_duplicate_candidate_group(
+    dynamic raw,
+  );
+
+  @protected
   double dco_decode_box_autoadd_f_64(dynamic raw);
 
   @protected
@@ -67,6 +76,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DownloadProgress dco_decode_download_progress(dynamic raw);
+
+  @protected
+  DuplicateCandidateGroup dco_decode_duplicate_candidate_group(dynamic raw);
+
+  @protected
+  DuplicateCheckItem dco_decode_duplicate_check_item(dynamic raw);
+
+  @protected
+  DuplicateCheckProgress dco_decode_duplicate_check_progress(dynamic raw);
 
   @protected
   Episode dco_decode_episode(dynamic raw);
@@ -102,10 +120,16 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<DownloadEntry> dco_decode_list_download_entry(dynamic raw);
 
   @protected
+  List<DuplicateCheckItem> dco_decode_list_duplicate_check_item(dynamic raw);
+
+  @protected
   List<Episode> dco_decode_list_episode(dynamic raw);
 
   @protected
   List<LibraryFolder> dco_decode_list_library_folder(dynamic raw);
+
+  @protected
+  Int64List dco_decode_list_prim_i_64_strict(dynamic raw);
 
   @protected
   Uint8List dco_decode_list_prim_u_8_strict(dynamic raw);
@@ -135,6 +159,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Anime? dco_decode_opt_box_autoadd_anime(dynamic raw);
 
   @protected
+  DuplicateCandidateGroup? dco_decode_opt_box_autoadd_duplicate_candidate_group(
+    dynamic raw,
+  );
+
+  @protected
   double? dco_decode_opt_box_autoadd_f_64(dynamic raw);
 
   @protected
@@ -150,6 +179,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RemoteEntry dco_decode_remote_entry(dynamic raw);
 
   @protected
+  ScanFileBatch dco_decode_scan_file_batch(dynamic raw);
+
+  @protected
   ScanProgress dco_decode_scan_progress(dynamic raw);
 
   @protected
@@ -157,6 +189,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SmbShareInfo dco_decode_smb_share_info(dynamic raw);
+
+  @protected
+  SmbShareListResult dco_decode_smb_share_list_result(dynamic raw);
 
   @protected
   SubtitleCandidate dco_decode_subtitle_candidate(dynamic raw);
@@ -185,6 +220,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  RustStreamSink<DuplicateCheckProgress>
+  sse_decode_StreamSink_duplicate_check_progress_Sse(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   RustStreamSink<ScanProgress> sse_decode_StreamSink_scan_progress_Sse(
     SseDeserializer deserializer,
   );
@@ -208,6 +249,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Anime sse_decode_box_autoadd_anime(SseDeserializer deserializer);
 
   @protected
+  DuplicateCandidateGroup sse_decode_box_autoadd_duplicate_candidate_group(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   double sse_decode_box_autoadd_f_64(SseDeserializer deserializer);
 
   @protected
@@ -224,6 +270,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   DownloadProgress sse_decode_download_progress(SseDeserializer deserializer);
+
+  @protected
+  DuplicateCandidateGroup sse_decode_duplicate_candidate_group(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DuplicateCheckItem sse_decode_duplicate_check_item(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  DuplicateCheckProgress sse_decode_duplicate_check_progress(
+    SseDeserializer deserializer,
+  );
 
   @protected
   Episode sse_decode_episode(SseDeserializer deserializer);
@@ -269,12 +330,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<DuplicateCheckItem> sse_decode_list_duplicate_check_item(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   List<Episode> sse_decode_list_episode(SseDeserializer deserializer);
 
   @protected
   List<LibraryFolder> sse_decode_list_library_folder(
     SseDeserializer deserializer,
   );
+
+  @protected
+  Int64List sse_decode_list_prim_i_64_strict(SseDeserializer deserializer);
 
   @protected
   Uint8List sse_decode_list_prim_u_8_strict(SseDeserializer deserializer);
@@ -310,6 +379,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   Anime? sse_decode_opt_box_autoadd_anime(SseDeserializer deserializer);
 
   @protected
+  DuplicateCandidateGroup? sse_decode_opt_box_autoadd_duplicate_candidate_group(
+    SseDeserializer deserializer,
+  );
+
+  @protected
   double? sse_decode_opt_box_autoadd_f_64(SseDeserializer deserializer);
 
   @protected
@@ -325,6 +399,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RemoteEntry sse_decode_remote_entry(SseDeserializer deserializer);
 
   @protected
+  ScanFileBatch sse_decode_scan_file_batch(SseDeserializer deserializer);
+
+  @protected
   ScanProgress sse_decode_scan_progress(SseDeserializer deserializer);
 
   @protected
@@ -332,6 +409,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   SmbShareInfo sse_decode_smb_share_info(SseDeserializer deserializer);
+
+  @protected
+  SmbShareListResult sse_decode_smb_share_list_result(
+    SseDeserializer deserializer,
+  );
 
   @protected
   SubtitleCandidate sse_decode_subtitle_candidate(SseDeserializer deserializer);
@@ -367,6 +449,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_StreamSink_duplicate_check_progress_Sse(
+    RustStreamSink<DuplicateCheckProgress> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_StreamSink_scan_progress_Sse(
     RustStreamSink<ScanProgress> self,
     SseSerializer serializer,
@@ -397,6 +485,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_box_autoadd_anime(Anime self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_duplicate_candidate_group(
+    DuplicateCandidateGroup self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_box_autoadd_f_64(double self, SseSerializer serializer);
 
   @protected
@@ -423,6 +517,24 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_download_progress(
     DownloadProgress self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_duplicate_candidate_group(
+    DuplicateCandidateGroup self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_duplicate_check_item(
+    DuplicateCheckItem self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_duplicate_check_progress(
+    DuplicateCheckProgress self,
     SseSerializer serializer,
   );
 
@@ -475,11 +587,23 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_duplicate_check_item(
+    List<DuplicateCheckItem> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_list_episode(List<Episode> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_library_folder(
     List<LibraryFolder> self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_list_prim_i_64_strict(
+    Int64List self,
     SseSerializer serializer,
   );
 
@@ -529,6 +653,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_opt_box_autoadd_anime(Anime? self, SseSerializer serializer);
 
   @protected
+  void sse_encode_opt_box_autoadd_duplicate_candidate_group(
+    DuplicateCandidateGroup? self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_opt_box_autoadd_f_64(double? self, SseSerializer serializer);
 
   @protected
@@ -553,6 +683,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   void sse_encode_remote_entry(RemoteEntry self, SseSerializer serializer);
 
   @protected
+  void sse_encode_scan_file_batch(ScanFileBatch self, SseSerializer serializer);
+
+  @protected
   void sse_encode_scan_progress(ScanProgress self, SseSerializer serializer);
 
   @protected
@@ -560,6 +693,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_smb_share_info(SmbShareInfo self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_smb_share_list_result(
+    SmbShareListResult self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_subtitle_candidate(

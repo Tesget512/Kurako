@@ -562,6 +562,7 @@ pub async fn best_match(title: &str) -> Result<Option<BangumiSubject>> {
         // GoBots movie. Retry the error once instead.
         let mut hits = Vec::new();
         let mut v0_confirmed_empty = false;
+        let mut last_v0_error = None;
         for attempt in 0..2 {
             match search(kw, 5).await {
                 Ok(h) if h.is_empty() => {
@@ -572,11 +573,21 @@ pub async fn best_match(title: &str) -> Result<Option<BangumiSubject>> {
                     hits = h;
                     break;
                 }
-                Err(_) if attempt == 0 => {
+                Err(error) if attempt == 0 => {
+                    last_v0_error = Some(error);
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
-                Err(_) => {}
+                Err(error) => last_v0_error = Some(error),
             }
+        }
+        // Trying more keyword variants cannot repair a dead API connection.
+        // Propagate the transport failure so the scan-level circuit breaker can
+        // stop the remaining library after three failed titles. `Ok(None)` is
+        // reserved for requests which actually reached Bangumi but found no
+        // sufficiently reliable match.
+        if hits.is_empty() && !v0_confirmed_empty {
+            return Err(last_v0_error
+                .unwrap_or_else(|| anyhow::anyhow!("bangumi search failed without a response")));
         }
         let mut legacy = false;
         if hits.is_empty() && v0_confirmed_empty {

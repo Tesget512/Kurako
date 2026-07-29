@@ -57,6 +57,7 @@ const _webDavFields = <String, _SettingDefinition>{
   'user': _SettingDefinition('', _isString),
   'password': _SettingDefinition('', _isString),
   'authMode': _SettingDefinition('basic', _webDavAuthValidator),
+  'allowInsecureTls': _SettingDefinition(false, _isBool),
 };
 
 const _accountPreferenceKeys = <String, String>{
@@ -77,6 +78,7 @@ const _webDavPreferenceKeys = <String, String>{
   'user': 'webdav_user',
   'password': 'webdav_password',
   'authMode': 'webdav_auth_mode',
+  'allowInsecureTls': 'webdav_allow_insecure_tls',
 };
 
 bool _librarySortValidator(Object value) => _isIntInRange(value, 0, 5);
@@ -139,6 +141,8 @@ class ConfigurationBackupDocument {
   String get webDavUser => webdav?['user'] as String? ?? '';
   String get webDavPassword => webdav?['password'] as String? ?? '';
   String get webDavAuthMode => webdav?['authMode'] as String? ?? 'basic';
+  bool get webDavAllowInsecureTls =>
+      webdav?['allowInsecureTls'] as bool? ?? false;
 
   static Future<String> exportJson({DateTime? exportedAt}) async {
     final prefs = await SharedPreferences.getInstance();
