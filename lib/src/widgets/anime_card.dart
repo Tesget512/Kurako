@@ -69,11 +69,14 @@ class AnimeCard extends StatelessWidget {
                     Positioned(
                       top: 8,
                       right: 8,
-                      child: _badge(
-                        theme,
-                        collected,
-                        theme.colorScheme.primaryContainer,
-                        theme.colorScheme.onPrimaryContainer,
+                      child: _fadeWithRoute(
+                        context,
+                        _badge(
+                          theme,
+                          collected,
+                          theme.colorScheme.primaryContainer,
+                          theme.colorScheme.onPrimaryContainer,
+                        ),
                       ),
                     ),
                 ],
@@ -121,6 +124,22 @@ class AnimeCard extends StatelessWidget {
     );
   }
 
+  Widget _fadeWithRoute(BuildContext context, Widget child) {
+    final secondaryAnimation = ModalRoute.of(context)?.secondaryAnimation;
+    if (secondaryAnimation == null) return child;
+    return FadeTransition(
+      key: ValueKey('anime-collection-badge-fade-${anime.id}'),
+      opacity: Tween<double>(begin: 1, end: 0).animate(
+        CurvedAnimation(
+          parent: secondaryAnimation,
+          curve: Curves.easeOutCubic,
+          reverseCurve: Curves.easeInCubic,
+        ),
+      ),
+      child: child,
+    );
+  }
+
   Widget _cover(ThemeData theme) {
     // Grid cards are ~200 logical px wide, so decode the cover down to a
     // display-appropriate size instead of Bangumi's full ~1000px original.
@@ -137,7 +156,7 @@ class AnimeCard extends StatelessWidget {
       transitionOnUserGestures: true,
       createRectTween: createCoverHeroRectTween,
       flightShuttleBuilder: coverHeroFlightShuttleBuilder,
-      child: image,
+      child: ClipRRect(borderRadius: BorderRadius.circular(12), child: image),
     );
   }
 }

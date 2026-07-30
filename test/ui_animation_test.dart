@@ -8,12 +8,22 @@ import 'package:kurako/src/state/providers.dart';
 import 'package:kurako/src/ui/cover_hero.dart';
 import 'package:kurako/src/ui/transitions.dart';
 import 'package:kurako/src/widgets/anime_card.dart';
+import 'package:kurako/src/widgets/cover_header.dart';
 
 const _anime = Anime(
   id: 42,
   titleRaw: 'Animation test',
+  bangumiId: 42,
   nameCn: '动画测试',
-  collection: 0,
+  name: 'Animation Test Alternative Title',
+  airDate: '2026-01-22',
+  totalEps: 12,
+  rating: 8.1,
+  ratingTotal: 21512,
+  ratingRank: 190,
+  ratingCounts: '10,20,30,40,50,60,70,80,90,100',
+  airWeekday: 4,
+  collection: 2,
   matchConfidence: 'high',
   corrected: false,
   episodeCount: 0,
@@ -94,8 +104,43 @@ void main() {
   });
 
   testWidgets(
+    'wide detail header keeps rating and collection controls inline',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(1000, 700);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      final container = ProviderContainer(
+        overrides: [
+          episodesProvider.overrideWith((ref, id) async => const <Episode>[]),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: const MaterialApp(
+            home: DetailPage(animeId: 42, initialAnime: _anime),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(RatingHistogram), findsOneWidget);
+      expect(find.byType(ExpansionTile), findsNothing);
+      expect(find.byType(MenuAnchor), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'inactive tab hero is ignored while the active cover flies to detail',
     (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
       final container = ProviderContainer(
         overrides: [
           episodesProvider.overrideWith((ref, id) async => const <Episode>[]),
@@ -158,6 +203,18 @@ void main() {
         heroTagForAnime(_anime.id),
       );
       expect(
+        (tester.widget<Hero>(find.byType(Hero).first).child as ClipRRect)
+            .borderRadius,
+        BorderRadius.circular(12),
+      );
+      final collectionFade = find
+          .byKey(
+            const ValueKey('anime-collection-badge-fade-42'),
+            skipOffstage: false,
+          )
+          .first;
+      expect(tester.widget<FadeTransition>(collectionFade).opacity.value, 1);
+      expect(
         tester.widget<Hero>(find.byType(Hero).first).createRectTween!(
           Rect.zero,
           const Rect.fromLTWH(0, 0, 10, 10),
@@ -167,6 +224,10 @@ void main() {
       await tester.tap(find.byType(AnimeCard).first);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
+      expect(
+        tester.widget<FadeTransition>(collectionFade).opacity.value,
+        inExclusiveRange(0, 1),
+      );
       final flightCover = tester.widget<ClipRRect>(
         find.byKey(const ValueKey('cover-hero-flight-cover')),
       );
@@ -175,13 +236,45 @@ void main() {
         find.byKey(const ValueKey('cover-hero-viewport-clip')),
         findsOneWidget,
       );
-      expect(tester.takeException(), isNull);
       await tester.pumpAndSettle();
       expect(find.byType(DetailPage), findsOneWidget);
+      final detailAppBar = tester.widget<SliverAppBar>(
+        find.byType(SliverAppBar),
+      );
+      expect(detailAppBar.pinned, isTrue);
+      expect(detailAppBar.stretch, isFalse);
+      final collectionMenu = tester.widget<MenuAnchor>(find.byType(MenuAnchor));
+      expect(collectionMenu.menuChildren, hasLength(7));
+      expect(find.text('看过'), findsOneWidget);
+      final coverBottom = tester
+          .getRect(find.byKey(const ValueKey('detail-header-cover')))
+          .bottom;
+      final collectionBottom = tester
+          .getRect(find.byKey(const ValueKey('detail-collection-control')))
+          .bottom;
+      expect((coverBottom - collectionBottom).abs(), lessThan(0.5));
+      expect(
+        tester
+            .getRect(find.byKey(const ValueKey('detail-header-titles')))
+            .bottom,
+        lessThan(
+          tester.getRect(find.byKey(const ValueKey('detail-header-cover'))).top,
+        ),
+      );
+
+      expect(find.byType(ExpansionTile), findsOneWidget);
+      await tester.tap(find.byType(ExpansionTile));
+      await tester.pumpAndSettle();
+      expect(find.byType(RatingHistogram), findsOneWidget);
+      expect(tester.takeException(), isNull);
 
       Navigator.of(tester.element(find.byType(DetailPage))).pop();
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
+      expect(
+        tester.widget<FadeTransition>(collectionFade).opacity.value,
+        inExclusiveRange(0, 1),
+      );
       expect(
         tester
             .widget<ClipRRect>(
@@ -196,6 +289,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(DetailPage), findsNothing);
+      expect(tester.widget<FadeTransition>(collectionFade).opacity.value, 1);
       expect(tester.takeException(), isNull);
     },
   );

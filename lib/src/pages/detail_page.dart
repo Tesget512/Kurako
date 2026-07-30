@@ -30,6 +30,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   Anime? _animeSnapshot;
   // Whether the header has scrolled far enough to show the toolbar title.
   final _collapsed = ValueNotifier<bool>(false);
+  double _titleRevealOffset = 160;
 
   @override
   void initState() {
@@ -53,7 +54,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   void _onScroll() {
     // Reveal the toolbar title once the hero has largely scrolled away.
     if (!_scrollController.hasClients) return;
-    _collapsed.value = _scrollController.offset > 160;
+    _collapsed.value = _scrollController.offset > _titleRevealOffset;
   }
 
   @override
@@ -82,106 +83,93 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         error: (e, _) => _NotFound(message: '加载失败: $e'),
         data: (anime) {
           if (anime == null) return const _NotFound(message: '未找到');
-          return Stack(
-            children: [
-              CustomScrollView(
-                controller: _scrollController,
-                slivers: [
-                  // The hero (blurred backdrop + cover/facts/histogram) is a
-                  // normal self-sizing sliver — nothing is clipped, and the
-                  // histogram gets its real height. topInset leaves room under
-                  // the floating toolbar.
-                  SliverToBoxAdapter(
-                    child: CoverHeaderHero(
-                      anime: anime,
-                      topInset:
-                          MediaQuery.paddingOf(context).top + kToolbarHeight,
-                    ),
-                  ),
-                  SliverToBoxAdapter(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (anime.bangumiId != null)
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
-                            child: _CollectionRow(
-                              current: anime.collection,
-                              onChanged: (v) => _setCollection(context, v),
-                              onClear: () => _clearCollection(context),
-                            ),
-                          ),
-                        CoverHeaderBody(anime: anime),
-                        const Divider(height: 16),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                          child: Text(
-                            '剧集',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  episodesAsync.when(
-                    loading: () => const SliverToBoxAdapter(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Center(child: CircularProgressIndicator()),
+          final expandedHeight = coverHeaderExpandedHeight(context);
+          final collapsedHeight =
+              MediaQuery.paddingOf(context).top + kToolbarHeight;
+          _titleRevealOffset = (expandedHeight - collapsedHeight - 24).clamp(
+            160.0,
+            double.infinity,
+          );
+          return CustomScrollView(
+            controller: _scrollController,
+            slivers: [
+              _detailSliverAppBar(
+                context,
+                anime,
+                expandedHeight,
+                collectionControl: anime.bangumiId == null
+                    ? null
+                    : _CollectionRow(
+                        current: anime.collection,
+                        onChanged: (v) => _setCollection(context, v),
+                        onClear: () => _clearCollection(context),
                       ),
-                    ),
-                    error: (e, _) => SliverToBoxAdapter(
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Text('剧集加载失败: $e'),
-                      ),
-                    ),
-                    data: (episodes) => SliverToBoxAdapter(
-                      child: _EpisodeList(
-                        episodes: episodes,
-                        onPlay: (e) => _play(context, ref, e),
-                        onPlayWith: (e, external) =>
-                            _play(context, ref, e, forceExternal: external),
-                        onDownload: (e) => _downloadEpisode(context, e),
-                        onBlocked: () async {
-                          ref.invalidate(episodesProvider(widget.animeId));
-                          ref.invalidate(animeDetailProvider(widget.animeId));
-                          await _reloadAnimeSnapshot();
-                        },
-                        onRematched: (newAnimeId) async {
-                          // A single file was split into its own (or an
-                          // existing) entry, or detached to 未分类 — refresh
-                          // this list so it drops out, refresh the library, and
-                          // jump to the entry it now belongs to.
-                          ref.invalidate(episodesProvider(widget.animeId));
-                          ref.invalidate(animeDetailProvider(widget.animeId));
-                          ref.invalidate(animeListProvider);
-                          if (newAnimeId == widget.animeId) {
-                            await _reloadAnimeSnapshot();
-                          } else if (context.mounted) {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => DetailPage(animeId: newAnimeId),
-                              ),
-                            );
-                          }
-                        },
-                      ),
-                    ),
-                  ),
-                  const SliverToBoxAdapter(child: SizedBox(height: 96)),
-                ],
               ),
-              // Floating toolbar over the hero: back + (title on scroll) +
-              // actions + window buttons; the whole strip drags the window.
-              ValueListenableBuilder<bool>(
-                valueListenable: _collapsed,
-                builder: (context, collapsed, _) => _FloatingToolbar(
-                  title: _titleOf(anime),
-                  showTitle: collapsed,
-                  actions: _buildActions(context, anime),
+              if (MediaQuery.sizeOf(context).width < 560)
+                SliverToBoxAdapter(child: CoverRatingSection(anime: anime)),
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CoverHeaderBody(anime: anime),
+                    const Divider(height: 16),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      child: Text(
+                        '剧集',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              episodesAsync.when(
+                loading: () => const SliverToBoxAdapter(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Center(child: CircularProgressIndicator()),
+                  ),
+                ),
+                error: (e, _) => SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text('剧集加载失败: $e'),
+                  ),
+                ),
+                data: (episodes) => SliverToBoxAdapter(
+                  child: _EpisodeList(
+                    episodes: episodes,
+                    onPlay: (e) => _play(context, ref, e),
+                    onPlayWith: (e, external) =>
+                        _play(context, ref, e, forceExternal: external),
+                    onDownload: (e) => _downloadEpisode(context, e),
+                    onBlocked: () async {
+                      ref.invalidate(episodesProvider(widget.animeId));
+                      ref.invalidate(animeDetailProvider(widget.animeId));
+                      await _reloadAnimeSnapshot();
+                    },
+                    onRematched: (newAnimeId) async {
+                      // A single file was split into its own (or an
+                      // existing) entry, or detached to 未分类 — refresh
+                      // this list so it drops out, refresh the library, and
+                      // jump to the entry it now belongs to.
+                      ref.invalidate(episodesProvider(widget.animeId));
+                      ref.invalidate(animeDetailProvider(widget.animeId));
+                      ref.invalidate(animeListProvider);
+                      if (newAnimeId == widget.animeId) {
+                        await _reloadAnimeSnapshot();
+                      } else if (context.mounted) {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => DetailPage(animeId: newAnimeId),
+                          ),
+                        );
+                      }
+                    },
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 96)),
             ],
           );
         },
@@ -189,8 +177,64 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     );
   }
 
+  Widget _detailSliverAppBar(
+    BuildContext context,
+    Anime anime,
+    double expandedHeight, {
+    Widget? collectionControl,
+  }) {
+    Widget title = ValueListenableBuilder<bool>(
+      valueListenable: _collapsed,
+      builder: (context, collapsed, _) => AnimatedSwitcher(
+        duration: const Duration(milliseconds: 150),
+        child: collapsed
+            ? _MarqueeText(
+                _titleOf(anime),
+                key: const ValueKey('detail-collapsed-title'),
+                style: Theme.of(context).textTheme.titleMedium,
+              )
+            : const SizedBox.shrink(key: ValueKey('detail-expanded-title')),
+      ),
+    );
+    if (useCustomCaption) title = WindowDragArea(child: title);
+    title = SizedBox(height: kToolbarHeight, child: title);
+
+    return SliverAppBar(
+      pinned: true,
+      stretch: false,
+      expandedHeight: expandedHeight,
+      automaticallyImplyLeading: false,
+      scrolledUnderElevation: 0,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      surfaceTintColor: Colors.transparent,
+      leading: IconButton(
+        tooltip: '返回',
+        icon: const Icon(Icons.arrow_back),
+        onPressed: () => Navigator.of(context).maybePop(),
+      ),
+      titleSpacing: 0,
+      title: title,
+      actions: [
+        ..._buildActions(context, anime),
+        if (useCustomCaption) ...[
+          const SizedBox(width: 4),
+          const WindowButtons(),
+        ],
+      ],
+      flexibleSpace: FlexibleSpaceBar(
+        collapseMode: CollapseMode.pin,
+        background: CoverHeaderHero(
+          anime: anime,
+          topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          layoutHeight: expandedHeight,
+          collectionControl: collectionControl,
+        ),
+      ),
+    );
+  }
+
   /// AppBar actions (Bangumi 主页 / 下载 / 刷新 / 重新匹配). Window buttons are
-  /// appended by [_FloatingToolbar] on desktop.
+  /// followed by desktop window controls in the pinned SliverAppBar.
   List<Widget> _buildActions(BuildContext context, Anime anime) {
     return [
       if (anime.bangumiId != null)
@@ -509,7 +553,7 @@ class _FloatingToolbar extends StatelessWidget {
 class _MarqueeText extends StatefulWidget {
   final String text;
   final TextStyle? style;
-  const _MarqueeText(this.text, {this.style});
+  const _MarqueeText(this.text, {super.key, this.style});
 
   @override
   State<_MarqueeText> createState() => _MarqueeTextState();
@@ -518,6 +562,8 @@ class _MarqueeText extends StatefulWidget {
 class _MarqueeTextState extends State<_MarqueeText>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
+  Timer? _delayTimer;
+  Completer<void>? _delayCompleter;
   bool _cycling = false;
   bool? _lastOverflowing;
   int _cycleGeneration = 0;
@@ -549,17 +595,37 @@ class _MarqueeTextState extends State<_MarqueeText>
   Future<void> _runCycle(int generation) async {
     try {
       while (mounted && _cycling && generation == _cycleGeneration) {
-        await Future<void>.delayed(const Duration(seconds: 4));
+        await _wait(const Duration(seconds: 4));
         if (!mounted || !_cycling || generation != _cycleGeneration) return;
         await _controller.forward(from: 0).orCancel;
         if (!mounted || !_cycling || generation != _cycleGeneration) return;
-        await Future<void>.delayed(const Duration(seconds: 1));
+        await _wait(const Duration(seconds: 1));
         if (!mounted || !_cycling || generation != _cycleGeneration) return;
         await _controller.reverse().orCancel;
       }
     } on TickerCanceled {
       // Stopping or disposing the controller intentionally cancels its future.
     }
+  }
+
+  Future<void> _wait(Duration duration) {
+    _cancelDelay();
+    final completer = Completer<void>();
+    _delayCompleter = completer;
+    _delayTimer = Timer(duration, () {
+      _delayTimer = null;
+      _delayCompleter = null;
+      completer.complete();
+    });
+    return completer.future;
+  }
+
+  void _cancelDelay() {
+    _delayTimer?.cancel();
+    _delayTimer = null;
+    final completer = _delayCompleter;
+    _delayCompleter = null;
+    if (completer != null && !completer.isCompleted) completer.complete();
   }
 
   void _startCycling() {
@@ -572,6 +638,7 @@ class _MarqueeTextState extends State<_MarqueeText>
   void _stopCycling() {
     _cycling = false;
     _cycleGeneration++;
+    _cancelDelay();
     _controller.stop(canceled: true);
     _controller.value = 0;
   }
@@ -593,6 +660,7 @@ class _MarqueeTextState extends State<_MarqueeText>
   void dispose() {
     _cycling = false;
     _cycleGeneration++;
+    _cancelDelay();
     _controller.dispose();
     super.dispose();
   }
@@ -704,40 +772,43 @@ class _CollectionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isCollected = _items.containsKey(current);
-    // A Wrap of chips flows onto multiple lines on narrow (phone) screens
-    // instead of cramming five icon+label segments into one row.
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
+    final selected = _items[current];
+    return MenuAnchor(
+      consumeOutsideTap: true,
+      crossAxisUnconstrained: false,
+      menuChildren: [
         for (final entry in _items.entries)
-          ChoiceChip(
-            selected: current == entry.key,
-            onSelected: (_) => onChanged(entry.key),
-            showCheckmark: false,
-            avatar: Icon(
+          MenuItemButton(
+            onPressed: current == entry.key ? null : () => onChanged(entry.key),
+            leadingIcon: Icon(
               entry.value.$2,
-              size: 18,
-              color: current == entry.key
-                  ? theme.colorScheme.onSecondaryContainer
-                  : theme.colorScheme.onSurfaceVariant,
+              color: current == entry.key ? theme.colorScheme.primary : null,
             ),
-            label: Text(entry.value.$1),
-            labelStyle: theme.textTheme.labelMedium,
-            visualDensity: VisualDensity.compact,
+            trailingIcon: current == entry.key
+                ? Icon(Icons.check, color: theme.colorScheme.primary)
+                : null,
+            child: Text(
+              entry.value.$1,
+              style: current == entry.key
+                  ? TextStyle(color: theme.colorScheme.primary)
+                  : null,
+            ),
           ),
-        // Only offer "取消收藏" when there's a local mark to clear.
-        if (isCollected)
-          ActionChip(
-            avatar: const Icon(Icons.bookmark_remove_outlined, size: 18),
-            label: const Text('取消收藏'),
-            labelStyle: theme.textTheme.labelMedium,
+        if (isCollected) ...[
+          const Divider(),
+          MenuItemButton(
             onPressed: onClear,
-            tooltip: '取消收藏（仅本地，Bangumi 网页端不变）',
-            visualDensity: VisualDensity.compact,
+            leadingIcon: const Icon(Icons.bookmark_remove_outlined),
+            child: const Text('取消收藏（仅本地）'),
           ),
+        ],
       ],
+      builder: (context, controller, child) => FilledButton.tonalIcon(
+        onPressed: () =>
+            controller.isOpen ? controller.close() : controller.open(),
+        icon: Icon(selected?.$2 ?? Icons.bookmark_border),
+        label: Text(selected?.$1 ?? '未追'),
+      ),
     );
   }
 }

@@ -13,33 +13,68 @@ String _titleOf(Anime a) {
   return a.titleRaw;
 }
 
-/// The detail-page hero: a blurred cover backdrop with the cover + facts +
-/// rating histogram on top. Self-sizing (height follows its content) so nothing
-/// is ever clipped — meant to be a normal scrolling sliver, with the toolbar
-/// floating over its top [topInset] pixels. Inspired by Kazumi (GPL-3.0),
-/// reimplemented independently; see the credits in settings.
+/// Responsive expanded extent for the detail header. The bounds leave room for
+/// large text without turning the fixed header into a full-screen surface.
+double coverHeaderExpandedHeight(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.3);
+  final base = size.width < 560
+      ? (size.height * 0.56).clamp(420.0, 560.0)
+      : (size.height * 0.52).clamp(400.0, 520.0);
+  return (base * textScale).clamp(320.0, 620.0).toDouble();
+}
+
+/// The detail-page hero: a blurred cover backdrop with the cover and facts,
+/// plus the rating histogram on wide layouts. It fills the expanded area of
+/// the pinned detail app bar, while [topInset] keeps content clear of the
+/// toolbar and safe area. Inspired by Kazumi (GPL-3.0), reimplemented
+/// independently; see the credits in settings.
 class CoverHeaderHero extends StatelessWidget {
   final Anime anime;
   final double topInset;
-  const CoverHeaderHero({super.key, required this.anime, this.topInset = 0});
+  final double? layoutHeight;
+  final Widget? collectionControl;
+  const CoverHeaderHero({
+    super.key,
+    required this.anime,
+    this.topInset = 0,
+    this.layoutHeight,
+    this.collectionControl,
+  });
 
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 600;
-    return Stack(
-      children: [
-        // Backdrop fills whatever height the header content resolves to.
-        Positioned.fill(child: _Backdrop(imageUrl: anime.coverUrl)),
-        Padding(
-          padding: EdgeInsets.only(
-            top: topInset + 8,
-            left: wide ? 24 : 16,
-            right: wide ? 24 : 16,
-            bottom: 8,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final contentHeight = layoutHeight ?? constraints.maxHeight;
+        return ClipRect(
+          child: OverflowBox(
+            alignment: Alignment.topCenter,
+            minWidth: constraints.maxWidth,
+            maxWidth: constraints.maxWidth,
+            minHeight: contentHeight,
+            maxHeight: contentHeight,
+            child: Stack(
+              children: [
+                Positioned.fill(child: _Backdrop(imageUrl: anime.coverUrl)),
+                Padding(
+                  padding: EdgeInsets.only(
+                    top: topInset + 8,
+                    left: wide ? 24 : 16,
+                    right: wide ? 24 : 16,
+                    bottom: 8,
+                  ),
+                  child: _HeaderCard(
+                    anime: anime,
+                    collectionControl: collectionControl,
+                  ),
+                ),
+              ],
+            ),
           ),
-          child: _HeaderCard(anime: anime),
-        ),
-      ],
+        );
+      },
     );
   }
 }
@@ -126,11 +161,12 @@ class _Backdrop extends StatelessWidget {
 }
 
 /// Cover + facts (+ rating histogram). Responsive: on wide viewports the
-/// histogram sits to the right of the facts; on narrow ones it drops below the
-/// cover row (collapsible) so the facts column never gets squeezed.
+/// histogram sits to the right of the facts; on narrow ones the detail page
+/// places it in a separate scrolling section so the fixed header cannot clip it.
 class _HeaderCard extends StatelessWidget {
   final Anime anime;
-  const _HeaderCard({required this.anime});
+  final Widget? collectionControl;
+  const _HeaderCard({required this.anime, this.collectionControl});
 
   @override
   Widget build(BuildContext context) {
@@ -143,7 +179,7 @@ class _HeaderCard extends StatelessWidget {
         // throughout, so the enlarged cover/facts/histogram all still line up
         // along the same top edge — only their relative heights change.
         final desktop = !narrow && useCustomCaption;
-        final coverW = narrow ? 128.0 : (desktop ? 196.0 : 168.0);
+        final coverW = narrow ? 152.0 : (desktop ? 196.0 : 168.0);
         final coverH = coverW * 214 / 150;
         final counts = _histogramCounts(anime);
 
@@ -156,6 +192,7 @@ class _HeaderCard extends StatelessWidget {
               createRectTween: createCoverHeroRectTween,
               flightShuttleBuilder: coverHeroFlightShuttleBuilder,
               child: ClipRRect(
+                key: const ValueKey('detail-header-cover'),
                 borderRadius: BorderRadius.circular(12),
                 child: SizedBox(
                   width: coverW,
@@ -172,7 +209,16 @@ class _HeaderCard extends StatelessWidget {
             ),
             SizedBox(width: narrow ? 12 : 16),
             Expanded(
-              child: _Facts(anime: anime, desktop: desktop),
+              child: SizedBox(
+                height: narrow ? coverH : null,
+                child: _Facts(
+                  anime: anime,
+                  desktop: desktop,
+                  showTitle: !narrow,
+                  collectionControl: collectionControl,
+                  alignControlToBottom: narrow,
+                ),
+              ),
             ),
             // Histogram beside facts only when there's room.
             if (!narrow && counts != null) ...[
@@ -189,19 +235,75 @@ class _HeaderCard extends StatelessWidget {
           ],
         );
 
-        // Narrow: histogram collapses below the cover row.
-        if (narrow && counts != null) {
+        if (narrow) {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              _HeaderTitles(anime: anime),
+              const SizedBox(height: 10),
               coverRow,
-              const SizedBox(height: 4),
-              _CollapsibleHistogram(counts: counts),
             ],
           );
         }
         return coverRow;
       },
+    );
+  }
+}
+
+class _HeaderTitles extends StatelessWidget {
+  final Anime anime;
+  final bool desktop;
+  const _HeaderTitles({required this.anime, this.desktop = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      key: const ValueKey('detail-header-titles'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          _titleOf(anime),
+          style: desktop
+              ? theme.textTheme.headlineSmall
+              : theme.textTheme.titleLarge,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        if (anime.name != null &&
+            anime.name!.isNotEmpty &&
+            anime.name != _titleOf(anime)) ...[
+          const SizedBox(height: 2),
+          Text(
+            anime.name!,
+            style:
+                (desktop
+                        ? theme.textTheme.bodyMedium
+                        : theme.textTheme.bodySmall)
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// On phones the histogram lives outside the fixed app-bar extent so expanding
+/// it participates in the normal scroll layout instead of overflowing.
+class CoverRatingSection extends StatelessWidget {
+  final Anime anime;
+  const CoverRatingSection({super.key, required this.anime});
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = _histogramCounts(anime);
+    if (counts == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      child: _CollapsibleHistogram(counts: counts),
     );
   }
 }
@@ -238,73 +340,90 @@ class _CollapsibleHistogram extends StatelessWidget {
 class _Facts extends StatelessWidget {
   final Anime anime;
   final bool desktop;
-  const _Facts({required this.anime, this.desktop = false});
+  final bool showTitle;
+  final Widget? collectionControl;
+  final bool alignControlToBottom;
+  const _Facts({
+    required this.anime,
+    this.desktop = false,
+    this.showTitle = true,
+    this.collectionControl,
+    this.alignControlToBottom = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     const weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-    const collectionLabels = {1: '想看', 2: '看过', 3: '在看', 4: '搁置', 5: '抛弃'};
+    final schedule = <(String, String)>[
+      if (anime.airWeekday != null) ('更新', weekdays[anime.airWeekday!.toInt()]),
+      if (anime.totalEps != null) ('话数', '${anime.totalEps} 话'),
+    ];
+    final hasFooter = collectionControl != null || anime.bangumiId == null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          _titleOf(anime),
-          style: desktop
-              ? theme.textTheme.headlineSmall
-              : theme.textTheme.titleLarge,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-        ),
-        if (anime.name != null &&
-            anime.name!.isNotEmpty &&
-            anime.name != _titleOf(anime)) ...[
-          const SizedBox(height: 2),
-          Text(
-            anime.name!,
-            style:
-                (desktop
-                        ? theme.textTheme.bodyMedium
-                        : theme.textTheme.bodySmall)
-                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
+        if (showTitle) ...[
+          _HeaderTitles(anime: anime, desktop: desktop),
+          const SizedBox(height: 10),
         ],
-        const SizedBox(height: 10),
         if (anime.airDate != null) _line('放送开始', anime.airDate!, theme),
         if (anime.rating != null) _ratingLine(context),
         if (anime.ratingRank != null)
           _line('Bangumi Ranked', '#${anime.ratingRank!.toInt()}', theme),
-        if (anime.airWeekday != null)
-          _line('更新', weekdays[anime.airWeekday!.toInt()], theme),
-        if (anime.totalEps != null) _line('话数', '${anime.totalEps} 话', theme),
-        const SizedBox(height: 4),
-        Wrap(
-          spacing: 8,
-          runSpacing: 6,
-          children: [
-            if (collectionLabels[anime.collection] != null)
-              Chip(
-                label: Text(collectionLabels[anime.collection]!),
-                backgroundColor: theme.colorScheme.primaryContainer,
-                visualDensity: VisualDensity.compact,
-              ),
-            if (anime.bangumiId == null)
-              Chip(
-                label: const Text('待匹配'),
-                backgroundColor: theme.colorScheme.errorContainer,
-                visualDensity: VisualDensity.compact,
-              ),
-          ],
-        ),
+        if (schedule.isNotEmpty) _scheduleLine(schedule, theme),
+        if (alignControlToBottom && hasFooter) const Spacer(),
+        if (hasFooter)
+          Align(
+            key: const ValueKey('detail-collection-control'),
+            alignment: Alignment.bottomLeft,
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                ?collectionControl,
+                if (anime.bangumiId == null)
+                  Chip(
+                    label: const Text('待匹配'),
+                    backgroundColor: theme.colorScheme.errorContainer,
+                    visualDensity: VisualDensity.compact,
+                  ),
+              ],
+            ),
+          ),
       ],
     );
   }
 
-  Widget _line(String label, String value, ThemeData theme) {
+  Widget _scheduleLine(List<(String, String)> schedule, ThemeData theme) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          for (var i = 0; i < schedule.length; i++) ...[
+            if (i > 0) const SizedBox(width: 16),
+            Flexible(
+              child: _line(
+                schedule[i].$1,
+                schedule[i].$2,
+                theme,
+                bottomPadding: 0,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _line(
+    String label,
+    String value,
+    ThemeData theme, {
+    double bottomPadding = 6,
+  }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomPadding),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [

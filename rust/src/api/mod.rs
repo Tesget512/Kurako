@@ -36,9 +36,13 @@ fn configured_download_directory() -> Option<String> {
     DOWNLOAD_DIRECTORY.lock().unwrap().clone()
 }
 
-fn is_nonempty_file(path: &str) -> bool {
-    std::fs::metadata(path)
-        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+fn download_match_is_valid(matched: &db::DownloadPathMatch) -> bool {
+    std::fs::metadata(&matched.local_path)
+        .map(|metadata| {
+            metadata.is_file()
+                && metadata.len() > 0
+                && (matched.exact_uri || metadata.len() as i64 == matched.bytes_total)
+        })
         .unwrap_or(false)
 }
 
@@ -877,28 +881,28 @@ pub fn remove_download(id: i64) -> Result<(), String> {
     Ok(())
 }
 
-/// The verified local copy recorded for this exact SMB/WebDAV URI. Exact
-/// records retain their stale path long enough for Apple app-container rebasing
-/// before returning `None`.
+/// The verified local copy for an exact URI or a strictly matched SMB/WebDAV
+/// counterpart. Exact records retain their stale path long enough for Apple
+/// app-container rebasing; cross-source records also verify the local byte size.
 pub fn downloaded_local_path(smb_uri: String) -> Result<Option<String>, String> {
-    let path = db::download_local_path(&smb_uri).map_err(|e| e.to_string())?;
-    match path {
-        Some(p) if is_nonempty_file(&p) => Ok(Some(p)),
+    let matched = db::download_local_match(&smb_uri).map_err(|e| e.to_string())?;
+    match matched {
+        Some(matched) if download_match_is_valid(&matched) => Ok(Some(matched.local_path)),
         Some(_) => {
             // App-container UUIDs are not stable. Rebase the authoritative
             // download row before treating its old absolute path as missing.
             if let Some(download_dir) = configured_download_directory() {
                 db::rebase_download_paths(&download_dir).map_err(|e| e.to_string())?;
                 if let Some(rebased) =
-                    db::download_local_path(&smb_uri).map_err(|e| e.to_string())?
+                    db::download_local_match(&smb_uri).map_err(|e| e.to_string())?
                 {
-                    if is_nonempty_file(&rebased) {
-                        return Ok(Some(rebased));
+                    if download_match_is_valid(&rebased) {
+                        return Ok(Some(rebased.local_path));
                     }
                 }
             }
-            // Keep the exact SMB URI and match snapshot. Only an explicit user
-            // delete may remove a download row whose file cannot be verified.
+            // Keep the URI and match snapshot. Only an explicit user delete may
+            // remove a download row whose file cannot be verified.
             Ok(None)
         }
         None => recover_exact_download(&smb_uri),
@@ -1808,4 +1812,43 @@ pub fn clear_match_config() -> Result<u32, String> {
     }
     db::clear_all().map_err(|error| format!("清空当前识别结果失败：{error}"))?;
     Ok(removed)
+}
+
+#[cfg(test)]
+mod download_path_tests {
+    use super::*;
+
+    #[test]
+    fn cross_source_local_copy_requires_the_recorded_byte_size() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "kurako-download-match-{}-{nonce}.mkv",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"12345").unwrap();
+        let local_path = path.to_string_lossy().to_string();
+
+        assert!(download_match_is_valid(&db::DownloadPathMatch {
+            local_path: local_path.clone(),
+            bytes_total: 5,
+            exact_uri: false,
+        }));
+        assert!(!download_match_is_valid(&db::DownloadPathMatch {
+            local_path: local_path.clone(),
+            bytes_total: 4,
+            exact_uri: false,
+        }));
+        // Exact URI behavior stays compatible: a non-empty local file remains
+        // authoritative even when a legacy record has no reliable byte count.
+        assert!(download_match_is_valid(&db::DownloadPathMatch {
+            local_path,
+            bytes_total: 0,
+            exact_uri: true,
+        }));
+
+        std::fs::remove_file(path).unwrap();
+    }
 }

@@ -11,6 +11,9 @@ const ADD_FOLDER_PRIORITY: &str = "ALTER TABLE library_folders ADD COLUMN priori
 const ADD_EPISODE_FOLDER_ID: &str = "ALTER TABLE episodes ADD COLUMN folder_id INTEGER";
 const ADD_EPISODE_FILE_SIZE: &str =
     "ALTER TABLE episodes ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0";
+const ADD_EPISODE_FILE_NAME_KEY: &str =
+    "ALTER TABLE episodes ADD COLUMN file_name_key TEXT NOT NULL DEFAULT ''";
+const ADD_DOWNLOAD_FILE_NAME_KEY: &str = "ALTER TABLE downloads ADD COLUMN file_name_key TEXT";
 
 pub fn init(db_path: &str) -> Result<()> {
     let conn = Connection::open(db_path)?;
@@ -50,6 +53,7 @@ pub fn init(db_path: &str) -> Result<()> {
             anime_id         INTEGER NOT NULL,
             file_path        TEXT NOT NULL UNIQUE,
             file_name        TEXT NOT NULL,
+            file_name_key    TEXT NOT NULL DEFAULT '',
             file_size        INTEGER NOT NULL DEFAULT 0,
             episode_no       INTEGER,
             title            TEXT,
@@ -80,7 +84,8 @@ pub fn init(db_path: &str) -> Result<()> {
             cover_url     TEXT,
             episode_no    INTEGER,
             episode_title TEXT,
-            file_name     TEXT
+            file_name     TEXT,
+            file_name_key TEXT
         );
         "#,
     )?;
@@ -108,7 +113,68 @@ pub fn init(db_path: &str) -> Result<()> {
         let _ = conn.execute(ddl, []);
     }
     migrate_source_priority_schema(&conn)?;
+    migrate_download_identity_schema(&conn)?;
     let _ = DB.set(Mutex::new(conn));
+    Ok(())
+}
+
+fn migrate_download_identity_schema(c: &Connection) -> Result<()> {
+    ensure_column(c, "episodes", "file_name_key", ADD_EPISODE_FILE_NAME_KEY)?;
+    ensure_column(c, "downloads", "file_name_key", ADD_DOWNLOAD_FILE_NAME_KEY)?;
+    backfill_file_name_keys(c)?;
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_remote_name_key
+             ON episodes(file_name_key, source_type);
+         CREATE INDEX IF NOT EXISTS idx_downloads_media_identity
+             ON downloads(file_name_key, bytes_total, anime_id, bangumi_id, episode_no);",
+    )?;
+    Ok(())
+}
+
+fn backfill_file_name_keys(c: &Connection) -> Result<()> {
+    let episode_rows = {
+        let mut stmt = c.prepare(
+            "SELECT id, file_name FROM episodes
+             WHERE file_name_key IS NULL OR file_name_key = ''",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows
+    };
+    let download_rows = {
+        let mut stmt = c.prepare(
+            "SELECT id, file_name FROM downloads
+             WHERE file_name IS NOT NULL
+               AND (file_name_key IS NULL OR file_name_key = '')",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows
+    };
+    if episode_rows.is_empty() && download_rows.is_empty() {
+        return Ok(());
+    }
+
+    let tx = c.unchecked_transaction()?;
+    for (id, file_name) in episode_rows {
+        tx.execute(
+            "UPDATE episodes SET file_name_key = ?2 WHERE id = ?1",
+            params![id, crate::scan_control::normalized_file_name(&file_name)],
+        )?;
+    }
+    for (id, file_name) in download_rows {
+        tx.execute(
+            "UPDATE downloads SET file_name_key = ?2 WHERE id = ?1",
+            params![id, crate::scan_control::normalized_file_name(&file_name)],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -409,20 +475,22 @@ pub fn upsert_episode(
     release_group: Option<&str>,
     source_type: &str,
 ) -> Result<()> {
+    let file_name_key = crate::scan_control::normalized_file_name(file_name);
     with_conn(|c| {
         c.execute(
-            "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_size, episode_no, resolution, release_group, source_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(file_path) DO UPDATE SET
                 anime_id=excluded.anime_id,
                 folder_id=excluded.folder_id,
                 file_name=excluded.file_name,
+                file_name_key=excluded.file_name_key,
                 file_size=excluded.file_size,
                 episode_no=excluded.episode_no,
                 resolution=excluded.resolution,
                 release_group=excluded.release_group,
                 source_type=excluded.source_type",
-            params![anime_id, folder_id, file_path, file_name, file_size, episode_no, resolution, release_group, source_type],
+            params![anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type],
         )?;
         Ok(())
     })
@@ -492,15 +560,50 @@ pub fn list_episodes(anime_id: i64) -> Result<Vec<Episode>> {
     with_conn(|c| list_episodes_on(c, anime_id))
 }
 
+/// SQL predicate shared by the episode badge and local-copy resolver. Exact
+/// URI matches are handled separately; this is only the guarded SMB/WebDAV
+/// cross-protocol fallback.
+const CROSS_SOURCE_DOWNLOAD_MATCH: &str = r#"
+    e.source_type IN ('smb', 'webdav')
+    AND (
+        (e.source_type = 'smb'
+         AND (d.smb_uri LIKE 'http://%' OR d.smb_uri LIKE 'https://%'))
+        OR
+        (e.source_type = 'webdav' AND d.smb_uri LIKE 'smb://%')
+    )
+    AND e.file_size > 0
+    AND d.bytes_total = e.file_size
+    AND e.file_name_key <> ''
+    AND d.file_name_key IS NOT NULL
+    AND d.file_name_key = e.file_name_key
+    AND (
+        d.anime_id = e.anime_id
+        OR (a.bangumi_id IS NOT NULL AND d.bangumi_id = a.bangumi_id)
+    )
+    AND d.episode_no IS e.episode_no
+    AND 1 = (
+        SELECT COUNT(*) FROM episodes unique_episode
+        WHERE unique_episode.source_type IN ('smb', 'webdav')
+          AND unique_episode.file_name_key = e.file_name_key
+    )
+"#;
+
 fn list_episodes_on(c: &Connection, anime_id: i64) -> Result<Vec<Episode>> {
-    let mut stmt = c.prepare(
+    let sql = format!(
         "SELECT e.id, e.anime_id, e.file_path, e.file_name, e.episode_no, e.title,
                 e.resolution, e.release_group, e.watched, e.last_position_ms,
                 e.duration_ms, e.source_type,
-                EXISTS(SELECT 1 FROM downloads d WHERE d.smb_uri = e.file_path)
-         FROM episodes e WHERE e.anime_id = ?1
-         ORDER BY e.episode_no IS NULL, e.episode_no, e.file_name",
-    )?;
+                (EXISTS(SELECT 1 FROM downloads d WHERE d.smb_uri = e.file_path)
+                 OR EXISTS(
+                     SELECT 1 FROM downloads d
+                     WHERE {CROSS_SOURCE_DOWNLOAD_MATCH}
+                 ))
+         FROM episodes e
+         JOIN anime a ON a.id = e.anime_id
+         WHERE e.anime_id = ?1
+         ORDER BY e.episode_no IS NULL, e.episode_no, e.file_name"
+    );
+    let mut stmt = c.prepare(&sql)?;
     let rows = stmt
         .query_map(params![anime_id], |r| {
             Ok(Episode {
@@ -999,6 +1102,9 @@ fn add_download_on(
         .optional()?;
     let (anime_id, bangumi_id, anime_title, cover_url, episode_no, episode_title, file_name) =
         snapshot.unwrap_or((None, None, None, None, None, None, None));
+    let file_name_key = file_name
+        .as_deref()
+        .map(crate::scan_control::normalized_file_name);
 
     // A re-download refreshes file attributes and any currently-known match.
     // If the library was cleared meanwhile, excluded snapshot fields are NULL;
@@ -1006,8 +1112,9 @@ fn add_download_on(
     c.execute(
         "INSERT INTO downloads(
              smb_uri, local_path, bytes_total, created_at, anime_id, bangumi_id,
-             anime_title, cover_url, episode_no, episode_title, file_name
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             anime_title, cover_url, episode_no, episode_title, file_name,
+             file_name_key
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(smb_uri) DO UPDATE SET
              local_path = excluded.local_path,
              bytes_total = excluded.bytes_total,
@@ -1018,7 +1125,8 @@ fn add_download_on(
              cover_url = COALESCE(excluded.cover_url, downloads.cover_url),
              episode_no = COALESCE(excluded.episode_no, downloads.episode_no),
              episode_title = COALESCE(excluded.episode_title, downloads.episode_title),
-             file_name = COALESCE(excluded.file_name, downloads.file_name)",
+             file_name = COALESCE(excluded.file_name, downloads.file_name),
+             file_name_key = COALESCE(excluded.file_name_key, downloads.file_name_key)",
         params![
             smb_uri,
             local_path,
@@ -1031,6 +1139,7 @@ fn add_download_on(
             episode_no,
             episode_title,
             file_name,
+            file_name_key,
         ],
     )?;
     Ok(())
@@ -1132,20 +1241,63 @@ fn list_downloads_detailed_on(c: &Connection) -> Result<Vec<crate::models::Downl
     Ok(rows)
 }
 
-/// Resolve the downloaded local copy recorded for this exact remote URI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DownloadPathMatch {
+    pub local_path: String,
+    pub bytes_total: i64,
+    pub exact_uri: bool,
+}
+
+pub(crate) fn download_local_match(remote_uri: &str) -> Result<Option<DownloadPathMatch>> {
+    with_conn(|c| download_local_match_on(c, remote_uri))
+}
+
+/// Compatibility wrapper used by database tests and recovery helpers.
 pub fn download_local_path(remote_uri: &str) -> Result<Option<String>> {
     with_conn(|c| download_local_path_on(c, remote_uri))
 }
 
 fn download_local_path_on(c: &Connection, remote_uri: &str) -> Result<Option<String>> {
+    Ok(download_local_match_on(c, remote_uri)?.map(|matched| matched.local_path))
+}
+
+fn download_local_match_on(c: &Connection, remote_uri: &str) -> Result<Option<DownloadPathMatch>> {
     // Preserve the stored exact path even when it is currently stale. The API
     // layer needs that value to detect an Apple app-container UUID change,
     // rebase all records into the current Documents directory, and retry.
-    c.query_row(
-        "SELECT local_path FROM downloads WHERE smb_uri = ?1",
-        params![remote_uri],
-        |row| row.get(0),
-    )
+    if let Some(matched) = c
+        .query_row(
+            "SELECT local_path, bytes_total FROM downloads WHERE smb_uri = ?1",
+            params![remote_uri],
+            |row| {
+                Ok(DownloadPathMatch {
+                    local_path: row.get(0)?,
+                    bytes_total: row.get(1)?,
+                    exact_uri: true,
+                })
+            },
+        )
+        .optional()?
+    {
+        return Ok(Some(matched));
+    }
+
+    let sql = format!(
+        "SELECT d.local_path, d.bytes_total
+         FROM episodes e
+         JOIN anime a ON a.id = e.anime_id
+         JOIN downloads d ON {CROSS_SOURCE_DOWNLOAD_MATCH}
+         WHERE e.file_path = ?1
+         ORDER BY d.created_at DESC
+         LIMIT 1"
+    );
+    c.query_row(&sql, params![remote_uri], |row| {
+        Ok(DownloadPathMatch {
+            local_path: row.get(0)?,
+            bytes_total: row.get(1)?,
+            exact_uri: false,
+        })
+    })
     .optional()
     .map_err(Into::into)
 }
@@ -1397,7 +1549,8 @@ mod download_tests {
              CREATE TABLE episodes (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
                  anime_id INTEGER NOT NULL, file_path TEXT NOT NULL UNIQUE,
-                 file_name TEXT NOT NULL, file_size INTEGER NOT NULL DEFAULT 0,
+                 file_name TEXT NOT NULL, file_name_key TEXT NOT NULL DEFAULT '',
+                 file_size INTEGER NOT NULL DEFAULT 0,
                  episode_no INTEGER, title TEXT, resolution TEXT,
                  release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
                  last_position_ms INTEGER NOT NULL DEFAULT 0,
@@ -1409,7 +1562,7 @@ mod download_tests {
                  local_path TEXT NOT NULL, bytes_total INTEGER NOT NULL DEFAULT 0,
                  created_at INTEGER NOT NULL, anime_id INTEGER, bangumi_id INTEGER,
                  anime_title TEXT, cover_url TEXT, episode_no INTEGER,
-                 episode_title TEXT, file_name TEXT
+                 episode_title TEXT, file_name TEXT, file_name_key TEXT
              );",
         )
         .unwrap();
@@ -1418,24 +1571,17 @@ mod download_tests {
 
     #[test]
     fn list_episodes_reads_the_exact_download_record() {
-        let c = Connection::open_in_memory().unwrap();
+        let c = connection();
         c.execute_batch(
-            "CREATE TABLE episodes (
-                 id INTEGER PRIMARY KEY, anime_id INTEGER NOT NULL,
-                 file_path TEXT NOT NULL, file_name TEXT NOT NULL,
-                 episode_no INTEGER, title TEXT, resolution TEXT,
-                 release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
-                 last_position_ms INTEGER NOT NULL DEFAULT 0,
-                 duration_ms INTEGER NOT NULL DEFAULT 0,
-                 source_type TEXT NOT NULL
-             );
-             CREATE TABLE downloads (smb_uri TEXT NOT NULL UNIQUE);
-             INSERT INTO episodes VALUES
-                 (1, 7, 'smb://server/01.mkv', '01.mkv', 1, NULL, NULL,
-                  NULL, 0, 0, 0, 'smb'),
-                 (2, 7, 'smb://server/02.mkv', '02.mkv', 2, NULL, NULL,
-                  NULL, 0, 0, 0, 'smb');
-             INSERT INTO downloads VALUES ('smb://server/01.mkv');",
+            "INSERT INTO anime(id, title_raw) VALUES (7, 'Show');
+             INSERT INTO episodes(
+                 id, anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type
+             ) VALUES
+                 (1, 7, 'smb://server/01.mkv', '01.mkv', '01.mkv', 10, 1, 'smb'),
+                 (2, 7, 'smb://server/02.mkv', '02.mkv', '02.mkv', 20, 2, 'smb');
+             INSERT INTO downloads(smb_uri, local_path, bytes_total, created_at)
+             VALUES ('smb://server/01.mkv', '/downloads/01.mkv', 10, 1);",
         )
         .unwrap();
 
@@ -1447,22 +1593,18 @@ mod download_tests {
 
     #[test]
     fn legacy_download_id_is_ignored_without_an_exact_uri_record() {
-        let c = Connection::open_in_memory().unwrap();
+        let c = connection();
         c.execute_batch(
-            "CREATE TABLE episodes (
-                 id INTEGER PRIMARY KEY, anime_id INTEGER NOT NULL,
-                 file_path TEXT NOT NULL, file_name TEXT NOT NULL,
-                 episode_no INTEGER, title TEXT, resolution TEXT,
-                 release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
-                 last_position_ms INTEGER NOT NULL DEFAULT 0,
-                 duration_ms INTEGER NOT NULL DEFAULT 0,
-                 source_type TEXT NOT NULL, download_id INTEGER
+            "INSERT INTO anime(id, title_raw) VALUES (7, 'Show');
+             INSERT INTO episodes(
+                 id, anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type
+             ) VALUES (
+                 1, 7, 'https://dav.example/01.mkv', '01.mkv', '01.mkv', 0,
+                 1, 'webdav'
              );
-             CREATE TABLE downloads (smb_uri TEXT NOT NULL UNIQUE);
-             INSERT INTO episodes VALUES
-                 (1, 7, 'https://dav.example/01.mkv', '01.mkv', 1, NULL, NULL,
-                  NULL, 0, 0, 0, 'webdav', 42);
-             INSERT INTO downloads VALUES ('smb://server/01.mkv');",
+             INSERT INTO downloads(smb_uri, local_path, bytes_total, created_at)
+             VALUES ('smb://server/01.mkv', '/downloads/01.mkv', 0, 1);",
         )
         .unwrap();
 
@@ -1667,6 +1809,34 @@ mod download_tests {
             .unwrap(),
             Some(123)
         );
+    }
+
+    #[test]
+    fn download_identity_migration_backfills_normalized_name_keys() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY, file_name TEXT NOT NULL,
+                 source_type TEXT NOT NULL
+             );
+             CREATE TABLE downloads (
+                 id INTEGER PRIMARY KEY, file_name TEXT, bytes_total INTEGER,
+                 anime_id INTEGER, bangumi_id INTEGER, episode_no INTEGER
+             );
+             INSERT INTO episodes VALUES (1, 'Azümanga 01.MKV', 'smb');
+             INSERT INTO downloads VALUES (1, 'Azümanga 01.mkv', 5, 1, 10, 1);",
+        )
+        .unwrap();
+
+        migrate_download_identity_schema(&c).unwrap();
+        let episode_key: String = c
+            .query_row("SELECT file_name_key FROM episodes", [], |row| row.get(0))
+            .unwrap();
+        let download_key: String = c
+            .query_row("SELECT file_name_key FROM downloads", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(episode_key, "azümanga 01.mkv");
+        assert_eq!(download_key, episode_key);
     }
 
     #[test]
@@ -2098,7 +2268,7 @@ mod download_tests {
     }
 
     #[test]
-    fn cross_protocol_download_is_not_reused() {
+    fn smb_download_is_reused_for_the_unique_matching_webdav_episode() {
         let c = connection();
         c.execute(
             "INSERT INTO anime(id, title_raw, bangumi_id, name_cn)
@@ -2108,11 +2278,11 @@ mod download_tests {
         .unwrap();
         c.execute(
             "INSERT INTO episodes(
-                 anime_id, file_path, file_name, file_size, episode_no, title,
-                 source_type
+                 anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, title, source_type
              ) VALUES (
                  1, 'https://dav.example/Anime/Episode%2001.mkv',
-                 'Episode 01.mkv', 5, 1, NULL, 'webdav'
+                 'Episode 01.mkv', 'episode 01.mkv', 5, 1, NULL, 'webdav'
              )",
             [],
         )
@@ -2120,10 +2290,10 @@ mod download_tests {
         c.execute(
             "INSERT INTO downloads(
                  smb_uri, local_path, bytes_total, created_at, anime_id,
-                 bangumi_id, episode_no, file_name
+                 bangumi_id, episode_no, file_name, file_name_key
              ) VALUES (
                  'smb://server/Anime/Episode 01.mkv', ?1, 5, 1, 1, 1234, 1,
-                 'episode 01.MKV'
+                 'episode 01.MKV', 'episode 01.mkv'
              )",
             params!["/downloads/Episode 01.mkv"],
         )
@@ -2131,8 +2301,138 @@ mod download_tests {
 
         assert_eq!(
             download_local_path_on(&c, "https://dav.example/Anime/Episode%2001.mkv").unwrap(),
-            None
+            Some("/downloads/Episode 01.mkv".to_string())
         );
+        let matched = download_local_match_on(&c, "https://dav.example/Anime/Episode%2001.mkv")
+            .unwrap()
+            .unwrap();
+        assert!(!matched.exact_uri);
+        assert_eq!(matched.bytes_total, 5);
+        assert!(list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+    }
+
+    #[test]
+    fn webdav_download_is_reused_for_the_unique_matching_smb_episode() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO anime(id, title_raw, bangumi_id) VALUES (1, 'Show', 1234);
+             INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type
+             ) VALUES (
+                 1, 'smb://server/Anime/Episode 01.mkv', 'Episode 01.mkv',
+                 'episode 01.mkv', 5, 1, 'smb'
+             );
+             INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, anime_id,
+                 bangumi_id, episode_no, file_name, file_name_key
+             ) VALUES (
+                 'https://dav.example/Anime/Episode%2001.mkv',
+                 '/downloads/Episode 01.mkv', 5, 1, 1, 1234, 1,
+                 'Episode 01.mkv', 'episode 01.mkv'
+             );",
+        )
+        .unwrap();
+
+        assert_eq!(
+            download_local_path_on(&c, "smb://server/Anime/Episode 01.mkv").unwrap(),
+            Some("/downloads/Episode 01.mkv".to_string())
+        );
+        assert!(list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+    }
+
+    #[test]
+    fn cross_source_match_requires_protocol_identity_size_and_unique_name() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO anime(id, title_raw, bangumi_id) VALUES
+                 (1, 'First', 100), (2, 'Second', 200);
+             INSERT INTO episodes(
+                 id, anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type
+             ) VALUES (
+                 1, 1, 'https://dav.example/01.mkv', '01.mkv', '01.mkv', 5,
+                 1, 'webdav'
+             );
+             INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, anime_id,
+                 bangumi_id, episode_no, file_name, file_name_key
+             ) VALUES (
+                 'smb://server/01.mkv', '/downloads/01.mkv', 4, 1, 1, 100, 1,
+                 '01.mkv', '01.mkv'
+             );",
+        )
+        .unwrap();
+
+        assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+        c.execute("UPDATE downloads SET bytes_total = 5, episode_no = 2", [])
+            .unwrap();
+        assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+        c.execute(
+            "UPDATE downloads SET episode_no = 1, anime_id = 2, bangumi_id = 200",
+            [],
+        )
+        .unwrap();
+        assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+        c.execute(
+            "UPDATE downloads SET anime_id = 1, bangumi_id = 100,
+                                  smb_uri = 'https://other.example/01.mkv'",
+            [],
+        )
+        .unwrap();
+        assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+        c.execute("UPDATE downloads SET smb_uri = 'smb://server/01.mkv'", [])
+            .unwrap();
+        assert!(list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+
+        c.execute(
+            "INSERT INTO episodes(
+                 id, anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type
+             ) VALUES (
+                 2, 2, 'smb://other/01.mkv', '01.mkv', '01.mkv', 5, 1, 'smb'
+             )",
+            [],
+        )
+        .unwrap();
+        assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+    }
+
+    #[test]
+    fn cross_source_match_normalizes_unicode_but_rejects_unknown_sizes() {
+        let c = connection();
+        let nfd = "Azu\u{0308}manga 01.MKV";
+        let nfc = "Azümanga 01.mkv";
+        let key = crate::scan_control::normalized_file_name(nfd);
+        assert_eq!(key, crate::scan_control::normalized_file_name(nfc));
+        c.execute("INSERT INTO anime(id, title_raw) VALUES (1, 'Show')", [])
+            .unwrap();
+        c.execute(
+            "INSERT INTO episodes(
+                 anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type
+             ) VALUES (1, 'https://dav.example/01.mkv', ?1, ?2, 5, 1, 'webdav')",
+            params![nfd, key],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO downloads(
+                 smb_uri, local_path, bytes_total, created_at, anime_id,
+                 episode_no, file_name, file_name_key
+             ) VALUES (
+                 'smb://server/01.mkv', '/downloads/01.mkv', 5, 1, 1, 1,
+                 ?1, ?2
+             )",
+            params![nfc, key],
+        )
+        .unwrap();
+
+        assert!(list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
+        c.execute_batch(
+            "UPDATE episodes SET file_size = 0;
+             UPDATE downloads SET bytes_total = 0;",
+        )
+        .unwrap();
         assert!(!list_episodes_on(&c, 1).unwrap()[0].is_downloaded);
     }
 
