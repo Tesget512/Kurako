@@ -48,8 +48,6 @@ class _HomePageState extends ConsumerState<HomePage> {
     }
   }
 
-  static const _pages = [LibraryPage(), CollectionPage(), SettingsPage()];
-
   static const _destinations = [
     (Icons.video_library_outlined, Icons.video_library, '番剧库'),
     (Icons.bookmark_outline, Icons.bookmark, '追番'),
@@ -61,7 +59,23 @@ class _HomePageState extends ConsumerState<HomePage> {
     // Responsive: phones (narrow) get a bottom NavigationBar; tablets/desktop
     // (wide) get a side NavigationRail. Breakpoint follows Material guidance.
     final isWide = MediaQuery.sizeOf(context).width >= 640;
-    final body = _pages[_index];
+    final body = IndexedStack(
+      index: _index,
+      children: [
+        TickerMode(
+          enabled: _index == 0,
+          child: HeroMode(enabled: _index == 0, child: const LibraryPage()),
+        ),
+        TickerMode(
+          enabled: _index == 1,
+          child: HeroMode(enabled: _index == 1, child: const CollectionPage()),
+        ),
+        TickerMode(
+          enabled: _index == 2,
+          child: HeroMode(enabled: _index == 2, child: const SettingsPage()),
+        ),
+      ],
+    );
 
     if (isWide) {
       // Settings is the last destination; pin it to the bottom of the rail so

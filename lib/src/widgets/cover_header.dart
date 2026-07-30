@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../rust/models.dart';
+import '../ui/cover_hero.dart';
 import 'cover_image.dart';
 import 'window_caption.dart' show useCustomCaption;
 
@@ -87,7 +88,11 @@ class _Backdrop extends StatelessWidget {
                   opacity: _opacity,
                   // cacheWidth downsamples the decode — the blur hides the loss
                   // and the per-frame cost drops sharply during transitions.
-                  child: CoverImage(url: url, fit: BoxFit.cover, cacheWidth: 64),
+                  child: CoverImage(
+                    url: url,
+                    fit: BoxFit.cover,
+                    cacheWidth: 64,
+                  ),
                 ),
               ),
             ),
@@ -145,19 +150,30 @@ class _HeaderCard extends StatelessWidget {
         final coverRow = Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: SizedBox(
-                width: coverW,
-                height: coverH,
-                // Decode to ~2× the display width (crisp on hi-DPI) rather
-                // than Bangumi's full-res original — keeps each detail-page
-                // visit from adding a multi-MB full decode to the cache.
-                child: CoverImage(url: anime.coverUrl, cacheWidth: 400),
+            Hero(
+              tag: heroTagForAnime(anime.id),
+              transitionOnUserGestures: true,
+              createRectTween: createCoverHeroRectTween,
+              flightShuttleBuilder: coverHeroFlightShuttleBuilder,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: SizedBox(
+                  width: coverW,
+                  height: coverH,
+                  // Decode to ~2× the display width (crisp on hi-DPI) rather
+                  // than Bangumi's full-res original — keeps each detail-page
+                  // visit from adding a multi-MB full decode to the cache.
+                  child: CoverImage(
+                    url: anime.coverUrl,
+                    cacheWidth: kCoverDecodeWidth,
+                  ),
+                ),
               ),
             ),
             SizedBox(width: narrow ? 12 : 16),
-            Expanded(child: _Facts(anime: anime, desktop: desktop)),
+            Expanded(
+              child: _Facts(anime: anime, desktop: desktop),
+            ),
             // Histogram beside facts only when there's room.
             if (!narrow && counts != null) ...[
               const SizedBox(width: 16),
@@ -205,10 +221,15 @@ class _CollapsibleHistogram extends StatelessWidget {
       child: ExpansionTile(
         tilePadding: EdgeInsets.zero,
         childrenPadding: const EdgeInsets.only(bottom: 8),
-        title: Text('评分透视',
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-        children: [RatingHistogram(counts: counts, height: 72, showLabel: false)],
+        title: Text(
+          '评分透视',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        children: [
+          RatingHistogram(counts: counts, height: 72, showLabel: false),
+        ],
       ),
     );
   }
@@ -227,19 +248,28 @@ class _Facts extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(_titleOf(anime),
-            style: desktop ? theme.textTheme.headlineSmall : theme.textTheme.titleLarge,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis),
+        Text(
+          _titleOf(anime),
+          style: desktop
+              ? theme.textTheme.headlineSmall
+              : theme.textTheme.titleLarge,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
         if (anime.name != null &&
             anime.name!.isNotEmpty &&
             anime.name != _titleOf(anime)) ...[
           const SizedBox(height: 2),
-          Text(anime.name!,
-              style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis),
+          Text(
+            anime.name!,
+            style:
+                (desktop
+                        ? theme.textTheme.bodyMedium
+                        : theme.textTheme.bodySmall)
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ],
         const SizedBox(height: 10),
         if (anime.airDate != null) _line('放送开始', anime.airDate!, theme),
@@ -278,12 +308,22 @@ class _Facts extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
-          Text(value,
-              style: (desktop ? theme.textTheme.titleMedium : theme.textTheme.titleSmall)
-                  ?.copyWith(color: theme.colorScheme.primary)),
+          Text(
+            label,
+            style:
+                (desktop
+                        ? theme.textTheme.bodyMedium
+                        : theme.textTheme.bodySmall)
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
+          Text(
+            value,
+            style:
+                (desktop
+                        ? theme.textTheme.titleMedium
+                        : theme.textTheme.titleSmall)
+                    ?.copyWith(color: theme.colorScheme.primary),
+          ),
         ],
       ),
     );
@@ -299,19 +339,32 @@ class _Facts extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            anime.ratingTotal != null ? '${anime.ratingTotal!.toInt()} 人评分' : '评分',
-            style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
-                ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+            anime.ratingTotal != null
+                ? '${anime.ratingTotal!.toInt()} 人评分'
+                : '评分',
+            style:
+                (desktop
+                        ? theme.textTheme.bodyMedium
+                        : theme.textTheme.bodySmall)
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
           ),
           Row(
             children: [
-              Text(score.toStringAsFixed(1),
-                  style: (desktop ? theme.textTheme.titleMedium : theme.textTheme.titleSmall)
-                      ?.copyWith(color: theme.colorScheme.primary)),
+              Text(
+                score.toStringAsFixed(1),
+                style:
+                    (desktop
+                            ? theme.textTheme.titleMedium
+                            : theme.textTheme.titleSmall)
+                        ?.copyWith(color: theme.colorScheme.primary),
+              ),
               const SizedBox(width: 6),
               for (var i = 0; i < 5; i++)
-                Icon(i < stars ? Icons.star : Icons.star_border,
-                    size: desktop ? 18 : 15, color: theme.colorScheme.primary),
+                Icon(
+                  i < stars ? Icons.star : Icons.star_border,
+                  size: desktop ? 18 : 15,
+                  color: theme.colorScheme.primary,
+                ),
             ],
           ),
         ],
@@ -347,15 +400,20 @@ class CoverHeaderBody extends StatelessWidget {
               children: [
                 for (final t in tags)
                   Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: theme.colorScheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Text(t.trim(),
-                        style: theme.textTheme.labelSmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant)),
+                    child: Text(
+                      t.trim(),
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -435,9 +493,14 @@ class RatingHistogram extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (showLabel) ...[
-          Text('评分透视',
-              style: (desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall)
-                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+          Text(
+            '评分透视',
+            style:
+                (desktop
+                        ? theme.textTheme.bodyMedium
+                        : theme.textTheme.bodySmall)
+                    ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+          ),
           const SizedBox(height: 6),
         ],
         SizedBox(
@@ -453,10 +516,12 @@ class RatingHistogram extends StatelessWidget {
                       heightFactor: counts[i] / peak,
                       child: Container(
                         decoration: BoxDecoration(
-                          color:
-                              theme.colorScheme.primary.withValues(alpha: 0.55),
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.55,
+                          ),
                           borderRadius: const BorderRadius.vertical(
-                              top: Radius.circular(3)),
+                            top: Radius.circular(3),
+                          ),
                         ),
                       ),
                     ),
@@ -470,11 +535,14 @@ class RatingHistogram extends StatelessWidget {
           children: [
             for (var i = 1; i <= 10; i++)
               Expanded(
-                child: Text('$i',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.labelSmall?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                        fontSize: desktop ? 11 : 9)),
+                child: Text(
+                  '$i',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontSize: desktop ? 11 : 9,
+                  ),
+                ),
               ),
           ],
         ),

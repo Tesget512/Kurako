@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'pages/home_page.dart';
 import 'state/providers.dart';
+import 'ui/transitions.dart';
 
 class AnimeBdApp extends ConsumerWidget {
   const AnimeBdApp({super.key});
@@ -14,15 +15,7 @@ class AnimeBdApp extends ConsumerWidget {
     final base = ThemeData(
       useMaterial3: true,
       colorScheme: scheme,
-      // PredictiveBackPageTransitionsBuilder: tracks the Android system back
-      // gesture frame-by-frame, and automatically falls back to FadeForwards
-      // (M3 spec) for non-gesture pops — best of both. The earlier jank came
-      // from the pre-FadeForwards fallback, not the gesture tracking itself.
-      pageTransitionsTheme: const PageTransitionsTheme(
-        builders: {
-          TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
-        },
-      ),
+      pageTransitionsTheme: kPageTransitionsTheme,
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
       // instead of the system fallback chain. When the user opts into the
       // system font on Windows, use ONE real system font — 'Microsoft YaHei

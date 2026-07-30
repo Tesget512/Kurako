@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../rust/models.dart';
+import '../ui/cover_hero.dart';
 import 'cover_image.dart';
 
 class AnimeCard extends StatelessWidget {
@@ -16,7 +17,13 @@ class AnimeCard extends StatelessWidget {
   }
 
   static const _weekdays = ['', '周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-  static const _collectionLabels = {1: '想看', 2: '看过', 3: '在看', 4: '搁置', 5: '抛弃'};
+  static const _collectionLabels = {
+    1: '想看',
+    2: '看过',
+    3: '在看',
+    4: '搁置',
+    5: '抛弃',
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -110,10 +117,7 @@ class AnimeCard extends StatelessWidget {
         color: bg,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: Text(
-        text,
-        style: theme.textTheme.labelSmall?.copyWith(color: fg),
-      ),
+      child: Text(text, style: theme.textTheme.labelSmall?.copyWith(color: fg)),
     );
   }
 
@@ -124,6 +128,16 @@ class AnimeCard extends StatelessWidget {
     // dozens of covers at ~5.6MB decoded each fills the image cache and GPU
     // texture pool fast. 400 physical px keeps it crisp on hi-DPI while
     // cutting per-cover memory ~6×.
-    return CoverImage(url: anime.coverUrl, cacheWidth: 400);
+    final image = CoverImage(
+      url: anime.coverUrl,
+      cacheWidth: kCoverDecodeWidth,
+    );
+    return Hero(
+      tag: heroTagForAnime(anime.id),
+      transitionOnUserGestures: true,
+      createRectTween: createCoverHeroRectTween,
+      flightShuttleBuilder: coverHeroFlightShuttleBuilder,
+      child: image,
+    );
   }
 }

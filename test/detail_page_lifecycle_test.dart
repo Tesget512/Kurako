@@ -127,10 +127,6 @@ void main() {
     expect(find.byIcon(Icons.download_done), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox.shrink());
-    // _MarqueeText keeps one non-periodic four-second delay in flight. Once the
-    // page is disposed it exits at the end of that delay; advance fake time so
-    // the test verifies a fully quiescent tree rather than leaking that timer.
-    await tester.pump(const Duration(seconds: 5));
     await tester.pump();
 
     expect(tester.takeException(), isNull);

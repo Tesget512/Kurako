@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
@@ -28,7 +29,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   final _scrollController = ScrollController();
   Anime? _animeSnapshot;
   // Whether the header has scrolled far enough to show the toolbar title.
-  bool _collapsed = false;
+  final _collapsed = ValueNotifier<bool>(false);
 
   @override
   void initState() {
@@ -51,9 +52,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   void _onScroll() {
     // Reveal the toolbar title once the hero has largely scrolled away.
-    final collapsed =
-        _scrollController.hasClients && _scrollController.offset > 160;
-    if (collapsed != _collapsed) setState(() => _collapsed = collapsed);
+    if (!_scrollController.hasClients) return;
+    _collapsed.value = _scrollController.offset > 160;
   }
 
   @override
@@ -174,10 +174,13 @@ class _DetailPageState extends ConsumerState<DetailPage> {
               ),
               // Floating toolbar over the hero: back + (title on scroll) +
               // actions + window buttons; the whole strip drags the window.
-              _FloatingToolbar(
-                title: _titleOf(anime),
-                showTitle: _collapsed,
-                actions: _buildActions(context, anime),
+              ValueListenableBuilder<bool>(
+                valueListenable: _collapsed,
+                builder: (context, collapsed, _) => _FloatingToolbar(
+                  title: _titleOf(anime),
+                  showTitle: collapsed,
+                  actions: _buildActions(context, anime),
+                ),
               ),
             ],
           );
@@ -251,7 +254,9 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    _collapsed.dispose();
     super.dispose();
   }
 
@@ -513,7 +518,9 @@ class _MarqueeText extends StatefulWidget {
 class _MarqueeTextState extends State<_MarqueeText>
     with SingleTickerProviderStateMixin {
   late final AnimationController _controller;
-  bool _disposed = false;
+  bool _cycling = false;
+  bool? _lastOverflowing;
+  int _cycleGeneration = 0;
 
   @override
   void initState() {
@@ -522,7 +529,15 @@ class _MarqueeTextState extends State<_MarqueeText>
       vsync: this,
       duration: const Duration(seconds: 3),
     );
-    _runCycle();
+  }
+
+  @override
+  void didUpdateWidget(covariant _MarqueeText oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.text != widget.text || oldWidget.style != widget.style) {
+      _lastOverflowing = null;
+      _stopCycling();
+    }
   }
 
   // Idle, slowly scroll to reveal the tail, hold briefly, scroll back, repeat —
@@ -531,21 +546,53 @@ class _MarqueeTextState extends State<_MarqueeText>
   // fixed-period timer shorter than one full cycle would fire again while the
   // controller was still mid-reverse, snapping it back to 0 and restarting —
   // which read as the text getting stuck half-scrolled with clipped glyphs.
-  Future<void> _runCycle() async {
-    while (!_disposed) {
-      await Future.delayed(const Duration(seconds: 4));
-      if (_disposed) return;
-      await _controller.forward(from: 0);
-      if (_disposed) return;
-      await Future.delayed(const Duration(seconds: 1));
-      if (_disposed) return;
-      await _controller.reverse();
+  Future<void> _runCycle(int generation) async {
+    try {
+      while (mounted && _cycling && generation == _cycleGeneration) {
+        await Future<void>.delayed(const Duration(seconds: 4));
+        if (!mounted || !_cycling || generation != _cycleGeneration) return;
+        await _controller.forward(from: 0).orCancel;
+        if (!mounted || !_cycling || generation != _cycleGeneration) return;
+        await Future<void>.delayed(const Duration(seconds: 1));
+        if (!mounted || !_cycling || generation != _cycleGeneration) return;
+        await _controller.reverse().orCancel;
+      }
+    } on TickerCanceled {
+      // Stopping or disposing the controller intentionally cancels its future.
     }
+  }
+
+  void _startCycling() {
+    if (_cycling || !mounted) return;
+    _cycling = true;
+    final generation = ++_cycleGeneration;
+    unawaited(_runCycle(generation));
+  }
+
+  void _stopCycling() {
+    _cycling = false;
+    _cycleGeneration++;
+    _controller.stop(canceled: true);
+    _controller.value = 0;
+  }
+
+  void _reportOverflow(bool overflowing) {
+    if (_lastOverflowing == overflowing) return;
+    _lastOverflowing = overflowing;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _lastOverflowing != overflowing) return;
+      if (overflowing) {
+        _startCycling();
+      } else {
+        _stopCycling();
+      }
+    });
   }
 
   @override
   void dispose() {
-    _disposed = true;
+    _cycling = false;
+    _cycleGeneration++;
     _controller.dispose();
     super.dispose();
   }
@@ -559,9 +606,11 @@ class _MarqueeTextState extends State<_MarqueeText>
           text: TextSpan(text: widget.text, style: style),
           maxLines: 1,
           textDirection: Directionality.of(context),
+          textScaler: MediaQuery.textScalerOf(context),
         )..layout();
         final overflow = painter.width - constraints.maxWidth;
         if (overflow <= 0) {
+          _reportOverflow(false);
           return Text(
             widget.text,
             maxLines: 1,
@@ -569,6 +618,7 @@ class _MarqueeTextState extends State<_MarqueeText>
             style: style,
           );
         }
+        _reportOverflow(true);
         // ClipRect alone isn't enough: it clips *paint*, not layout — the Text
         // child would still be LAID OUT at the same bounded width as this box
         // (ClipRect passes constraints through unchanged) and clip itself
