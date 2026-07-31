@@ -11,7 +11,6 @@ import '../services/configuration_backup.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
 import 'blacklist_page.dart';
-import 'downloads_page.dart';
 import 'duplicate_check_page.dart';
 
 class MaintenancePage extends ConsumerStatefulWidget {
@@ -44,19 +43,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       padding: const EdgeInsets.all(16),
       children: [
         _section(context, '下载'),
-        ListTile(
-          key: const ValueKey('maintenance-downloads'),
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.download_outlined),
-          title: const Text('下载管理'),
-          subtitle: const Text('播放与管理已下载到本地的网络视频'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _maintenanceBusy
-              ? null
-              : () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const DownloadsPage()),
-                ),
-        ),
         _buildDownloadDirRow(),
         ListTile(
           contentPadding: EdgeInsets.zero,

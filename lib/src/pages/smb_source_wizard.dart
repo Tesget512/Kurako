@@ -39,6 +39,7 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
   String? _setupToken;
   String _currentPath = '';
   List<SmbServerCandidate> _servers = const [];
+  List<SmbCredentials> _history = const [];
   List<SmbShareInfo> _shares = const [];
   List<RemoteDirectory> _directories = const [];
   final Set<String> _selectedPaths = {};
@@ -51,11 +52,25 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
 
   Future<void> _restoreAndDiscover() async {
     final credentials = await SmbCredentials.load();
+    final history = await SmbCredentials.loadHistory();
     if (!mounted) return;
     _host.text = credentials.host;
     _user.text = credentials.user;
     _password.text = credentials.password;
     _manualShare.text = credentials.share;
+    setState(() {
+      _history = [
+        if (credentials.isConfigured &&
+            !history.any(
+              (entry) =>
+                  entry.host == credentials.host &&
+                  entry.share == credentials.share &&
+                  entry.user == credentials.user,
+            ))
+          credentials,
+        ...history,
+      ];
+    });
     await _discover();
   }
 
@@ -315,6 +330,44 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
   Widget _serverStep() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
+      if (_history.isNotEmpty) ...[
+        DropdownButtonFormField<int>(
+          key: ValueKey('smb-history-${_history.length}'),
+          initialValue: null,
+          decoration: const InputDecoration(
+            labelText: '已连接过的 SMB',
+            prefixIcon: Icon(Icons.history),
+          ),
+          hint: const Text('选择地址并回填凭证'),
+          isExpanded: true,
+          items: [
+            for (var i = 0; i < _history.length; i++)
+              DropdownMenuItem(
+                value: i,
+                child: Text(
+                  _history[i].historyLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: _busy
+              ? null
+              : (index) {
+                  if (index == null) return;
+                  final credentials = _history[index];
+                  setState(() {
+                    _host.text = credentials.host;
+                    _user.text = credentials.user;
+                    _password.text = credentials.password;
+                    _manualShare.text = credentials.share;
+                    _selectedShare = null;
+                    _error = null;
+                  });
+                },
+        ),
+        const SizedBox(height: 12),
+      ],
       TextField(
         controller: _host,
         onChanged: (_) => setState(() => _error = null),

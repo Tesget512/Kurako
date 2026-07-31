@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
@@ -12,6 +10,8 @@ import '../services/bangumi_oauth.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
 import 'about_page.dart';
+import 'appearance_settings_page.dart';
+import 'downloads_page.dart';
 import 'maintenance_page.dart';
 import 'player_settings_page.dart';
 import 'smb_source_wizard.dart';
@@ -31,7 +31,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider);
     final settings = ref.watch(settingsProvider);
-    final themeSettings = ref.watch(themeProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -127,7 +126,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _section(context, 'Bangumi 账号'),
           _buildBangumiSection(context, settings),
           const Divider(height: 32),
-          _section(context, '播放器'),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.play_circle_outline),
@@ -139,22 +137,40 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
           ),
           const Divider(height: 32),
-          _section(context, '外观'),
-          _buildAppearanceSection(context, themeSettings),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.palette_outlined),
+            title: const Text('外观'),
+            subtitle: const Text('显示模式、主题色、缩放与字体'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AppearanceSettingsPage()),
+            ),
+          ),
           const Divider(height: 32),
-          _section(context, '维护'),
+          ListTile(
+            key: const ValueKey('settings-downloads'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.download_outlined),
+            title: const Text('下载管理'),
+            subtitle: const Text('播放与管理已下载到本地的网络视频'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+          ),
+          const Divider(height: 32),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.build_outlined),
             title: const Text('维护'),
-            subtitle: const Text('下载、屏蔽、配置备份与数据重置'),
+            subtitle: const Text('下载清理、屏蔽、配置备份与数据重置'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(
               context,
             ).push(MaterialPageRoute(builder: (_) => const MaintenancePage())),
           ),
           const Divider(height: 32),
-          _section(context, '关于'),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.info_outline),
@@ -166,117 +182,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ).push(MaterialPageRoute(builder: (_) => const AboutPage())),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildAppearanceSection(BuildContext context, ThemeSettings theme) {
-    final following = theme.followSystem && Platform.isAndroid;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (Platform.isAndroid)
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('跟随系统取色 (Monet)'),
-            subtitle: const Text('使用 Android 12+ 壁纸动态配色，关闭后使用下方预设色'),
-            value: theme.followSystem,
-            onChanged: (v) =>
-                ref.read(themeProvider.notifier).setFollowSystem(v),
-          ),
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-            following ? '主题色（跟随系统中，暂不生效）' : '主题色',
-            style: Theme.of(context).textTheme.bodyMedium,
-          ),
-        ),
-        Opacity(
-          opacity: following ? 0.4 : 1.0,
-          child: IgnorePointer(
-            ignoring: following,
-            child: Wrap(
-              spacing: 12,
-              runSpacing: 12,
-              children: [
-                for (var i = 0; i < kSeedPalette.length; i++)
-                  _seedSwatch(context, i, theme.seedIndex == i),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        _buildUiScaleRow(context),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('使用系统默认字体'),
-          subtitle: const Text('关闭则使用软件内置的霞鹜文楷屏幕字体'),
-          value: ref.watch(useSystemFontProvider),
-          onChanged: (v) => ref.read(useSystemFontProvider.notifier).set(v),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildUiScaleRow(BuildContext context) {
-    final scale = ref.watch(uiScaleProvider);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                '界面缩放：$scale%${scale == 100 ? '（自适应）' : ''}',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ),
-            if (scale != 100)
-              TextButton(
-                onPressed: () => ref.read(uiScaleProvider.notifier).set(100),
-                child: const Text('重置'),
-              ),
-          ],
-        ),
-        Slider(
-          value: scale.toDouble(),
-          min: 75,
-          max: 150,
-          divisions: 15, // steps of 5
-          label: '$scale%',
-          onChanged: (v) => ref.read(uiScaleProvider.notifier).set(v.round()),
-        ),
-      ],
-    );
-  }
-
-  Widget _seedSwatch(BuildContext context, int index, bool selected) {
-    final choice = kSeedPalette[index];
-    // Contrasting check mark for readability on any swatch.
-    final onColor =
-        ThemeData.estimateBrightnessForColor(choice.color) == Brightness.dark
-        ? Colors.white
-        : Colors.black;
-    return Tooltip(
-      message: choice.label,
-      child: InkResponse(
-        radius: 28,
-        onTap: () => ref.read(themeProvider.notifier).setSeedIndex(index),
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: choice.color,
-            shape: BoxShape.circle,
-            border: selected
-                ? Border.all(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    width: 3,
-                  )
-                : Border.all(color: Colors.black12, width: 1),
-          ),
-          child: selected ? Icon(Icons.check, color: onColor, size: 22) : null,
-        ),
       ),
     );
   }

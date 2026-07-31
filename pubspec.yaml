@@ -126,7 +126,6 @@ flutter:
   # (libass on Android loads the .ttf file by asset path — see player_page).
   assets:
     - assets/fonts/LXGWWenKaiGBScreen.ttf
-    - assets/images/kurako_icon_temporary.png
 
   fonts:
     - family: LXGWWenKaiGBScreen

@@ -19,6 +19,21 @@ void main() {
     expect(notifier.state.gestureSeekDurationSec, 10);
   });
 
+  test('appearance mode defaults to system and persists an override', () async {
+    SharedPreferences.setMockInitialValues({});
+    final notifier = ThemeNotifier();
+    addTearDown(notifier.dispose);
+
+    expect(notifier.state.mode, AppThemeMode.system);
+    await notifier.setMode(AppThemeMode.dark);
+
+    expect(notifier.state.mode, AppThemeMode.dark);
+    expect(
+      (await SharedPreferences.getInstance()).getString('theme_mode'),
+      'dark',
+    );
+  });
+
   test('background playback requires media session controls', () async {
     SharedPreferences.setMockInitialValues({});
     final notifier = SettingsNotifier();

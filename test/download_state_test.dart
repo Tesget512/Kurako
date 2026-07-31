@@ -11,6 +11,7 @@ Episode episode({required bool isDownloaded}) => Episode(
   lastPositionMs: 0,
   durationMs: 0,
   sourceType: 'smb',
+  isNewFile: false,
   isDownloaded: isDownloaded,
 );
 

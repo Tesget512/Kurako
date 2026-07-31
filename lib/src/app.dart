@@ -106,7 +106,7 @@ class AnimeBdApp extends ConsumerWidget {
           debugShowCheckedModeBanner: false,
           theme: _theme(light, systemFont: systemFont),
           darkTheme: _theme(dark, systemFont: systemFont),
-          themeMode: ThemeMode.system,
+          themeMode: theme.mode.flutterThemeMode,
           home: const HomePage(),
           builder: (context, child) {
             if (scalePercent == 100 || child == null) return child!;

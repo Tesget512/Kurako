@@ -17,17 +17,46 @@ String _titleOf(Anime a) {
 
 /// Responsive expanded extent for the detail header. The bounds leave room for
 /// large text without turning the fixed header into a full-screen surface.
-double coverHeaderExpandedHeight(BuildContext context) {
-  final topInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
-  final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.3);
+double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
   if (coverHeaderUsesNarrowLayout(context)) {
     const coverHeight = 152.0 * 214 / 150;
-    final titleHeight = 80 * textScale;
-    return topInset + 8 + titleHeight + 10 + coverHeight + 12;
+    final contentWidth =
+        MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+    final theme = Theme.of(context);
+    final textScaler = MediaQuery.textScalerOf(context);
+    double measuredHeight(String text, TextStyle? style, int maxLines) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: Directionality.of(context),
+        textScaler: textScaler,
+        maxLines: maxLines,
+        ellipsis: '…',
+      )..layout(maxWidth: contentWidth);
+      return painter.height;
+    }
+
+    var titleHeight = measuredHeight(
+      _titleOf(anime),
+      theme.textTheme.titleLarge,
+      2,
+    );
+    if (anime.name != null &&
+        anime.name!.isNotEmpty &&
+        anime.name != _titleOf(anime)) {
+      titleHeight +=
+          2 + measuredHeight(anime.name!, theme.textTheme.bodySmall, 1);
+    }
+    // SliverAppBar adds the system top padding itself. Count only the toolbar
+    // here, otherwise phones reserve the status-bar height twice and leave a
+    // conspicuous blank strip below the cover.
+    return kToolbarHeight + 8 + titleHeight + 10 + coverHeight + 8;
   }
   final coverWidth = useCustomCaption ? 196.0 : 168.0;
   final coverHeight = coverWidth * 214 / 150;
-  return topInset + 8 + coverHeight + 16;
+  // Wide facts can be slightly taller than the cover once rating, schedule and
+  // collection controls are all present. This allowance is wide-only and does
+  // not reintroduce the phone gap fixed above.
+  return kToolbarHeight + 8 + coverHeight + 40;
 }
 
 bool coverHeaderUsesNarrowLayout(BuildContext context) {

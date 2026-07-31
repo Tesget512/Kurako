@@ -520,6 +520,9 @@ class Episode {
   /// "local" = file_path is a POSIX path; "saf" = file_path is a content:// URI.
   final String sourceType;
 
+  /// Inserted by the latest incremental scan and not yet shown in detail.
+  final bool isNewFile;
+
   /// Whether a completed download exists for this exact remote URI.
   final bool isDownloaded;
 
@@ -536,6 +539,7 @@ class Episode {
     required this.lastPositionMs,
     required this.durationMs,
     required this.sourceType,
+    required this.isNewFile,
     required this.isDownloaded,
   });
 
@@ -553,6 +557,7 @@ class Episode {
       lastPositionMs.hashCode ^
       durationMs.hashCode ^
       sourceType.hashCode ^
+      isNewFile.hashCode ^
       isDownloaded.hashCode;
 
   @override
@@ -572,6 +577,7 @@ class Episode {
           lastPositionMs == other.lastPositionMs &&
           durationMs == other.durationMs &&
           sourceType == other.sourceType &&
+          isNewFile == other.isNewFile &&
           isDownloaded == other.isDownloaded;
 }
 

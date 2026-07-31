@@ -69,6 +69,8 @@ pub struct Episode {
     pub duration_ms: i64,
     /// "local" = file_path is a POSIX path; "saf" = file_path is a content:// URI.
     pub source_type: String,
+    /// Inserted by the latest incremental scan and not yet shown in detail.
+    pub is_new_file: bool,
     /// Whether a completed download exists for this exact remote URI.
     pub is_downloaded: bool,
 }

@@ -13,6 +13,8 @@ const ADD_EPISODE_FILE_SIZE: &str =
     "ALTER TABLE episodes ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0";
 const ADD_EPISODE_FILE_NAME_KEY: &str =
     "ALTER TABLE episodes ADD COLUMN file_name_key TEXT NOT NULL DEFAULT ''";
+const ADD_EPISODE_IS_NEW_FILE: &str =
+    "ALTER TABLE episodes ADD COLUMN is_new_file INTEGER NOT NULL DEFAULT 0";
 const ADD_DOWNLOAD_FILE_NAME_KEY: &str = "ALTER TABLE downloads ADD COLUMN file_name_key TEXT";
 
 pub fn init(db_path: &str) -> Result<()> {
@@ -63,6 +65,7 @@ pub fn init(db_path: &str) -> Result<()> {
             release_group    TEXT,
             source_type      TEXT NOT NULL DEFAULT 'local',
             folder_id        INTEGER,
+            is_new_file      INTEGER NOT NULL DEFAULT 0,
             watched          INTEGER NOT NULL DEFAULT 0,
             last_position_ms INTEGER NOT NULL DEFAULT 0,
             duration_ms      INTEGER NOT NULL DEFAULT 0,
@@ -106,6 +109,7 @@ pub fn init(db_path: &str) -> Result<()> {
         "ALTER TABLE library_folders ADD COLUMN last_scanned INTEGER",
         "ALTER TABLE library_folders ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
         "ALTER TABLE episodes ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
+        ADD_EPISODE_IS_NEW_FILE,
         "ALTER TABLE downloads ADD COLUMN anime_id INTEGER",
         "ALTER TABLE downloads ADD COLUMN bangumi_id INTEGER",
         "ALTER TABLE downloads ADD COLUMN anime_title TEXT",
@@ -478,6 +482,7 @@ pub fn upsert_episode(
     resolution: Option<&str>,
     release_group: Option<&str>,
     source_type: &str,
+    mark_new_file: bool,
 ) -> Result<bool> {
     let file_name_key = crate::scan_control::normalized_file_name(file_name);
     with_conn(|c| {
@@ -487,8 +492,8 @@ pub fn upsert_episode(
             |row| row.get::<_, bool>(0),
         )?;
         c.execute(
-            "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type, is_new_file)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(file_path) DO UPDATE SET
                 anime_id=excluded.anime_id,
                 folder_id=excluded.folder_id,
@@ -499,7 +504,7 @@ pub fn upsert_episode(
                 resolution=excluded.resolution,
                 release_group=excluded.release_group,
                 source_type=excluded.source_type",
-            params![anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type],
+            params![anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type, mark_new_file as i64],
         )?;
         Ok(!existed)
     })
@@ -603,7 +608,7 @@ fn list_episodes_on(c: &Connection, anime_id: i64) -> Result<Vec<Episode>> {
     let sql = format!(
         "SELECT e.id, e.anime_id, e.file_path, e.file_name, e.episode_no, e.title,
                 e.resolution, e.release_group, e.watched, e.last_position_ms,
-                e.duration_ms, e.source_type,
+                e.duration_ms, e.source_type, e.is_new_file,
                 (EXISTS(SELECT 1 FROM downloads d WHERE d.smb_uri = e.file_path)
                  OR EXISTS(
                      SELECT 1 FROM downloads d
@@ -632,7 +637,8 @@ fn list_episodes_on(c: &Connection, anime_id: i64) -> Result<Vec<Episode>> {
                 source_type: r
                     .get::<_, Option<String>>(11)?
                     .unwrap_or_else(|| "local".to_string()),
-                is_downloaded: r.get::<_, i64>(12)? != 0,
+                is_new_file: r.get::<_, i64>(12)? != 0,
+                is_downloaded: r.get::<_, i64>(13)? != 0,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -732,13 +738,19 @@ pub fn mark_anime_has_new_files(anime_id: i64) -> Result<()> {
 }
 
 pub fn clear_anime_has_new_files(anime_id: i64) -> Result<()> {
-    with_conn(|c| {
-        c.execute(
-            "UPDATE anime SET has_new_files = 0 WHERE id = ?1",
-            params![anime_id],
-        )?;
-        Ok(())
-    })
+    with_conn(|c| clear_anime_has_new_files_on(c, anime_id))
+}
+
+fn clear_anime_has_new_files_on(c: &Connection, anime_id: i64) -> Result<()> {
+    c.execute(
+        "UPDATE anime SET has_new_files = 0 WHERE id = ?1",
+        params![anime_id],
+    )?;
+    c.execute(
+        "UPDATE episodes SET is_new_file = 0 WHERE anime_id = ?1",
+        params![anime_id],
+    )?;
+    Ok(())
 }
 
 /// Bound anime ids and their subject ids, for collection-status sync.
@@ -1583,7 +1595,8 @@ mod download_tests {
         c.execute_batch(
             "CREATE TABLE anime (
                  id INTEGER PRIMARY KEY, title_raw TEXT NOT NULL, bangumi_id INTEGER,
-                 name TEXT, name_cn TEXT, cover_url TEXT
+                 name TEXT, name_cn TEXT, cover_url TEXT,
+                 has_new_files INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE episodes (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1594,7 +1607,8 @@ mod download_tests {
                  release_group TEXT, watched INTEGER NOT NULL DEFAULT 0,
                  last_position_ms INTEGER NOT NULL DEFAULT 0,
                  duration_ms INTEGER NOT NULL DEFAULT 0,
-                 source_type TEXT NOT NULL DEFAULT 'smb'
+                 source_type TEXT NOT NULL DEFAULT 'smb',
+                 is_new_file INTEGER NOT NULL DEFAULT 0
              );
              CREATE TABLE downloads (
                  id INTEGER PRIMARY KEY AUTOINCREMENT, smb_uri TEXT NOT NULL UNIQUE,
@@ -1628,6 +1642,35 @@ mod download_tests {
         assert_eq!(episodes.len(), 2);
         assert!(episodes[0].is_downloaded);
         assert!(!episodes[1].is_downloaded);
+    }
+
+    #[test]
+    fn opening_detail_clears_anime_and_episode_new_flags_together() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO anime(id, title_raw, has_new_files) VALUES (7, 'Show', 1);
+             INSERT INTO episodes(
+                 id, anime_id, file_path, file_name, file_name_key, file_size,
+                 episode_no, source_type, is_new_file
+             ) VALUES
+                 (1, 7, 'smb://server/01.mkv', '01.mkv', '01.mkv', 10, 1, 'smb', 0),
+                 (2, 7, 'smb://server/02.mkv', '02.mkv', '02.mkv', 20, 2, 'smb', 1);",
+        )
+        .unwrap();
+
+        assert!(list_episodes_on(&c, 7).unwrap()[1].is_new_file);
+        clear_anime_has_new_files_on(&c, 7).unwrap();
+
+        let anime_flag: i64 = c
+            .query_row("SELECT has_new_files FROM anime WHERE id = 7", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(anime_flag, 0);
+        assert!(list_episodes_on(&c, 7)
+            .unwrap()
+            .iter()
+            .all(|episode| !episode.is_new_file));
     }
 
     #[test]

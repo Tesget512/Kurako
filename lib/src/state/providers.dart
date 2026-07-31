@@ -1,6 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
-import 'package:flutter/material.dart' show Color;
+import 'package:flutter/material.dart' show Color, ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -153,15 +154,43 @@ const kSeedPalette = <SeedChoice>[
 class ThemeSettings {
   final int seedIndex;
   final bool followSystem; // Android Monet
-  const ThemeSettings({this.seedIndex = 0, this.followSystem = true});
+  final AppThemeMode mode;
+  const ThemeSettings({
+    this.seedIndex = 0,
+    this.followSystem = true,
+    this.mode = AppThemeMode.system,
+  });
 
   Color get seedColor =>
       kSeedPalette[seedIndex.clamp(0, kSeedPalette.length - 1)].color;
 
-  ThemeSettings copyWith({int? seedIndex, bool? followSystem}) => ThemeSettings(
+  ThemeSettings copyWith({
+    int? seedIndex,
+    bool? followSystem,
+    AppThemeMode? mode,
+  }) => ThemeSettings(
     seedIndex: seedIndex ?? this.seedIndex,
     followSystem: followSystem ?? this.followSystem,
+    mode: mode ?? this.mode,
   );
+}
+
+enum AppThemeMode {
+  system,
+  light,
+  dark;
+
+  ThemeMode get flutterThemeMode => switch (this) {
+    AppThemeMode.system => ThemeMode.system,
+    AppThemeMode.light => ThemeMode.light,
+    AppThemeMode.dark => ThemeMode.dark,
+  };
+
+  static AppThemeMode fromStorage(String? value) => switch (value) {
+    'light' => AppThemeMode.light,
+    'dark' => AppThemeMode.dark,
+    _ => AppThemeMode.system,
+  };
 }
 
 final themeProvider = StateNotifierProvider<ThemeNotifier, ThemeSettings>((
@@ -182,6 +211,7 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
         kSeedPalette.length - 1,
       ),
       followSystem: prefs.getBool('theme_follow_system') ?? true,
+      mode: AppThemeMode.fromStorage(prefs.getString('theme_mode')),
     );
   }
 
@@ -196,18 +226,24 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
     await prefs.setBool('theme_follow_system', v);
     state = state.copyWith(followSystem: v);
   }
+
+  Future<void> setMode(AppThemeMode mode) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('theme_mode', mode.name);
+    state = state.copyWith(mode: mode);
+  }
 }
 
-// ---- Player quick-seek duration (double-tap / quick-forward), persisted ----
+// ---- Player toolbar quick-forward duration, persisted ----
 
-/// Seconds jumped by the player's quick-seek (double-tap and the forward
-/// button). Adjustable via long-press. Clamped to 5..90.
+/// Seconds jumped by the player's toolbar quick-forward button. Double-tap
+/// gestures use Settings.gestureSeekDurationSec independently. Clamped 5..90.
 final seekDurationProvider = StateNotifierProvider<_IntPrefNotifier, int>((
   ref,
 ) {
   return _IntPrefNotifier(
     'seek_duration_sec',
-    defaultValue: 10,
+    defaultValue: 40,
     min: 5,
     max: 90,
   );
@@ -507,6 +543,13 @@ class SmbCredentials {
 
   bool get isConfigured => host.isNotEmpty && share.isNotEmpty;
 
+  String get historyLabel {
+    final account = user.trim().isEmpty ? '匿名' : user.trim();
+    return '$host / $share · $account';
+  }
+
+  static const _historyKey = 'smb_connection_history_v1';
+
   static Future<SmbCredentials> load() async {
     final prefs = await SharedPreferences.getInstance();
     return SmbCredentials(
@@ -517,13 +560,70 @@ class SmbCredentials {
     );
   }
 
-  Future<void> save() async {
+  static Future<List<SmbCredentials>> loadHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final result = <SmbCredentials>[];
+    for (final source in prefs.getStringList(_historyKey) ?? const <String>[]) {
+      try {
+        final value = jsonDecode(source);
+        if (value is! Map<String, dynamic>) continue;
+        final host = value['host'];
+        final share = value['share'];
+        final user = value['user'];
+        final password = value['password'];
+        if (host is! String ||
+            share is! String ||
+            user is! String ||
+            password is! String ||
+            host.trim().isEmpty ||
+            share.trim().isEmpty) {
+          continue;
+        }
+        result.add(
+          SmbCredentials(
+            host: host,
+            share: share,
+            user: user,
+            password: password,
+          ),
+        );
+      } catch (_) {
+        // Ignore only the malformed history row; active credentials remain.
+      }
+    }
+    return result;
+  }
+
+  Future<void> save({bool rememberInHistory = true}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('smb_host', host);
     await prefs.setString('smb_share', share);
     await prefs.setString('smb_user', user);
     await prefs.setString('smb_password', password);
+    if (rememberInHistory && isConfigured) {
+      final history = await loadHistory();
+      final identity = _historyIdentity;
+      history.removeWhere((entry) => entry._historyIdentity == identity);
+      history.insert(0, this);
+      await prefs.setStringList(
+        _historyKey,
+        history
+            .take(10)
+            .map(
+              (entry) => jsonEncode({
+                'host': entry.host,
+                'share': entry.share,
+                'user': entry.user,
+                'password': entry.password,
+              }),
+            )
+            .toList(),
+      );
+    }
   }
+
+  String get _historyIdentity =>
+      '${host.trim().toLowerCase()}\n${share.trim().toLowerCase()}\n${user.trim().toLowerCase()}';
 
   /// Push credentials into the Rust SMB client (no network round-trip).
   void pushToRust() {
@@ -554,6 +654,15 @@ class WebDavCredentials {
 
   bool get isConfigured => baseUrl.isNotEmpty;
 
+  String get historyLabel {
+    final account = authMode == 'anonymous' || user.trim().isEmpty
+        ? '匿名'
+        : user.trim();
+    return '$baseUrl · $account';
+  }
+
+  static const _historyKey = 'webdav_connection_history_v1';
+
   static Future<WebDavCredentials> load() async {
     final prefs = await SharedPreferences.getInstance();
     return WebDavCredentials(
@@ -565,14 +674,75 @@ class WebDavCredentials {
     );
   }
 
-  Future<void> save() async {
+  static Future<List<WebDavCredentials>> loadHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final result = <WebDavCredentials>[];
+    for (final source in prefs.getStringList(_historyKey) ?? const <String>[]) {
+      try {
+        final value = jsonDecode(source);
+        if (value is! Map<String, dynamic>) continue;
+        final baseUrl = value['baseUrl'];
+        final user = value['user'];
+        final password = value['password'];
+        final authMode = value['authMode'];
+        final allowInsecureTls = value['allowInsecureTls'];
+        if (baseUrl is! String ||
+            user is! String ||
+            password is! String ||
+            authMode is! String ||
+            allowInsecureTls is! bool ||
+            baseUrl.trim().isEmpty ||
+            (authMode != 'basic' && authMode != 'anonymous')) {
+          continue;
+        }
+        result.add(
+          WebDavCredentials(
+            baseUrl: baseUrl,
+            user: user,
+            password: password,
+            authMode: authMode,
+            allowInsecureTls: allowInsecureTls,
+          ),
+        );
+      } catch (_) {
+        // Ignore only the malformed history row; active credentials remain.
+      }
+    }
+    return result;
+  }
+
+  Future<void> save({bool rememberInHistory = true}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('webdav_base_url', baseUrl);
     await prefs.setString('webdav_user', user);
     await prefs.setString('webdav_password', password);
     await prefs.setString('webdav_auth_mode', authMode);
     await prefs.setBool('webdav_allow_insecure_tls', allowInsecureTls);
+    if (rememberInHistory && isConfigured) {
+      final history = await loadHistory();
+      final identity = _historyIdentity;
+      history.removeWhere((entry) => entry._historyIdentity == identity);
+      history.insert(0, this);
+      await prefs.setStringList(
+        _historyKey,
+        history
+            .take(10)
+            .map(
+              (entry) => jsonEncode({
+                'baseUrl': entry.baseUrl,
+                'user': entry.user,
+                'password': entry.password,
+                'authMode': entry.authMode,
+                'allowInsecureTls': entry.allowInsecureTls,
+              }),
+            )
+            .toList(),
+      );
+    }
   }
+
+  String get _historyIdentity =>
+      '${baseUrl.trim().toLowerCase()}\n${user.trim().toLowerCase()}\n$authMode';
 
   Future<void> pushToRust() => rust.webdavSetCredentials(
     baseUrl: baseUrl,

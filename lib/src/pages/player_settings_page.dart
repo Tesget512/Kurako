@@ -300,7 +300,7 @@ class PlayerSettingsPage extends ConsumerWidget {
     );
     if (confirmed != true) return;
     await ref.read(settingsProvider.notifier).resetPlayerSettings();
-    await ref.read(seekDurationProvider.notifier).set(10);
+    await ref.read(seekDurationProvider.notifier).set(40);
     await ref.read(decodeModeProvider.notifier).set('auto');
     if (context.mounted) {
       ScaffoldMessenger.of(

@@ -294,6 +294,11 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(find.byType(DetailPage), findsOneWidget);
+      final detailCover = tester.getRect(
+        find.byKey(const ValueKey('detail-header-cover')),
+      );
+      final ratingSection = tester.getRect(find.byType(ExpansionTile));
+      expect(ratingSection.top - detailCover.bottom, lessThanOrEqualTo(24));
       final detailAppBar = tester.widget<SliverAppBar>(
         find.byType(SliverAppBar),
       );

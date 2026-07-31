@@ -11,6 +11,7 @@ Episode _episode(String sourceType) => Episode(
   lastPositionMs: 0,
   durationMs: 0,
   sourceType: sourceType,
+  isNewFile: false,
   isDownloaded: false,
 );
 

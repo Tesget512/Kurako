@@ -20,7 +20,11 @@ const anime = Anime(
   specialCount: 0,
 );
 
-Episode episode(int number, {bool isDownloaded = false}) => Episode(
+Episode episode(
+  int number, {
+  bool isDownloaded = false,
+  bool isNewFile = false,
+}) => Episode(
   id: number,
   animeId: 1,
   filePath: 'smb://server/Anime/Episode $number.mkv',
@@ -30,6 +34,7 @@ Episode episode(int number, {bool isDownloaded = false}) => Episode(
   lastPositionMs: 0,
   durationMs: 0,
   sourceType: 'smb',
+  isNewFile: isNewFile,
   isDownloaded: isDownloaded,
 );
 

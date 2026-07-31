@@ -29,6 +29,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   bool _refreshing = false;
   final _scrollController = ScrollController();
   Anime? _animeSnapshot;
+  bool _didConsumeNewFiles = false;
   // Whether the header has scrolled far enough to show the toolbar title.
   final _collapsed = ValueNotifier<bool>(false);
   double _titleRevealOffset = 160;
@@ -38,11 +39,6 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     super.initState();
     _animeSnapshot = widget.initialAnime;
     _scrollController.addListener(_onScroll);
-    if (_animeSnapshot?.hasNewFiles == true) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_clearNewFilesBadge());
-      });
-    }
     // Metadata is no longer refreshed per-anime on open; the whole library is
     // refreshed once at startup (see HomePage._refreshAllMetadataOnce). The
     // manual refresh button below still force-refetches this one subject.
@@ -54,6 +50,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     if (oldWidget.animeId != widget.animeId ||
         oldWidget.initialAnime != widget.initialAnime) {
       _animeSnapshot = widget.initialAnime;
+      _didConsumeNewFiles = false;
     }
   }
 
@@ -90,7 +87,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         data: (anime) {
           if (anime == null) return const _NotFound(message: '未找到');
           _animeSnapshot ??= anime;
-          final expandedHeight = coverHeaderExpandedHeight(context);
+          final expandedHeight = coverHeaderExpandedHeight(context, anime);
           final collapsedHeight =
               MediaQuery.paddingOf(context).top + kToolbarHeight;
           _titleRevealOffset = (expandedHeight - collapsedHeight - 24).clamp(
@@ -148,38 +145,41 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                     child: Text('剧集加载失败: $e'),
                   ),
                 ),
-                data: (episodes) => SliverToBoxAdapter(
-                  child: _EpisodeList(
-                    episodes: episodes,
-                    onPlay: (e) => _play(context, ref, e),
-                    onPlayWith: (e, external) =>
-                        _play(context, ref, e, forceExternal: external),
-                    onDownload: (e) => _downloadEpisode(context, e),
-                    onBlocked: () async {
-                      ref.invalidate(episodesProvider(widget.animeId));
-                      ref.invalidate(animeDetailProvider(widget.animeId));
-                      await _reloadAnimeSnapshot();
-                    },
-                    onRematched: (newAnimeId) async {
-                      // A single file was split into its own (or an
-                      // existing) entry, or detached to 未分类 — refresh
-                      // this list so it drops out, refresh the library, and
-                      // jump to the entry it now belongs to.
-                      ref.invalidate(episodesProvider(widget.animeId));
-                      ref.invalidate(animeDetailProvider(widget.animeId));
-                      ref.invalidate(animeListProvider);
-                      if (newAnimeId == widget.animeId) {
+                data: (episodes) {
+                  _consumeNewFilesAfterFirstFrame(episodes);
+                  return SliverToBoxAdapter(
+                    child: _EpisodeList(
+                      episodes: episodes,
+                      onPlay: (e) => _play(context, ref, e),
+                      onPlayWith: (e, external) =>
+                          _play(context, ref, e, forceExternal: external),
+                      onDownload: (e) => _downloadEpisode(context, e),
+                      onBlocked: () async {
+                        ref.invalidate(episodesProvider(widget.animeId));
+                        ref.invalidate(animeDetailProvider(widget.animeId));
                         await _reloadAnimeSnapshot();
-                      } else if (context.mounted) {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                            builder: (_) => DetailPage(animeId: newAnimeId),
-                          ),
-                        );
-                      }
-                    },
-                  ),
-                ),
+                      },
+                      onRematched: (newAnimeId) async {
+                        // A single file was split into its own (or an
+                        // existing) entry, or detached to 未分类 — refresh
+                        // this list so it drops out, refresh the library, and
+                        // jump to the entry it now belongs to.
+                        ref.invalidate(episodesProvider(widget.animeId));
+                        ref.invalidate(animeDetailProvider(widget.animeId));
+                        ref.invalidate(animeListProvider);
+                        if (newAnimeId == widget.animeId) {
+                          await _reloadAnimeSnapshot();
+                        } else if (context.mounted) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => DetailPage(animeId: newAnimeId),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  );
+                },
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 96)),
             ],
@@ -238,7 +238,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         background: CoverHeaderHero(
           anime: anime,
           topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
-          layoutHeight: expandedHeight,
+          layoutHeight: expandedHeight + MediaQuery.paddingOf(context).top,
           collectionControl: collectionControl,
         ),
       ),
@@ -399,6 +399,18 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     } catch (_) {
       // A stale badge is harmless; a later detail visit can retry the clear.
     }
+  }
+
+  void _consumeNewFilesAfterFirstFrame(List<Episode> episodes) {
+    if (_didConsumeNewFiles ||
+        (_animeSnapshot?.hasNewFiles != true &&
+            !episodes.any((episode) => episode.isNewFile))) {
+      return;
+    }
+    _didConsumeNewFiles = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_clearNewFilesBadge());
+    });
   }
 
   /// [forceExternal]: null = follow the setting; true/false = user picked a
@@ -877,6 +889,7 @@ class _EpisodeList extends StatelessWidget {
     final sources = bySource.keys.toList()..sort();
 
     Widget tile(Episode e) => _EpisodeTile(
+      key: ValueKey('episode-${e.id}'),
       episode: e,
       onPlay: () => onPlay(e),
       onPlayWith: (external) => onPlayWith(e, external),
@@ -949,6 +962,7 @@ class _EpisodeTile extends ConsumerWidget {
   final void Function(int newAnimeId) onRematched;
 
   const _EpisodeTile({
+    super.key,
     required this.episode,
     required this.onPlay,
     required this.onPlayWith,
@@ -966,42 +980,45 @@ class _EpisodeTile extends ConsumerWidget {
     // Long-press (touch) and right-click (desktop) both open the context menu:
     // choose a player, download (SMB), or block the file. The gestures live on
     // a wrapping GestureDetector because ListTile has no onSecondaryTap.
-    return GestureDetector(
-      onSecondaryTapDown: (d) => _showMenu(context, ref, d.globalPosition),
-      child: ListTile(
-        leading: CircleAvatar(
-          child: Text(episode.episodeNo?.toString() ?? '?'),
-        ),
-        title: Text(
-          episode.fileName,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        subtitle: Text(
-          [
-            if (episode.resolution != null) episode.resolution!,
-            if (episode.releaseGroup != null) episode.releaseGroup!,
-            if (resumed.isNotEmpty) resumed,
-          ].join(' · '),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (episode.isDownloaded)
-              Tooltip(
-                message: '已下载到本地',
-                child: Icon(
-                  Icons.download_done,
-                  color: theme.colorScheme.outline,
+    return _NewEpisodeHighlight(
+      enabled: episode.isNewFile,
+      child: GestureDetector(
+        onSecondaryTapDown: (d) => _showMenu(context, ref, d.globalPosition),
+        child: ListTile(
+          leading: CircleAvatar(
+            child: Text(episode.episodeNo?.toString() ?? '?'),
+          ),
+          title: Text(
+            episode.fileName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            [
+              if (episode.resolution != null) episode.resolution!,
+              if (episode.releaseGroup != null) episode.releaseGroup!,
+              if (resumed.isNotEmpty) resumed,
+            ].join(' · '),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (episode.isDownloaded)
+                Tooltip(
+                  message: '已下载到本地',
+                  child: Icon(
+                    Icons.download_done,
+                    color: theme.colorScheme.outline,
+                  ),
                 ),
-              ),
-            if (episode.watched)
-              Icon(Icons.check_circle, color: theme.colorScheme.primary),
-            IconButton(icon: const Icon(Icons.play_arrow), onPressed: onPlay),
-          ],
+              if (episode.watched)
+                Icon(Icons.check_circle, color: theme.colorScheme.primary),
+              IconButton(icon: const Icon(Icons.play_arrow), onPressed: onPlay),
+            ],
+          ),
+          onTap: onPlay,
+          onLongPress: () => _showMenuCentered(context, ref),
         ),
-        onTap: onPlay,
-        onLongPress: () => _showMenuCentered(context, ref),
       ),
     );
   }
@@ -1221,6 +1238,62 @@ class _EpisodeTile extends ConsumerWidget {
     );
     if (blocked) onBlocked();
   }
+}
+
+class _NewEpisodeHighlight extends StatefulWidget {
+  final bool enabled;
+  final Widget child;
+
+  const _NewEpisodeHighlight({required this.enabled, required this.child});
+
+  @override
+  State<_NewEpisodeHighlight> createState() => _NewEpisodeHighlightState();
+}
+
+class _NewEpisodeHighlightState extends State<_NewEpisodeHighlight> {
+  Timer? _timer;
+  late bool _visible;
+
+  @override
+  void initState() {
+    super.initState();
+    _visible = widget.enabled;
+    _scheduleFade();
+  }
+
+  @override
+  void didUpdateWidget(covariant _NewEpisodeHighlight oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!oldWidget.enabled && widget.enabled) {
+      _visible = true;
+      _scheduleFade();
+    }
+  }
+
+  void _scheduleFade() {
+    _timer?.cancel();
+    if (!_visible) return;
+    _timer = Timer(const Duration(milliseconds: 1200), () {
+      if (mounted) setState(() => _visible = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+    key: const ValueKey('new-episode-highlight'),
+    duration: const Duration(milliseconds: 700),
+    curve: Curves.easeOutCubic,
+    color: _visible
+        ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.46)
+        : Colors.transparent,
+    child: widget.child,
+  );
 }
 
 /// AppBar badge showing this anime's download activity: a spinning ring with a

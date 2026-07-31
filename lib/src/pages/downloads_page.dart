@@ -126,6 +126,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
           lastPositionMs: 0,
           durationMs: 0,
           sourceType: 'local',
+          isNewFile: false,
           isDownloaded: false,
         ),
     ];

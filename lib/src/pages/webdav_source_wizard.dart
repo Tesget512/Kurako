@@ -32,6 +32,7 @@ class _WebDavSourceWizardPageState
   bool _committed = false;
   String? _error;
   List<RemoteEntry> _entries = const [];
+  List<WebDavCredentials> _history = const [];
   final Set<String> _selectedPaths = {};
 
   @override
@@ -42,11 +43,23 @@ class _WebDavSourceWizardPageState
 
   Future<void> _restore() async {
     final credentials = await WebDavCredentials.load();
+    final history = await WebDavCredentials.loadHistory();
     if (!mounted) return;
     _address.text = credentials.baseUrl;
     _user.text = credentials.user;
     _password.text = credentials.password;
     setState(() {
+      _history = [
+        if (credentials.isConfigured &&
+            !history.any(
+              (entry) =>
+                  entry.baseUrl == credentials.baseUrl &&
+                  entry.user == credentials.user &&
+                  entry.authMode == credentials.authMode,
+            ))
+          credentials,
+        ...history,
+      ];
       _authMode = credentials.authMode;
       _allowInsecureTls = credentials.allowInsecureTls;
     });
@@ -208,7 +221,7 @@ class _WebDavSourceWizardPageState
         } catch (_) {}
       }
       try {
-        await oldCredentials.save();
+        await oldCredentials.save(rememberInHistory: false);
         await oldCredentials.pushToRust();
       } catch (_) {}
       if (mounted) setState(() => _error = '添加 WebDAV 文件夹失败：$error');
@@ -284,6 +297,44 @@ class _WebDavSourceWizardPageState
   Widget _credentialsStep() => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
+      if (_history.isNotEmpty) ...[
+        DropdownButtonFormField<int>(
+          key: ValueKey('webdav-history-${_history.length}'),
+          initialValue: null,
+          decoration: const InputDecoration(
+            labelText: '已连接过的 WebDAV',
+            prefixIcon: Icon(Icons.history),
+          ),
+          hint: const Text('选择地址并回填凭证'),
+          isExpanded: true,
+          items: [
+            for (var i = 0; i < _history.length; i++)
+              DropdownMenuItem(
+                value: i,
+                child: Text(
+                  _history[i].historyLabel,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+          ],
+          onChanged: _busy
+              ? null
+              : (index) {
+                  if (index == null) return;
+                  final credentials = _history[index];
+                  setState(() {
+                    _address.text = credentials.baseUrl;
+                    _user.text = credentials.user;
+                    _password.text = credentials.password;
+                    _authMode = credentials.authMode;
+                    _allowInsecureTls = credentials.allowInsecureTls;
+                    _error = null;
+                  });
+                },
+        ),
+        const SizedBox(height: 12),
+      ],
       TextField(
         controller: _address,
         keyboardType: TextInputType.url,

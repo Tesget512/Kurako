@@ -3173,8 +3173,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Episode dco_decode_episode(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 13)
-      throw Exception('unexpected arr length: expect 13 but see ${arr.length}');
+    if (arr.length != 14)
+      throw Exception('unexpected arr length: expect 14 but see ${arr.length}');
     return Episode(
       id: dco_decode_i_64(arr[0]),
       animeId: dco_decode_i_64(arr[1]),
@@ -3188,7 +3188,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       lastPositionMs: dco_decode_i_64(arr[9]),
       durationMs: dco_decode_i_64(arr[10]),
       sourceType: dco_decode_String(arr[11]),
-      isDownloaded: dco_decode_bool(arr[12]),
+      isNewFile: dco_decode_bool(arr[12]),
+      isDownloaded: dco_decode_bool(arr[13]),
     );
   }
 
@@ -3835,6 +3836,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_lastPositionMs = sse_decode_i_64(deserializer);
     var var_durationMs = sse_decode_i_64(deserializer);
     var var_sourceType = sse_decode_String(deserializer);
+    var var_isNewFile = sse_decode_bool(deserializer);
     var var_isDownloaded = sse_decode_bool(deserializer);
     return Episode(
       id: var_id,
@@ -3849,6 +3851,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       lastPositionMs: var_lastPositionMs,
       durationMs: var_durationMs,
       sourceType: var_sourceType,
+      isNewFile: var_isNewFile,
       isDownloaded: var_isDownloaded,
     );
   }
@@ -4582,6 +4585,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_64(self.lastPositionMs, serializer);
     sse_encode_i_64(self.durationMs, serializer);
     sse_encode_String(self.sourceType, serializer);
+    sse_encode_bool(self.isNewFile, serializer);
     sse_encode_bool(self.isDownloaded, serializer);
   }
 

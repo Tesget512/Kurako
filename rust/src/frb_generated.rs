@@ -3198,6 +3198,7 @@ impl SseDecode for crate::models::Episode {
         let mut var_lastPositionMs = <i64>::sse_decode(deserializer);
         let mut var_durationMs = <i64>::sse_decode(deserializer);
         let mut var_sourceType = <String>::sse_decode(deserializer);
+        let mut var_isNewFile = <bool>::sse_decode(deserializer);
         let mut var_isDownloaded = <bool>::sse_decode(deserializer);
         return crate::models::Episode {
             id: var_id,
@@ -3212,6 +3213,7 @@ impl SseDecode for crate::models::Episode {
             last_position_ms: var_lastPositionMs,
             duration_ms: var_durationMs,
             source_type: var_sourceType,
+            is_new_file: var_isNewFile,
             is_downloaded: var_isDownloaded,
         };
     }
@@ -4073,6 +4075,7 @@ impl flutter_rust_bridge::IntoDart for crate::models::Episode {
             self.last_position_ms.into_into_dart().into_dart(),
             self.duration_ms.into_into_dart().into_dart(),
             self.source_type.into_into_dart().into_dart(),
+            self.is_new_file.into_into_dart().into_dart(),
             self.is_downloaded.into_into_dart().into_dart(),
         ]
         .into_dart()
@@ -4506,6 +4509,7 @@ impl SseEncode for crate::models::Episode {
         <i64>::sse_encode(self.last_position_ms, serializer);
         <i64>::sse_encode(self.duration_ms, serializer);
         <String>::sse_encode(self.source_type, serializer);
+        <bool>::sse_encode(self.is_new_file, serializer);
         <bool>::sse_encode(self.is_downloaded, serializer);
     }
 }

@@ -1025,6 +1025,7 @@ fn process_groups(
                 ff.parsed.resolution.as_deref(),
                 ff.parsed.release_group.as_deref(),
                 source_type,
+                mark_new_files,
             )
             .map_err(|e| e.to_string())?;
         }

@@ -3,9 +3,10 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const configurationBackupKind = 'kurako.configuration';
-const configurationBackupSchemaVersion = 4;
+const configurationBackupSchemaVersion = 5;
 const _legacyConfigurationBackupSchemaVersion = 1;
 const _accountAndSmbSchemaVersion = 2;
+const _webDavSchemaVersion = 4;
 
 typedef _Validator = bool Function(Object value);
 
@@ -29,7 +30,7 @@ const _portableSettingsV3 = <String, _SettingDefinition>{
   'grouping_enabled': _SettingDefinition(false, _isBool),
   'theme_seed_index': _SettingDefinition(0, _themeSeedValidator),
   'theme_follow_system': _SettingDefinition(true, _isBool),
-  'seek_duration_sec': _SettingDefinition(10, _seekDurationValidator),
+  'seek_duration_sec': _SettingDefinition(40, _seekDurationValidator),
   'ui_scale_percent': _SettingDefinition(100, _uiScaleValidator),
   'touch_mode_player': _SettingDefinition(false, _isBool),
   'use_system_font': _SettingDefinition(false, _isBool),
@@ -39,7 +40,7 @@ const _portableSettingsV3 = <String, _SettingDefinition>{
   'super_resolution_mode': _SettingDefinition('off', _superResolutionValidator),
 };
 
-const _portableSettings = <String, _SettingDefinition>{
+const _portableSettingsV4 = <String, _SettingDefinition>{
   ..._portableSettingsV3,
   'auto_resume_playback': _SettingDefinition(true, _isBool),
   'auto_play_next': _SettingDefinition(true, _isBool),
@@ -47,6 +48,11 @@ const _portableSettings = <String, _SettingDefinition>{
   'auto_picture_in_picture': _SettingDefinition(false, _isBool),
   'media_session_enabled': _SettingDefinition(false, _isBool),
   'gesture_seek_duration_sec': _SettingDefinition(10, _seekDurationValidator),
+};
+
+const _portableSettings = <String, _SettingDefinition>{
+  ..._portableSettingsV4,
+  'theme_mode': _SettingDefinition('system', _themeModeValidator),
 };
 
 const _accountFields = <String, _SettingDefinition>{
@@ -100,6 +106,8 @@ bool _decodeModeValidator(Object value) =>
     _isOneOf(value, const {'auto', 'hw', 'sw'});
 bool _superResolutionValidator(Object value) =>
     _isOneOf(value, const {'off', 'anime4k-light', 'anime4k-balanced'});
+bool _themeModeValidator(Object value) =>
+    _isOneOf(value, const {'system', 'light', 'dark'});
 bool _webDavAuthValidator(Object value) =>
     _isOneOf(value, const {'anonymous', 'basic'});
 bool _webDavUrlValidator(Object value) {
@@ -215,6 +223,7 @@ class ConfigurationBackupDocument {
     if (schemaVersion != _legacyConfigurationBackupSchemaVersion &&
         schemaVersion != _accountAndSmbSchemaVersion &&
         schemaVersion != 3 &&
+        schemaVersion != _webDavSchemaVersion &&
         schemaVersion != configurationBackupSchemaVersion) {
       throw const FormatException('不支持此配置文件版本');
     }
@@ -225,9 +234,11 @@ class ConfigurationBackupDocument {
 
     final settings = _parseSection(
       decoded['settings'],
-      definitions: schemaVersion == configurationBackupSchemaVersion
-          ? _portableSettings
-          : _portableSettingsV3,
+      definitions: switch (schemaVersion) {
+        configurationBackupSchemaVersion => _portableSettings,
+        _webDavSchemaVersion => _portableSettingsV4,
+        _ => _portableSettingsV3,
+      },
       label: '设置',
     );
     final account = schemaVersion >= _accountAndSmbSchemaVersion
@@ -244,7 +255,7 @@ class ConfigurationBackupDocument {
             label: 'SMB 凭证',
           )
         : null;
-    final webdav = schemaVersion == configurationBackupSchemaVersion
+    final webdav = schemaVersion >= _webDavSchemaVersion
         ? _parseSection(
             decoded['webdav'],
             definitions: _webDavFields,

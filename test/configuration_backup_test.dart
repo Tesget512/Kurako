@@ -14,6 +14,7 @@ void main() {
       'grouping_enabled': true,
       'theme_seed_index': 4,
       'theme_follow_system': false,
+      'theme_mode': 'dark',
       'seek_duration_sec': 25,
       'ui_scale_percent': 115,
       'touch_mode_player': true,
@@ -65,6 +66,7 @@ void main() {
       expect(settings['auto_picture_in_picture'], isTrue);
       expect(settings['media_session_enabled'], isTrue);
       expect(settings['gesture_seek_duration_sec'], 30);
+      expect(settings['theme_mode'], 'dark');
       final account = root['account'] as Map<String, dynamic>;
       final smb = root['smb'] as Map<String, dynamic>;
       final webdav = root['webdav'] as Map<String, dynamic>;
@@ -84,6 +86,21 @@ void main() {
       expect(settings, isNot(contains('sub_pref_42')));
       expect(source, contains('secret-access-token'));
       expect(source, contains('private-password'));
+    },
+  );
+
+  test(
+    'fresh playback defaults keep gesture at 10 and toolbar seek at 40',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final root =
+          jsonDecode(await ConfigurationBackupDocument.exportJson())
+              as Map<String, dynamic>;
+      final settings = root['settings'] as Map<String, dynamic>;
+
+      expect(settings['gesture_seek_duration_sec'], 10);
+      expect(settings['seek_duration_sec'], 40);
+      expect(settings['theme_mode'], 'system');
     },
   );
 
@@ -239,6 +256,7 @@ void _removeVersion4PlayerSettings(Map<String, dynamic> root) {
     'auto_picture_in_picture',
     'media_session_enabled',
     'gesture_seek_duration_sec',
+    'theme_mode',
   ]) {
     settings.remove(key);
   }
