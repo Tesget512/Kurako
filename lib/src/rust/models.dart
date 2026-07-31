@@ -35,6 +35,12 @@ class Anime {
   /// Top Bangumi tags, comma-separated.
   final String? tags;
 
+  /// Top Bangumi tags with per-subject usage counts, serialized as JSON.
+  final String? tagCounts;
+
+  /// An incremental scan inserted at least one new episode for this entry.
+  final bool hasNewFiles;
+
   /// Bangumi collection type for the logged-in user:
   /// 0=none, 1=想看, 2=看过, 3=在看, 4=搁置, 5=抛弃.
   final PlatformInt64 collection;
@@ -66,6 +72,8 @@ class Anime {
     this.ratingCounts,
     this.airWeekday,
     this.tags,
+    this.tagCounts,
+    required this.hasNewFiles,
     required this.collection,
     required this.matchConfidence,
     required this.corrected,
@@ -91,6 +99,8 @@ class Anime {
       ratingCounts.hashCode ^
       airWeekday.hashCode ^
       tags.hashCode ^
+      tagCounts.hashCode ^
+      hasNewFiles.hashCode ^
       collection.hashCode ^
       matchConfidence.hashCode ^
       corrected.hashCode ^
@@ -118,6 +128,8 @@ class Anime {
           ratingCounts == other.ratingCounts &&
           airWeekday == other.airWeekday &&
           tags == other.tags &&
+          tagCounts == other.tagCounts &&
+          hasNewFiles == other.hasNewFiles &&
           collection == other.collection &&
           matchConfidence == other.matchConfidence &&
           corrected == other.corrected &&
@@ -143,6 +155,9 @@ class BangumiSubject {
   final String? ratingCounts;
   final List<String> tags;
 
+  /// JSON array of `{name, count}` objects corresponding to `tags`.
+  final String? tagCounts;
+
   const BangumiSubject({
     required this.id,
     required this.name,
@@ -156,6 +171,7 @@ class BangumiSubject {
     this.ratingRank,
     this.ratingCounts,
     required this.tags,
+    this.tagCounts,
   });
 
   @override
@@ -171,7 +187,8 @@ class BangumiSubject {
       ratingTotal.hashCode ^
       ratingRank.hashCode ^
       ratingCounts.hashCode ^
-      tags.hashCode;
+      tags.hashCode ^
+      tagCounts.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -189,7 +206,8 @@ class BangumiSubject {
           ratingTotal == other.ratingTotal &&
           ratingRank == other.ratingRank &&
           ratingCounts == other.ratingCounts &&
-          tags == other.tags;
+          tags == other.tags &&
+          tagCounts == other.tagCounts;
 }
 
 /// A user-blocked item. `kind` is "anime" (matches anime.title_raw — whole

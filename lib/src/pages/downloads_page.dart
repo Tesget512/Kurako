@@ -131,8 +131,12 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
     ];
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) =>
-            PlayerPage(episodes: playlist, initialIndex: initialIndex),
+        builder: (_) => PlayerPage(
+          episodes: playlist,
+          initialIndex: initialIndex,
+          animeTitle: selected.animeTitle ?? '未匹配下载',
+          coverUrl: selected.coverUrl,
+        ),
       ),
     );
   }

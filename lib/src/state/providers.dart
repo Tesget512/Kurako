@@ -598,6 +598,12 @@ class Settings {
   final int bangumiTokenExpiresAt; // Unix seconds; 0 = none.
   /// `off` or `anime4k-lite`. Applied the next time a video is opened.
   final String superResolutionMode;
+  final bool autoResumePlayback;
+  final bool autoPlayNext;
+  final bool backgroundPlayback;
+  final bool autoPictureInPicture;
+  final bool mediaSessionEnabled;
+  final int gestureSeekDurationSec;
 
   const Settings({
     this.useExternalPlayer = false,
@@ -606,6 +612,12 @@ class Settings {
     this.bangumiRefreshToken = '',
     this.bangumiTokenExpiresAt = 0,
     this.superResolutionMode = 'off',
+    this.autoResumePlayback = true,
+    this.autoPlayNext = true,
+    this.backgroundPlayback = false,
+    this.autoPictureInPicture = false,
+    this.mediaSessionEnabled = false,
+    this.gestureSeekDurationSec = 10,
   });
 
   bool get isLoggedIn => bangumiToken.isNotEmpty;
@@ -617,6 +629,12 @@ class Settings {
     String? bangumiRefreshToken,
     int? bangumiTokenExpiresAt,
     String? superResolutionMode,
+    bool? autoResumePlayback,
+    bool? autoPlayNext,
+    bool? backgroundPlayback,
+    bool? autoPictureInPicture,
+    bool? mediaSessionEnabled,
+    int? gestureSeekDurationSec,
   }) {
     return Settings(
       useExternalPlayer: useExternalPlayer ?? this.useExternalPlayer,
@@ -626,6 +644,13 @@ class Settings {
       bangumiTokenExpiresAt:
           bangumiTokenExpiresAt ?? this.bangumiTokenExpiresAt,
       superResolutionMode: superResolutionMode ?? this.superResolutionMode,
+      autoResumePlayback: autoResumePlayback ?? this.autoResumePlayback,
+      autoPlayNext: autoPlayNext ?? this.autoPlayNext,
+      backgroundPlayback: backgroundPlayback ?? this.backgroundPlayback,
+      autoPictureInPicture: autoPictureInPicture ?? this.autoPictureInPicture,
+      mediaSessionEnabled: mediaSessionEnabled ?? this.mediaSessionEnabled,
+      gestureSeekDurationSec:
+          gestureSeekDurationSec ?? this.gestureSeekDurationSec,
     );
   }
 }
@@ -643,6 +668,12 @@ class SettingsNotifier extends StateNotifier<Settings> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    final backgroundPlayback = prefs.getBool('background_playback') ?? false;
+    final mediaSessionEnabled =
+        (prefs.getBool('media_session_enabled') ?? false) || backgroundPlayback;
+    if (backgroundPlayback) {
+      await prefs.setBool('media_session_enabled', true);
+    }
     state = Settings(
       useExternalPlayer: prefs.getBool('use_external_player') ?? false,
       externalPlayerPath: prefs.getString('external_player_path') ?? '',
@@ -652,6 +683,13 @@ class SettingsNotifier extends StateNotifier<Settings> {
       superResolutionMode: _normalizeSuperResolutionMode(
         prefs.getString('super_resolution_mode') ?? 'off',
       ),
+      autoResumePlayback: prefs.getBool('auto_resume_playback') ?? true,
+      autoPlayNext: prefs.getBool('auto_play_next') ?? true,
+      backgroundPlayback: backgroundPlayback,
+      autoPictureInPicture: prefs.getBool('auto_picture_in_picture') ?? false,
+      mediaSessionEnabled: mediaSessionEnabled,
+      gestureSeekDurationSec: (prefs.getInt('gesture_seek_duration_sec') ?? 10)
+          .clamp(5, 90),
     );
     // Push any existing access token into Rust and refresh if near expiry.
     if (state.bangumiToken.isNotEmpty) {
@@ -677,6 +715,87 @@ class SettingsNotifier extends StateNotifier<Settings> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('super_resolution_mode', value);
     state = state.copyWith(superResolutionMode: value);
+  }
+
+  Future<void> setAutoResumePlayback(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auto_resume_playback', value);
+    state = state.copyWith(autoResumePlayback: value);
+  }
+
+  Future<void> setAutoPlayNext(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auto_play_next', value);
+    state = state.copyWith(autoPlayNext: value);
+  }
+
+  /// Android background playback runs as a foreground media service, so it
+  /// cannot be enabled without exposing the corresponding system controls.
+  Future<void> setBackgroundPlayback(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('background_playback', value);
+    if (value) {
+      await prefs.setBool('media_session_enabled', true);
+    }
+    state = state.copyWith(
+      backgroundPlayback: value,
+      mediaSessionEnabled: value ? true : state.mediaSessionEnabled,
+    );
+  }
+
+  Future<void> setAutoPictureInPicture(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('auto_picture_in_picture', value);
+    state = state.copyWith(autoPictureInPicture: value);
+  }
+
+  Future<void> setMediaSessionEnabled(bool value) async {
+    if (!value && state.backgroundPlayback) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('media_session_enabled', value);
+    state = state.copyWith(mediaSessionEnabled: value);
+  }
+
+  Future<void> setGestureSeekDurationSec(int value) async {
+    final normalized = value.clamp(5, 90);
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('gesture_seek_duration_sec', normalized);
+    state = state.copyWith(gestureSeekDurationSec: normalized);
+  }
+
+  Future<void> resetPlayerSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    const values = <String, Object>{
+      'use_external_player': false,
+      'external_player_path': '',
+      'super_resolution_mode': 'off',
+      'auto_resume_playback': true,
+      'auto_play_next': true,
+      'background_playback': false,
+      'auto_picture_in_picture': false,
+      'media_session_enabled': false,
+      'gesture_seek_duration_sec': 10,
+    };
+    for (final entry in values.entries) {
+      final saved = switch (entry.value) {
+        bool value => await prefs.setBool(entry.key, value),
+        int value => await prefs.setInt(entry.key, value),
+        String value => await prefs.setString(entry.key, value),
+        _ => false,
+      };
+      if (!saved) throw StateError('无法重置播放器设置 ${entry.key}');
+    }
+    state = state.copyWith(
+      useExternalPlayer: false,
+      externalPlayerPath: '',
+      superResolutionMode: 'off',
+      autoResumePlayback: true,
+      autoPlayNext: true,
+      backgroundPlayback: false,
+      autoPictureInPicture: false,
+      mediaSessionEnabled: false,
+      gestureSeekDurationSec: 10,
+    );
   }
 
   static String _normalizeSuperResolutionMode(String value) => switch (value) {

@@ -37,6 +37,10 @@ pub struct Anime {
     pub air_weekday: Option<i64>,
     /// Top Bangumi tags, comma-separated.
     pub tags: Option<String>,
+    /// Top Bangumi tags with per-subject usage counts, serialized as JSON.
+    pub tag_counts: Option<String>,
+    /// An incremental scan inserted at least one new episode for this entry.
+    pub has_new_files: bool,
     /// Bangumi collection type for the logged-in user:
     /// 0=none, 1=想看, 2=看过, 3=在看, 4=搁置, 5=抛弃.
     pub collection: i64,
@@ -107,6 +111,8 @@ pub struct BangumiSubject {
     /// Vote histogram "n1,n2,...,n10" (score 1 → 10).
     pub rating_counts: Option<String>,
     pub tags: Vec<String>,
+    /// JSON array of `{name, count}` objects corresponding to `tags`.
+    pub tag_counts: Option<String>,
 }
 
 /// A user-blocked item. `kind` is "anime" (matches anime.title_raw — whole

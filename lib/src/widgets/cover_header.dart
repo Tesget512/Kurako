@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
 import '../rust/models.dart';
 import '../ui/cover_hero.dart';
+import '../ui/responsive_spacing.dart';
 import 'cover_image.dart';
 import 'window_caption.dart' show useCustomCaption;
 
@@ -16,12 +18,22 @@ String _titleOf(Anime a) {
 /// Responsive expanded extent for the detail header. The bounds leave room for
 /// large text without turning the fixed header into a full-screen surface.
 double coverHeaderExpandedHeight(BuildContext context) {
-  final size = MediaQuery.sizeOf(context);
+  final topInset = MediaQuery.paddingOf(context).top + kToolbarHeight;
   final textScale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.3);
-  final base = size.width < 560
-      ? (size.height * 0.56).clamp(420.0, 560.0)
-      : (size.height * 0.52).clamp(400.0, 520.0);
-  return (base * textScale).clamp(320.0, 620.0).toDouble();
+  if (coverHeaderUsesNarrowLayout(context)) {
+    const coverHeight = 152.0 * 214 / 150;
+    final titleHeight = 80 * textScale;
+    return topInset + 8 + titleHeight + 10 + coverHeight + 12;
+  }
+  final coverWidth = useCustomCaption ? 196.0 : 168.0;
+  final coverHeight = coverWidth * 214 / 150;
+  return topInset + 8 + coverHeight + 16;
+}
+
+bool coverHeaderUsesNarrowLayout(BuildContext context) {
+  final contentWidth =
+      MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  return contentWidth < 560;
 }
 
 /// The detail-page hero: a blurred cover backdrop with the cover and facts,
@@ -44,7 +56,7 @@ class CoverHeaderHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final wide = MediaQuery.sizeOf(context).width >= 600;
+    final inset = adaptiveContentInset(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final contentHeight = layoutHeight ?? constraints.maxHeight;
@@ -61,8 +73,8 @@ class CoverHeaderHero extends StatelessWidget {
                 Padding(
                   padding: EdgeInsets.only(
                     top: topInset + 8,
-                    left: wide ? 24 : 16,
-                    right: wide ? 24 : 16,
+                    left: inset,
+                    right: inset,
                     bottom: 8,
                   ),
                   child: _HeaderCard(
@@ -224,10 +236,10 @@ class _HeaderCard extends StatelessWidget {
             if (!narrow && counts != null) ...[
               const SizedBox(width: 16),
               SizedBox(
-                width: desktop ? 300.0 : 260.0,
+                width: desktop ? 360.0 : 320.0,
                 child: RatingHistogram(
                   counts: counts,
-                  height: desktop ? 100 : 88,
+                  height: desktop ? 124 : 112,
                   desktop: desktop,
                 ),
               ),
@@ -302,7 +314,12 @@ class CoverRatingSection extends StatelessWidget {
     final counts = _histogramCounts(anime);
     if (counts == null) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      padding: EdgeInsets.fromLTRB(
+        adaptiveContentInset(context),
+        0,
+        adaptiveContentInset(context),
+        0,
+      ),
       child: _CollapsibleHistogram(counts: counts),
     );
   }
@@ -330,7 +347,7 @@ class _CollapsibleHistogram extends StatelessWidget {
           ),
         ),
         children: [
-          RatingHistogram(counts: counts, height: 72, showLabel: false),
+          RatingHistogram(counts: counts, height: 112, showLabel: false),
         ],
       ),
     );
@@ -505,8 +522,10 @@ class CoverHeaderBody extends StatelessWidget {
         .where((t) => t.trim().isNotEmpty)
         .take(10)
         .toList();
+    final tagCounts = _tagCountMap(anime);
+    final inset = adaptiveContentInset(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: EdgeInsets.fromLTRB(inset, 8, inset, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -528,7 +547,9 @@ class CoverHeaderBody extends StatelessWidget {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(
-                      t.trim(),
+                      tagCounts[t.trim()] == null
+                          ? t.trim()
+                          : '${t.trim()}  ${tagCounts[t.trim()]}',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
@@ -590,7 +611,7 @@ class _ExpandableSummaryState extends State<_ExpandableSummary> {
 }
 
 /// The "评分透视" bar chart: 10 bars (score 1→10) scaled to the peak vote count.
-class RatingHistogram extends StatelessWidget {
+class RatingHistogram extends StatefulWidget {
   final List<int> counts;
   final double height;
   final bool showLabel;
@@ -604,18 +625,38 @@ class RatingHistogram extends StatelessWidget {
   });
 
   @override
+  State<RatingHistogram> createState() => _RatingHistogramState();
+}
+
+class _RatingHistogramState extends State<RatingHistogram> {
+  int? _activeIndex;
+
+  void _updateActive(Offset localPosition, double width) {
+    if (width <= 0) return;
+    final index = (localPosition.dx * 10 / width).floor().clamp(0, 9).toInt();
+    if (_activeIndex != index) setState(() => _activeIndex = index);
+  }
+
+  void _clearActive() {
+    if (_activeIndex != null) setState(() => _activeIndex = null);
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final counts = widget.counts;
     final peak = counts.reduce((a, b) => a > b ? a : b);
     if (peak == 0) return const SizedBox.shrink();
+    final total = counts.fold<int>(0, (sum, count) => sum + count);
+    final active = _activeIndex;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (showLabel) ...[
+        if (widget.showLabel) ...[
           Text(
             '评分透视',
             style:
-                (desktop
+                (widget.desktop
                         ? theme.textTheme.bodyMedium
                         : theme.textTheme.bodySmall)
                     ?.copyWith(color: theme.colorScheme.onSurfaceVariant),
@@ -623,30 +664,64 @@ class RatingHistogram extends StatelessWidget {
           const SizedBox(height: 6),
         ],
         SizedBox(
-          height: height,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              for (var i = 0; i < 10; i++)
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 2),
-                    child: FractionallySizedBox(
-                      heightFactor: counts[i] / peak,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: theme.colorScheme.primary.withValues(
-                            alpha: 0.55,
-                          ),
-                          borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(3),
+          height: 24,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 120),
+            child: active == null
+                ? const SizedBox.shrink()
+                : Text(
+                    '${active + 1} 分 · ${counts[active]} 人 · '
+                    '${(counts[active] * 100 / total).toStringAsFixed(1)}%',
+                    key: ValueKey('rating-detail-$active'),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+          ),
+        ),
+        SizedBox(
+          height: widget.height,
+          child: LayoutBuilder(
+            builder: (context, constraints) => MouseRegion(
+              cursor: SystemMouseCursors.basic,
+              onHover: (event) =>
+                  _updateActive(event.localPosition, constraints.maxWidth),
+              onExit: (_) => _clearActive(),
+              child: Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (event) =>
+                    _updateActive(event.localPosition, constraints.maxWidth),
+                onPointerMove: (event) =>
+                    _updateActive(event.localPosition, constraints.maxWidth),
+                onPointerUp: (_) => _clearActive(),
+                onPointerCancel: (_) => _clearActive(),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < 10; i++)
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 2),
+                          child: FractionallySizedBox(
+                            heightFactor: counts[i] / peak,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 100),
+                              decoration: BoxDecoration(
+                                color: theme.colorScheme.primary.withValues(
+                                  alpha: active == i ? 0.9 : 0.52,
+                                ),
+                                borderRadius: const BorderRadius.vertical(
+                                  top: Radius.circular(4),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ),
+                  ],
                 ),
-            ],
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 2),
@@ -659,7 +734,7 @@ class RatingHistogram extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
-                    fontSize: desktop ? 11 : 9,
+                    fontSize: widget.desktop ? 11 : 9,
                   ),
                 ),
               ),
@@ -667,6 +742,22 @@ class RatingHistogram extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+Map<String, int> _tagCountMap(Anime anime) {
+  final raw = anime.tagCounts;
+  if (raw == null || raw.isEmpty) return const {};
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return const {};
+    return {
+      for (final item in decoded)
+        if (item is Map && item['name'] is String && item['count'] is num)
+          item['name'] as String: (item['count'] as num).toInt(),
+    };
+  } catch (_) {
+    return const {};
   }
 }
 

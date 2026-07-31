@@ -1,7 +1,7 @@
 use crate::models::BangumiSubject;
 use anyhow::{Context, Result};
 use once_cell::sync::Lazy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
 const BASE_OFFICIAL: &str = "https://api.bgm.tv";
@@ -274,10 +274,12 @@ impl RawRating {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RawTag {
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    count: i64,
 }
 
 #[derive(Deserialize)]
@@ -301,6 +303,16 @@ impl Images {
 
 impl From<RawSubject> for BangumiSubject {
     fn from(r: RawSubject) -> Self {
+        let tags = r
+            .tags
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|tag| !tag.name.is_empty())
+            .take(10)
+            .collect::<Vec<_>>();
+        let tag_counts = (!tags.is_empty())
+            .then(|| serde_json::to_string(&tags).ok())
+            .flatten();
         BangumiSubject {
             id: r.id,
             name: r.name,
@@ -313,14 +325,8 @@ impl From<RawSubject> for BangumiSubject {
             rating_total: r.rating.as_ref().and_then(|x| x.total).filter(|t| *t > 0),
             rating_rank: r.rating.as_ref().and_then(|x| x.rank).filter(|k| *k > 0),
             rating_counts: r.rating.as_ref().and_then(|x| x.counts_csv()),
-            tags: r
-                .tags
-                .unwrap_or_default()
-                .into_iter()
-                .map(|t| t.name)
-                .filter(|n| !n.is_empty())
-                .take(10)
-                .collect(),
+            tags: tags.into_iter().map(|tag| tag.name).collect(),
+            tag_counts,
         }
     }
 }
@@ -433,6 +439,7 @@ pub async fn search_legacy(keyword: &str, limit: u32) -> Result<Vec<BangumiSubje
             rating_rank: None,
             rating_counts: None,
             tags: Vec::new(),
+            tag_counts: None,
         })
         .collect())
 }
@@ -1239,7 +1246,30 @@ mod match_tests {
             rating_rank: None,
             rating_counts: None,
             tags: Vec::new(),
+            tag_counts: None,
         }
+    }
+
+    #[test]
+    fn subject_keeps_per_entry_tag_counts() {
+        let raw: RawSubject = serde_json::from_str(
+            r#"{
+                "id": 42,
+                "tags": [
+                    {"name": "校园", "count": 328, "total_count": 999},
+                    {"name": "日常", "count": 215}
+                ]
+            }"#,
+        )
+        .unwrap();
+        let subject = BangumiSubject::from(raw);
+
+        assert_eq!(subject.tags, vec!["校园", "日常"]);
+        let counts: serde_json::Value =
+            serde_json::from_str(subject.tag_counts.as_deref().unwrap()).unwrap();
+        assert_eq!(counts[0]["count"], 328);
+        assert_eq!(counts[1]["count"], 215);
+        assert!(counts[0].get("total_count").is_none());
     }
 
     #[test]

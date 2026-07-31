@@ -5,6 +5,7 @@ import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/anime_sort.dart';
 import '../state/providers.dart';
+import '../ui/responsive_spacing.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scan_progress_sheet.dart';
 import '../widgets/window_caption.dart';
@@ -155,8 +156,9 @@ class LibraryPage extends ConsumerWidget {
   }
 
   Widget _grid(BuildContext context, WidgetRef ref, List<Anime> list) {
+    final inset = adaptiveContentInset(context);
     return GridView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(inset, 16, inset, 24),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 200,
         childAspectRatio: 0.62,
@@ -173,11 +175,12 @@ class LibraryPage extends ConsumerWidget {
     WidgetRef ref,
     List<AnimeSection> sections,
   ) {
+    final inset = adaptiveContentInset(context);
     return CustomScrollView(
       slivers: [
         for (final section in sections) ...[
           SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+            padding: EdgeInsets.fromLTRB(inset, 20, inset, 8),
             sliver: SliverToBoxAdapter(
               child: Row(
                 children: [
@@ -197,7 +200,7 @@ class LibraryPage extends ConsumerWidget {
             ),
           ),
           SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: EdgeInsets.symmetric(horizontal: inset),
             sliver: SliverGrid(
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
                 maxCrossAxisExtent: 200,

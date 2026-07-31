@@ -101,6 +101,8 @@ dependencies:
 
   rust_lib_kurako:
     path: rust_builder
+  audio_service: ^0.18.19
+  audio_session: ^0.2.4
 
 dev_dependencies:
   flutter_test:

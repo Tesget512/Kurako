@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -379469154;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -430436999;
 
 // Section: executor
 
@@ -175,6 +175,39 @@ fn wire__crate__api__claim_existing_folder_files_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::claim_existing_folder_files(api_folder_id)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__clear_anime_new_files_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "clear_anime_new_files",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_anime_id = <i64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::clear_anime_new_files(api_anime_id)?;
                     Ok(output_ok)
                 })())
             }
@@ -1417,10 +1450,11 @@ fn wire__crate__api__scan_session_begin_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_incremental = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::scan_session_begin()?;
+                    let output_ok = crate::api::scan_session_begin(api_incremental)?;
                     Ok(output_ok)
                 })())
             }
@@ -2923,6 +2957,8 @@ impl SseDecode for crate::models::Anime {
         let mut var_ratingCounts = <Option<String>>::sse_decode(deserializer);
         let mut var_airWeekday = <Option<i64>>::sse_decode(deserializer);
         let mut var_tags = <Option<String>>::sse_decode(deserializer);
+        let mut var_tagCounts = <Option<String>>::sse_decode(deserializer);
+        let mut var_hasNewFiles = <bool>::sse_decode(deserializer);
         let mut var_collection = <i64>::sse_decode(deserializer);
         let mut var_matchConfidence = <String>::sse_decode(deserializer);
         let mut var_corrected = <bool>::sse_decode(deserializer);
@@ -2945,6 +2981,8 @@ impl SseDecode for crate::models::Anime {
             rating_counts: var_ratingCounts,
             air_weekday: var_airWeekday,
             tags: var_tags,
+            tag_counts: var_tagCounts,
+            has_new_files: var_hasNewFiles,
             collection: var_collection,
             match_confidence: var_matchConfidence,
             corrected: var_corrected,
@@ -2970,6 +3008,7 @@ impl SseDecode for crate::models::BangumiSubject {
         let mut var_ratingRank = <Option<i64>>::sse_decode(deserializer);
         let mut var_ratingCounts = <Option<String>>::sse_decode(deserializer);
         let mut var_tags = <Vec<String>>::sse_decode(deserializer);
+        let mut var_tagCounts = <Option<String>>::sse_decode(deserializer);
         return crate::models::BangumiSubject {
             id: var_id,
             name: var_name,
@@ -2983,6 +3022,7 @@ impl SseDecode for crate::models::BangumiSubject {
             rating_rank: var_ratingRank,
             rating_counts: var_ratingCounts,
             tags: var_tags,
+            tag_counts: var_tagCounts,
         };
     }
 }
@@ -3665,88 +3705,89 @@ fn pde_ffi_dispatcher_primary_impl(
         2 => wire__crate__api__add_library_folder_impl(port, ptr, rust_vec_len, data_len),
         3 => wire__crate__api__bind_anime_impl(port, ptr, rust_vec_len, data_len),
         4 => wire__crate__api__claim_existing_folder_files_impl(port, ptr, rust_vec_len, data_len),
-        5 => wire__crate__api__clear_collection_impl(port, ptr, rust_vec_len, data_len),
-        6 => wire__crate__api__clear_library_impl(port, ptr, rust_vec_len, data_len),
-        7 => wire__crate__api__clear_match_config_impl(port, ptr, rust_vec_len, data_len),
-        8 => wire__crate__api__detach_episode_impl(port, ptr, rust_vec_len, data_len),
-        9 => {
+        5 => wire__crate__api__clear_anime_new_files_impl(port, ptr, rust_vec_len, data_len),
+        6 => wire__crate__api__clear_collection_impl(port, ptr, rust_vec_len, data_len),
+        7 => wire__crate__api__clear_library_impl(port, ptr, rust_vec_len, data_len),
+        8 => wire__crate__api__clear_match_config_impl(port, ptr, rust_vec_len, data_len),
+        9 => wire__crate__api__detach_episode_impl(port, ptr, rust_vec_len, data_len),
+        10 => {
             wire__crate__api__discover_windows_file_servers_impl(port, ptr, rust_vec_len, data_len)
         }
-        10 => wire__crate__api__downloaded_local_path_impl(port, ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__duplicate_check_begin_impl(port, ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__duplicate_check_cancel_impl(port, ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__duplicate_check_run_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__enumerate_local_folder_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__finish_scan_and_match_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__get_anime_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__init_db_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__list_anime_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__list_blacklist_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__list_downloads_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__list_downloads_detailed_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__list_episodes_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__list_library_folders_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__match_episode_impl(port, ptr, rust_vec_len, data_len),
-        26 => {
+        11 => wire__crate__api__downloaded_local_path_impl(port, ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__duplicate_check_begin_impl(port, ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__duplicate_check_cancel_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__duplicate_check_run_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__enumerate_local_folder_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__finish_scan_and_match_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__get_anime_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__init_app_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__init_db_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__list_anime_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__list_blacklist_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__list_downloads_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__list_downloads_detailed_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__list_episodes_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__list_library_folders_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__match_episode_impl(port, ptr, rust_vec_len, data_len),
+        27 => {
             wire__crate__api__matching_subtitle_file_names_impl(port, ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__oauth_authorize_url_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__oauth_exchange_code_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__oauth_redirect_uri_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__oauth_refresh_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__prepare_subtitle_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__refresh_all_metadata_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__refresh_metadata_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__release_network_url_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__remove_blacklist_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__remove_download_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__remove_library_folder_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__reorder_library_folders_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__scan_and_match_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__scan_files_and_match_impl(port, ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__scan_session_begin_impl(port, ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__scan_session_cancel_impl(port, ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__scan_session_close_impl(port, ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__scan_session_is_cancelled_impl(port, ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__set_bangumi_mirror_impl(port, ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__set_download_directory_impl(port, ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__smb_cancel_download_impl(port, ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__smb_download_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__smb_list_shares_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__smb_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__smb_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__smb_setup_begin_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__smb_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__smb_setup_commit_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__smb_setup_list_directories_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__webdav_cancel_download_impl(port, ptr, rust_vec_len, data_len),
-        69 => wire__crate__api__webdav_download_impl(port, ptr, rust_vec_len, data_len),
-        70 => wire__crate__api__webdav_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        71 => wire__crate__api__webdav_list_entries_impl(port, ptr, rust_vec_len, data_len),
-        72 => wire__crate__api__webdav_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        73 => wire__crate__api__webdav_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        74 => wire__crate__api__webdav_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
-        75 => wire__crate__api__webdav_release_impl(port, ptr, rust_vec_len, data_len),
-        76 => wire__crate__api__webdav_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__webdav_setup_begin_impl(port, ptr, rust_vec_len, data_len),
-        78 => wire__crate__api__webdav_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
-        79 => wire__crate__api__webdav_setup_commit_impl(port, ptr, rust_vec_len, data_len),
-        80 => wire__crate__api__webdav_setup_list_entries_impl(port, ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__webdav_test_connection_impl(port, ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__webdav_uri_for_relative_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__oauth_authorize_url_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__oauth_exchange_code_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__oauth_redirect_uri_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__oauth_refresh_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__prepare_subtitle_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__refresh_all_metadata_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__refresh_metadata_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__release_network_url_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__remove_blacklist_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__remove_download_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__remove_library_folder_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__reorder_library_folders_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__scan_and_match_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__scan_files_and_match_impl(port, ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__scan_session_begin_impl(port, ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__scan_session_cancel_impl(port, ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__scan_session_close_impl(port, ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__scan_session_is_cancelled_impl(port, ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__set_bangumi_mirror_impl(port, ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__set_download_directory_impl(port, ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__smb_cancel_download_impl(port, ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__smb_download_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__smb_list_shares_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__smb_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__smb_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__smb_setup_begin_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__smb_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__smb_setup_commit_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__smb_setup_list_directories_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__webdav_cancel_download_impl(port, ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__webdav_download_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__webdav_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__webdav_list_entries_impl(port, ptr, rust_vec_len, data_len),
+        73 => wire__crate__api__webdav_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        74 => wire__crate__api__webdav_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        75 => wire__crate__api__webdav_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
+        76 => wire__crate__api__webdav_release_impl(port, ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__webdav_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__webdav_setup_begin_impl(port, ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__webdav_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__webdav_setup_commit_impl(port, ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__webdav_setup_list_entries_impl(port, ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__webdav_test_connection_impl(port, ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__webdav_uri_for_relative_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3784,6 +3825,8 @@ impl flutter_rust_bridge::IntoDart for crate::models::Anime {
             self.rating_counts.into_into_dart().into_dart(),
             self.air_weekday.into_into_dart().into_dart(),
             self.tags.into_into_dart().into_dart(),
+            self.tag_counts.into_into_dart().into_dart(),
+            self.has_new_files.into_into_dart().into_dart(),
             self.collection.into_into_dart().into_dart(),
             self.match_confidence.into_into_dart().into_dart(),
             self.corrected.into_into_dart().into_dart(),
@@ -3816,6 +3859,7 @@ impl flutter_rust_bridge::IntoDart for crate::models::BangumiSubject {
             self.rating_rank.into_into_dart().into_dart(),
             self.rating_counts.into_into_dart().into_dart(),
             self.tags.into_into_dart().into_dart(),
+            self.tag_counts.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4320,6 +4364,8 @@ impl SseEncode for crate::models::Anime {
         <Option<String>>::sse_encode(self.rating_counts, serializer);
         <Option<i64>>::sse_encode(self.air_weekday, serializer);
         <Option<String>>::sse_encode(self.tags, serializer);
+        <Option<String>>::sse_encode(self.tag_counts, serializer);
+        <bool>::sse_encode(self.has_new_files, serializer);
         <i64>::sse_encode(self.collection, serializer);
         <String>::sse_encode(self.match_confidence, serializer);
         <bool>::sse_encode(self.corrected, serializer);
@@ -4344,6 +4390,7 @@ impl SseEncode for crate::models::BangumiSubject {
         <Option<i64>>::sse_encode(self.rating_rank, serializer);
         <Option<String>>::sse_encode(self.rating_counts, serializer);
         <Vec<String>>::sse_encode(self.tags, serializer);
+        <Option<String>>::sse_encode(self.tag_counts, serializer);
     }
 }
 

@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/providers.dart';
+import '../ui/responsive_spacing.dart';
 import '../services/external_player.dart';
 import '../widgets/cover_header.dart';
 import '../widgets/match_correction_dialog.dart';
@@ -37,6 +38,11 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     super.initState();
     _animeSnapshot = widget.initialAnime;
     _scrollController.addListener(_onScroll);
+    if (_animeSnapshot?.hasNewFiles == true) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_clearNewFilesBadge());
+      });
+    }
     // Metadata is no longer refreshed per-anime on open; the whole library is
     // refreshed once at startup (see HomePage._refreshAllMetadataOnce). The
     // manual refresh button below still force-refetches this one subject.
@@ -83,6 +89,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         error: (e, _) => _NotFound(message: '加载失败: $e'),
         data: (anime) {
           if (anime == null) return const _NotFound(message: '未找到');
+          _animeSnapshot ??= anime;
           final expandedHeight = coverHeaderExpandedHeight(context);
           final collapsedHeight =
               MediaQuery.paddingOf(context).top + kToolbarHeight;
@@ -105,7 +112,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                         onClear: () => _clearCollection(context),
                       ),
               ),
-              if (MediaQuery.sizeOf(context).width < 560)
+              if (coverHeaderUsesNarrowLayout(context))
                 SliverToBoxAdapter(child: CoverRatingSection(anime: anime)),
               SliverToBoxAdapter(
                 child: Column(
@@ -114,7 +121,12 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                     CoverHeaderBody(anime: anime),
                     const Divider(height: 16),
                     Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                      padding: EdgeInsets.fromLTRB(
+                        adaptiveContentInset(context),
+                        0,
+                        adaptiveContentInset(context),
+                        8,
+                      ),
                       child: Text(
                         '剧集',
                         style: Theme.of(context).textTheme.titleMedium,
@@ -380,6 +392,15 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     setState(() => _animeSnapshot = anime);
   }
 
+  Future<void> _clearNewFilesBadge() async {
+    try {
+      await rust.clearAnimeNewFiles(animeId: widget.animeId);
+      if (mounted) ref.invalidate(animeListProvider);
+    } catch (_) {
+      // A stale badge is harmless; a later detail visit can retry the clear.
+    }
+  }
+
   /// [forceExternal]: null = follow the setting; true/false = user picked a
   /// player explicitly from the episode context menu.
   Future<void> _play(
@@ -419,7 +440,14 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     if (index < 0) index = 0;
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => PlayerPage(episodes: playlist, initialIndex: index),
+        builder: (_) => PlayerPage(
+          episodes: playlist,
+          initialIndex: index,
+          animeTitle: _animeSnapshot == null
+              ? 'Kurako'
+              : _titleOf(_animeSnapshot!),
+          coverUrl: _animeSnapshot?.coverUrl,
+        ),
       ),
     );
     ref.invalidate(episodesProvider(widget.animeId));

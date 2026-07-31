@@ -7,6 +7,7 @@ import 'package:kurako/src/state/providers.dart';
 Anime a(String title, {String? airDate}) => Anime(
       id: 0,
       titleRaw: title,
+      hasNewFiles: false,
       nameCn: title,
       airDate: airDate,
       collection: 0,

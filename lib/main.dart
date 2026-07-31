@@ -13,10 +13,12 @@ import 'src/rust/api.dart' as rust;
 import 'src/app.dart';
 import 'src/state/providers.dart';
 import 'src/services/proxy.dart';
+import 'src/services/media_session.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  await initializeKurakoMediaSession();
 
   // Cap the decoded-image cache. Covers are downsampled at the widget level
   // (see CoverImage cacheWidth), but a hard byte ceiling is a cheap backstop so

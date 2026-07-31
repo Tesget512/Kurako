@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `bind_anime_during_scan`, `binding_survivor`, `configured_download_directory`, `ensure_anime_for_subject_during_scan`, `ensure_anime_for_subject`, `finish_scan_session`, `is_nonempty_file`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `bind_anime_during_scan`, `binding_survivor`, `configured_download_directory`, `download_match_is_valid`, `ensure_anime_for_subject_during_scan`, `ensure_anime_for_subject`, `finish_scan_session`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -104,8 +104,8 @@ Future<void> setWatched({
   watched: watched,
 );
 
-Future<void> scanSessionBegin() =>
-    RustLib.instance.api.crateApiScanSessionBegin();
+Future<void> scanSessionBegin({required bool incremental}) =>
+    RustLib.instance.api.crateApiScanSessionBegin(incremental: incremental);
 
 Future<void> scanSessionCancel() =>
     RustLib.instance.api.crateApiScanSessionCancel();
@@ -377,9 +377,9 @@ Future<List<DownloadDetail>> listDownloadsDetailed() =>
 Future<void> removeDownload({required PlatformInt64 id}) =>
     RustLib.instance.api.crateApiRemoveDownload(id: id);
 
-/// The verified local copy recorded for this exact SMB/WebDAV URI. Exact
-/// records retain their stale path long enough for Apple app-container rebasing
-/// before returning `None`.
+/// The verified local copy for an exact URI or a strictly matched SMB/WebDAV
+/// counterpart. Exact records retain their stale path long enough for Apple
+/// app-container rebasing; cross-source records also verify the local byte size.
 Future<String?> downloadedLocalPath({required String smbUri}) =>
     RustLib.instance.api.crateApiDownloadedLocalPath(smbUri: smbUri);
 
@@ -407,6 +407,10 @@ Future<void> setCollection({
 /// user.
 Future<void> clearCollection({required PlatformInt64 animeId}) =>
     RustLib.instance.api.crateApiClearCollection(animeId: animeId);
+
+/// Clear the incremental-scan badge after the user has opened this anime.
+Future<void> clearAnimeNewFiles({required PlatformInt64 animeId}) =>
+    RustLib.instance.api.crateApiClearAnimeNewFiles(animeId: animeId);
 
 /// Re-fetch subject metadata (rating, tags, cover, episode titles) for a
 /// single already-bound anime. Use this instead of a full rescan to pick up

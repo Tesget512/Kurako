@@ -38,7 +38,7 @@ class _ScanProgressSheetState extends State<ScanProgressSheet> {
         // Scanning remains functional on a platform which cannot acquire a
         // display wake lock; the session cleanup still attempts to disable it.
       }
-      await rust.scanSessionBegin();
+      await rust.scanSessionBegin(incremental: widget.incremental);
       _sessionStarted = true;
       final folders = await rust.listLibraryFolders();
       for (final f in folders) {

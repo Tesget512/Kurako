@@ -44,6 +44,8 @@ pub fn init(db_path: &str) -> Result<()> {
             rating_counts    TEXT,
             air_weekday      INTEGER,
             tags             TEXT,
+            tag_counts       TEXT,
+            has_new_files    INTEGER NOT NULL DEFAULT 0,
             collection       INTEGER NOT NULL DEFAULT 0,
             match_confidence TEXT NOT NULL DEFAULT 'none',
             corrected        INTEGER NOT NULL DEFAULT 0
@@ -98,6 +100,8 @@ pub fn init(db_path: &str) -> Result<()> {
         "ALTER TABLE anime ADD COLUMN rating_counts TEXT",
         "ALTER TABLE anime ADD COLUMN air_weekday INTEGER",
         "ALTER TABLE anime ADD COLUMN tags TEXT",
+        "ALTER TABLE anime ADD COLUMN tag_counts TEXT",
+        "ALTER TABLE anime ADD COLUMN has_new_files INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE anime ADD COLUMN collection INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE library_folders ADD COLUMN last_scanned INTEGER",
         "ALTER TABLE library_folders ADD COLUMN source_type TEXT NOT NULL DEFAULT 'local'",
@@ -474,9 +478,14 @@ pub fn upsert_episode(
     resolution: Option<&str>,
     release_group: Option<&str>,
     source_type: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let file_name_key = crate::scan_control::normalized_file_name(file_name);
     with_conn(|c| {
+        let existed = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM episodes WHERE file_path = ?1)",
+            params![file_path],
+            |row| row.get::<_, bool>(0),
+        )?;
         c.execute(
             "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -492,7 +501,7 @@ pub fn upsert_episode(
                 source_type=excluded.source_type",
             params![anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type],
         )?;
-        Ok(())
+        Ok(!existed)
     })
 }
 
@@ -513,6 +522,8 @@ fn map_anime(r: &rusqlite::Row) -> rusqlite::Result<Anime> {
         rating_counts: r.get("rating_counts")?,
         air_weekday: r.get("air_weekday")?,
         tags: r.get("tags")?,
+        tag_counts: r.get("tag_counts")?,
+        has_new_files: r.get::<_, i64>("has_new_files")? != 0,
         collection: r.get::<_, Option<i64>>("collection")?.unwrap_or(0),
         match_confidence: r.get("match_confidence")?,
         corrected: r.get::<_, i64>("corrected")? != 0,
@@ -660,7 +671,6 @@ pub fn duplicate_check_items() -> Result<Vec<DuplicateCheckItem>> {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn bind_bangumi(
     anime_id: i64,
     bangumi_id: i64,
@@ -676,6 +686,7 @@ pub fn bind_bangumi(
     rating_counts: Option<&str>,
     air_weekday: Option<i64>,
     tags: Option<&str>,
+    tag_counts: Option<&str>,
     confidence: &str,
     corrected: bool,
 ) -> Result<()> {
@@ -683,8 +694,8 @@ pub fn bind_bangumi(
         c.execute(
             "UPDATE anime SET bangumi_id=?2, name=?3, name_cn=?4, summary=?5, cover_url=?6,
                 air_date=?7, total_eps=?8, rating=?9, rating_total=?10, rating_rank=?11,
-                rating_counts=?12, air_weekday=?13, tags=?14,
-                match_confidence=?15, corrected=?16
+                rating_counts=?12, air_weekday=?13, tags=?14, tag_counts=?15,
+                match_confidence=?16, corrected=?17
              WHERE id=?1",
             params![
                 anime_id,
@@ -701,9 +712,30 @@ pub fn bind_bangumi(
                 rating_counts,
                 air_weekday,
                 tags,
+                tag_counts,
                 confidence,
                 corrected as i64
             ],
+        )?;
+        Ok(())
+    })
+}
+
+pub fn mark_anime_has_new_files(anime_id: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "UPDATE anime SET has_new_files = 1 WHERE id = ?1",
+            params![anime_id],
+        )?;
+        Ok(())
+    })
+}
+
+pub fn clear_anime_has_new_files(anime_id: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "UPDATE anime SET has_new_files = 0 WHERE id = ?1",
+            params![anime_id],
         )?;
         Ok(())
     })
@@ -779,6 +811,13 @@ pub fn merge_duplicate_bindings() -> Result<()> {
         for (bid, aid) in rows {
             match keeper {
                 Some((kb, ka)) if kb == bid => {
+                    c.execute(
+                        "UPDATE anime SET has_new_files = 1
+                         WHERE id = ?1 AND EXISTS (
+                             SELECT 1 FROM anime WHERE id = ?2 AND has_new_files = 1
+                         )",
+                        params![ka, aid],
+                    )?;
                     c.execute(
                         "UPDATE OR IGNORE episodes SET anime_id=?1 WHERE anime_id=?2",
                         params![ka, aid],

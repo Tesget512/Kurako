@@ -54,15 +54,33 @@ class AnimeCard extends StatelessWidget {
                 fit: StackFit.expand,
                 children: [
                   _cover(theme),
-                  if (unmatched)
+                  if (anime.hasNewFiles || unmatched)
                     Positioned(
                       top: 8,
                       left: 8,
-                      child: _badge(
-                        theme,
-                        '待匹配',
-                        theme.colorScheme.errorContainer,
-                        theme.colorScheme.onErrorContainer,
+                      child: _fadeWithRoute(
+                        context,
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (anime.hasNewFiles)
+                              _badge(
+                                theme,
+                                '新增',
+                                theme.colorScheme.tertiaryContainer,
+                                theme.colorScheme.onTertiaryContainer,
+                              ),
+                            if (anime.hasNewFiles && unmatched)
+                              const SizedBox(height: 6),
+                            if (unmatched)
+                              _badge(
+                                theme,
+                                '待匹配',
+                                theme.colorScheme.errorContainer,
+                                theme.colorScheme.onErrorContainer,
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   if (collected != null)

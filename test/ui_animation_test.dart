@@ -23,6 +23,7 @@ const _anime = Anime(
   ratingRank: 190,
   ratingCounts: '10,20,30,40,50,60,70,80,90,100',
   airWeekday: 4,
+  hasNewFiles: false,
   collection: 2,
   matchConfidence: 'high',
   corrected: false,
@@ -65,6 +66,61 @@ void main() {
     expect(heroTagForAnime(42), 'anime-cover-42');
     expect(heroTagForAnime(42), heroTagForAnime(42));
     expect(heroTagForAnime(42), isNot(heroTagForAnime(43)));
+  });
+
+  testWidgets('new episodes are marked on the library cover', (tester) async {
+    const newAnime = Anime(
+      id: 43,
+      titleRaw: 'New episode test',
+      hasNewFiles: true,
+      collection: 0,
+      matchConfidence: 'high',
+      corrected: false,
+      episodeCount: 1,
+      watchedCount: 0,
+      specialCount: 0,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SizedBox(
+          width: 180,
+          height: 280,
+          child: AnimeCard(anime: newAnime, onTap: _noop),
+        ),
+      ),
+    );
+
+    expect(find.text('新增'), findsOneWidget);
+  });
+
+  testWidgets('rating histogram reveals count and percentage on touch', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Center(
+          child: SizedBox(
+            width: 400,
+            child: RatingHistogram(
+              counts: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+              height: 100,
+            ),
+          ),
+        ),
+      ),
+    );
+    final listener = find.descendant(
+      of: find.byType(RatingHistogram),
+      matching: find.byType(Listener),
+    );
+    final chart = tester.getRect(listener);
+    final gesture = await tester.startGesture(
+      Offset(chart.left + chart.width * 0.75, chart.center.dy),
+    );
+    await tester.pump();
+
+    expect(find.text('8 分 · 8 人 · 14.5%'), findsOneWidget);
+    await gesture.up();
   });
 
   test('cover hero is clipped to the list viewport at the library end', () {

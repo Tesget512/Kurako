@@ -318,8 +318,8 @@ pub fn set_watched(episode_id: i64, watched: bool) -> Result<(), String> {
 
 // ---- Scan + auto-match (streams progress back to Dart) ----
 
-pub fn scan_session_begin() -> Result<(), String> {
-    scan_control::begin()
+pub fn scan_session_begin(incremental: bool) -> Result<(), String> {
+    scan_control::begin(incremental)
         .then_some(())
         .ok_or_else(|| "已有扫描任务正在运行".to_string())
 }
@@ -379,7 +379,7 @@ pub fn enumerate_local_folder(folder_id: i64, incremental: bool) -> Result<ScanF
 /// their last recorded scan time are skipped entirely — dramatically faster on
 /// large libraries where only a few folders changed.
 pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Result<(), String> {
-    scan_session_begin()?;
+    scan_session_begin(incremental)?;
     let result = (|| {
         for folder in db::list_folders().map_err(|error| error.to_string())? {
             if folder.source_type != "local" {
@@ -422,6 +422,12 @@ fn process_scanned_folder(
     if scan_control::is_cancelled() {
         return Err("扫描已取消".to_string());
     }
+    let had_scan_baseline = db::list_folders()
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|folder| folder.id == folder_id)
+        .is_some_and(|folder| folder.last_scanned.is_some());
+    let mark_new_files = scan_control::is_incremental() && had_scan_baseline;
     let (files, skipped_duplicates) = scan_control::claim_files(files);
     if skipped_duplicates > 0 {
         let _ = sink.add(ScanProgress {
@@ -444,7 +450,14 @@ fn process_scanned_folder(
     // Scope deletion-pruning to this folder's locator prefix so files removed
     // from the SMB share / SAF tree are dropped from the library too.
     let prefixes = prune_prefixes_for(folder_id, &source_type);
-    process_groups(groups, folder_id, &source_type, prefixes, sink)?;
+    process_groups(
+        groups,
+        folder_id,
+        &source_type,
+        prefixes,
+        mark_new_files,
+        sink,
+    )?;
     db::set_folder_scanned(folder_id, now_secs()).map_err(|error| error.to_string())
 }
 
@@ -964,6 +977,7 @@ fn process_groups(
     folder_id: i64,
     source_type: &str,
     prune_prefixes: Vec<String>,
+    mark_new_files: bool,
     sink: &StreamSink<ScanProgress>,
 ) -> Result<(), String> {
     let emit = |stage: &str, current: i64, total: i64, message: &str| {
@@ -996,11 +1010,12 @@ fn process_groups(
             return Err("扫描已取消".to_string());
         }
         let anime_id = db::upsert_anime(&g.group_key, &g.title).map_err(|e| e.to_string())?;
+        let mut inserted_episode = false;
         for ff in &g.files {
             if scan_control::is_cancelled() {
                 return Err("扫描已取消".to_string());
             }
-            db::upsert_episode(
+            inserted_episode |= db::upsert_episode(
                 anime_id,
                 folder_id,
                 &ff.path,
@@ -1012,6 +1027,9 @@ fn process_groups(
                 source_type,
             )
             .map_err(|e| e.to_string())?;
+        }
+        if mark_new_files && inserted_episode {
+            db::mark_anime_has_new_files(anime_id).map_err(|e| e.to_string())?;
         }
         emit("scanning", i as i64 + 1, total, &g.title);
     }
@@ -1125,11 +1143,11 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
                             .as_ref()
                             .and_then(|d| d.air_date.clone())
                             .or(best.air_date.clone());
-                        let tags_vec = detail
+                        let (tags_vec, tag_counts) = detail
                             .as_ref()
-                            .map(|d| d.tags.clone())
-                            .filter(|t| !t.is_empty())
-                            .unwrap_or(best.tags.clone());
+                            .filter(|subject| !subject.tags.is_empty())
+                            .map(|subject| (subject.tags.clone(), subject.tag_counts.clone()))
+                            .unwrap_or((best.tags.clone(), best.tag_counts.clone()));
                         let tags = if tags_vec.is_empty() {
                             None
                         } else {
@@ -1151,6 +1169,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
                             rating_counts.as_deref(),
                             weekday,
                             tags.as_deref(),
+                            tag_counts.as_deref(),
                             "high",
                             false,
                         );
@@ -1318,6 +1337,11 @@ pub fn clear_collection(anime_id: i64) -> Result<(), String> {
     db::set_collection(anime_id, 0).map_err(|e| e.to_string())
 }
 
+/// Clear the incremental-scan badge after the user has opened this anime.
+pub fn clear_anime_new_files(anime_id: i64) -> Result<(), String> {
+    db::clear_anime_has_new_files(anime_id).map_err(|e| e.to_string())
+}
+
 /// Re-fetch subject metadata (rating, tags, cover, episode titles) for a
 /// single already-bound anime. Use this instead of a full rescan to pick up
 /// rating updates or newly-published episode names.
@@ -1355,6 +1379,7 @@ async fn refresh_one(anime_id: i64, subject_id: i64, corrected: bool) -> anyhow:
         s.rating_counts.as_deref(),
         weekday,
         tags.as_deref(),
+        s.tag_counts.as_deref(),
         "high",
         corrected,
     )?;
@@ -1481,6 +1506,7 @@ fn store_subject_binding(
         subject.rating_counts.as_deref(),
         weekday,
         tags.as_deref(),
+        subject.tag_counts.as_deref(),
         "high",
         corrected,
     )

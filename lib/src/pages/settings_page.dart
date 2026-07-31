@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
@@ -10,11 +9,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/bangumi_oauth.dart';
-import '../services/external_player.dart';
 import '../services/media_source.dart';
 import '../state/providers.dart';
 import 'about_page.dart';
 import 'maintenance_page.dart';
+import 'player_settings_page.dart';
 import 'smb_source_wizard.dart';
 import 'webdav_source_wizard.dart';
 
@@ -26,25 +25,13 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
-  final _playerPathController = TextEditingController();
   bool _loggingIn = false;
-
-  @override
-  void dispose() {
-    _playerPathController.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
     final foldersAsync = ref.watch(foldersProvider);
     final settings = ref.watch(settingsProvider);
     final themeSettings = ref.watch(themeProvider);
-
-    // keep controllers in sync with loaded settings
-    if (_playerPathController.text != settings.externalPlayerPath) {
-      _playerPathController.text = settings.externalPlayerPath;
-    }
 
     return Scaffold(
       appBar: AppBar(title: const Text('设置')),
@@ -141,70 +128,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           _buildBangumiSection(context, settings),
           const Divider(height: 32),
           _section(context, '播放器'),
-          SwitchListTile(
+          ListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('使用外置播放器'),
-            subtitle: Text(
-              Platform.isAndroid
-                  ? '关闭则用内置播放器。开启后点播放会调用系统的外部播放器（如 MX Player / VLC）'
-                  : Platform.isIOS
-                  ? '开启后通过系统“打开方式”交给 VLC、Infuse 等应用；SMB 串流需先下载到本地'
-                  : '关闭则使用内置播放器（media_kit，支持硬解与字幕）',
+            leading: const Icon(Icons.play_circle_outline),
+            title: const Text('播放器'),
+            subtitle: const Text('播放行为、手势、画质、后台播放与系统控制'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PlayerSettingsPage()),
             ),
-            value: settings.useExternalPlayer,
-            onChanged: (v) =>
-                ref.read(settingsProvider.notifier).setUseExternalPlayer(v),
           ),
-          // Companion actions for the external player (desktop only): pick the
-          // program explicitly (required for SMB streams — http URLs have no
-          // file association), and re-pick the Windows default program if a
-          // wrong one got associated.
-          if (settings.useExternalPlayer &&
-              !Platform.isAndroid &&
-              !Platform.isIOS) ...[
-            ListTile(
-              contentPadding: const EdgeInsets.only(left: 16),
-              leading: const Icon(Icons.smart_display_outlined),
-              title: const Text('选择播放器程序'),
-              subtitle: Text(
-                settings.externalPlayerPath.isEmpty
-                    ? '未选择 — 本地与 SMB 视频均用系统默认播放器打开；也可在此指定固定程序'
-                    : settings.externalPlayerPath,
-              ),
-              trailing: Wrap(
-                children: [
-                  if (settings.externalPlayerPath.isNotEmpty)
-                    IconButton(
-                      tooltip: '清除（改用系统默认）',
-                      icon: const Icon(Icons.clear),
-                      onPressed: () {
-                        _playerPathController.clear();
-                        ref
-                            .read(settingsProvider.notifier)
-                            .setExternalPlayerPath('');
-                      },
-                    ),
-                  IconButton(
-                    tooltip: '浏览选择 exe',
-                    icon: const Icon(Icons.folder_open),
-                    onPressed: _pickPlayer,
-                  ),
-                ],
-              ),
-            ),
-            if (Platform.isWindows)
-              ListTile(
-                contentPadding: const EdgeInsets.only(left: 16),
-                leading: const Icon(Icons.settings_applications_outlined),
-                title: const Text('重选系统默认程序'),
-                subtitle: const Text('打开 Windows「打开方式」选择器，纠正视频文件被错误程序关联的问题'),
-                trailing: const Icon(Icons.open_in_new, size: 18),
-                onTap: () => openWindowsProgramChooser(),
-              ),
-          ],
-          _buildDecodeModeRow(context),
-          _buildSuperResolutionRow(context, settings),
-          _buildSeekDurationRow(context),
           const Divider(height: 32),
           _section(context, '外观'),
           _buildAppearanceSection(context, themeSettings),
@@ -231,105 +164,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onTap: () => Navigator.of(
               context,
             ).push(MaterialPageRoute(builder: (_) => const AboutPage())),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Decode mode: auto (platform default) / force hardware / force software.
-  /// Applied when the player is next opened (VideoController config is fixed
-  /// at construction).
-  Widget _buildDecodeModeRow(BuildContext context) {
-    final mode = ref.watch(decodeModeProvider);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('解码方式'),
-          const SizedBox(height: 2),
-          Text(
-            '自动优先硬解，异常花屏/绿屏时可改用软件解码。重新进入播放器后生效',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'auto', label: Text('自动')),
-              ButtonSegment(value: 'hw', label: Text('硬件解码')),
-              ButtonSegment(value: 'sw', label: Text('软件解码')),
-            ],
-            selected: {mode},
-            onSelectionChanged: (s) =>
-                ref.read(decodeModeProvider.notifier).set(s.first),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Quick-seek button duration — mirrors the in-player long-press setting so
-  /// it's discoverable here too. Independent of the fixed 10s double-tap seek.
-  Widget _buildSeekDurationRow(BuildContext context) {
-    final secs = ref.watch(seekDurationProvider);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('快进按钮时长：$secs 秒'),
-          const SizedBox(height: 2),
-          Text(
-            '播放器快进按钮跳转的秒数（双击画面固定 10 秒，不受影响）',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          Slider(
-            value: secs.toDouble(),
-            min: 5,
-            max: 90,
-            divisions: 17,
-            label: '$secs 秒',
-            onChanged: (v) =>
-                ref.read(seekDurationProvider.notifier).set(v.round()),
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// Anime4K is an mpv GLSL filter, rather than a Flutter visual effect.  The
-  /// choice is persisted here and installed/applied by the next player page.
-  Widget _buildSuperResolutionRow(BuildContext context, Settings settings) {
-    final mode = settings.superResolutionMode;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Anime4K 超分辨率'),
-          const SizedBox(height: 2),
-          Text(
-            '轻度适合手机与续航优先；标准会使用更多 GPU 着色器。两者都会增加耗电、发热和掉帧风险，性能不足时请关闭。播放器内可即时切换。',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'off', label: Text('关闭')),
-              ButtonSegment(value: 'anime4k-light', label: Text('轻度')),
-              ButtonSegment(value: 'anime4k-balanced', label: Text('标准')),
-            ],
-            selected: {mode},
-            onSelectionChanged: (selection) => ref
-                .read(settingsProvider.notifier)
-                .setSuperResolutionMode(selection.first),
           ),
         ],
       ),
@@ -588,22 +422,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await Navigator.of(context).push<bool>(
       MaterialPageRoute(builder: (_) => const WebDavSourceWizardPage()),
     );
-  }
-
-  Future<void> _pickPlayer() async {
-    // Windows players are .exe; macOS players are .app bundles (the open panel
-    // treats a bundle as a single pickable file when its extension is allowed);
-    // Linux executables have no extension at all, so no filter there.
-    final result = Platform.isLinux
-        ? await FilePicker.platform.pickFiles(type: FileType.any)
-        : await FilePicker.platform.pickFiles(
-            type: FileType.custom,
-            allowedExtensions: [Platform.isWindows ? 'exe' : 'app'],
-          );
-    final path = result?.files.single.path;
-    if (path == null) return;
-    _playerPathController.text = path;
-    ref.read(settingsProvider.notifier).setExternalPlayerPath(path);
   }
 }
 

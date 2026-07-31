@@ -19,6 +19,7 @@ import '../rust/models.dart';
 import '../services/anime4k_shader_assets.dart';
 import '../services/ios_platform.dart';
 import '../services/media_source.dart';
+import '../services/media_session.dart';
 import '../services/playback_metadata.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
@@ -48,11 +49,15 @@ class PlayerPage extends ConsumerStatefulWidget {
   /// The full playlist and the index to start at, so 上/下集 and autoplay work.
   final List<Episode> episodes;
   final int initialIndex;
+  final String animeTitle;
+  final String? coverUrl;
 
   const PlayerPage({
     super.key,
     required this.episodes,
     required this.initialIndex,
+    this.animeTitle = 'Kurako',
+    this.coverUrl,
   });
 
   @override
@@ -106,6 +111,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   Timer? _unlockControlTimer;
   bool _takingScreenshot = false;
   bool _playTogglePending = false;
+  bool _completionHandled = false;
   bool _reportedSuperResolutionFailure = false;
   int _positionMs = 0;
   int _durationMs = 0;
@@ -121,6 +127,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   bool _audioPreferenceApplied = false;
   double _rate = 1.0;
   double _subDelay = 0; // seconds
+  StreamSubscription? _playingSub;
   StreamSubscription? _positionSub;
   StreamSubscription? _durationSub;
   StreamSubscription? _tracksSub;
@@ -206,6 +213,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   // not used — media_kit's controls auto-hide and PiP has no touch focus, so
   // the small window stays clean on its own.
   SimplePip? _pip;
+  bool _mediaSessionBound = false;
+  bool? _autoPipConfigured;
+  static const MethodChannel _androidChannel = MethodChannel(
+    'kurako/android/network',
+  );
 
   static const List<double> _speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
 
@@ -246,11 +258,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       });
     });
     _settingsSubscription = ref.listenManual<Settings>(settingsProvider, (
-      _,
+      previous,
       next,
     ) {
       if (mounted && next.superResolutionMode != _superResolutionMode) {
         setState(() => _superResolutionMode = next.superResolutionMode);
+      }
+      if (previous?.mediaSessionEnabled != next.mediaSessionEnabled ||
+          previous?.backgroundPlayback != next.backgroundPlayback ||
+          previous?.gestureSeekDurationSec != next.gestureSeekDurationSec) {
+        unawaited(_syncMediaSession(next));
+      }
+      if (previous?.autoPictureInPicture != next.autoPictureInPicture) {
+        unawaited(_configureAutoPip(next.autoPictureInPicture));
       }
     });
     if (_isMobile) {
@@ -266,7 +286,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     }
     if (!_isMobile) windowManager.addListener(this);
     _listen();
-    _scheduleOpen(debounceRemote: false);
+    unawaited(_initializePlayer());
+  }
+
+  Future<void> _initializePlayer() async {
+    await ref.read(settingsProvider.notifier).ready;
+    if (!mounted) return;
+    final settings = ref.read(settingsProvider);
+    if (settings.superResolutionMode != _superResolutionMode) {
+      setState(() => _superResolutionMode = settings.superResolutionMode);
+    }
+    await _configureAutoPip(settings.autoPictureInPicture);
+    if (!mounted) return;
+    await _syncMediaSession(settings);
+    if (mounted) _scheduleOpen(debounceRemote: false);
   }
 
   @override
@@ -296,6 +329,52 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       await _pip?.enterPipMode();
     } catch (_) {
       // Device without PiP support; ignore.
+    }
+  }
+
+  Future<void> _configureAutoPip(bool enabled) async {
+    if (!Platform.isAndroid) return;
+    final active = enabled && _player.state.playing;
+    if (_autoPipConfigured == active) return;
+    _autoPipConfigured = active;
+    try {
+      await _androidChannel.invokeMethod<void>(
+        'setAutoPictureInPicture',
+        active,
+      );
+    } catch (_) {
+      _autoPipConfigured = null;
+    }
+  }
+
+  Future<void> _syncMediaSession(Settings settings) async {
+    final handler = kurakoMediaSession;
+    final enabled =
+        _isMobile &&
+        (settings.mediaSessionEnabled || settings.backgroundPlayback) &&
+        handler != null;
+    if (!enabled) {
+      if (_mediaSessionBound && handler != null) {
+        _mediaSessionBound = false;
+        await handler.unbind(_player);
+      }
+      return;
+    }
+    _mediaSessionBound = true;
+    try {
+      await handler.bind(
+        player: _player,
+        episodes: widget.episodes,
+        episodeIndex: _index,
+        animeTitle: widget.animeTitle,
+        coverUrl: widget.coverUrl,
+        gestureSeekSeconds: settings.gestureSeekDurationSec,
+        onPrevious: _playPrev,
+        onNext: _playNext,
+      );
+    } catch (error, stackTrace) {
+      _mediaSessionBound = false;
+      debugPrint('Media session binding failed: $error\n$stackTrace');
     }
   }
 
@@ -743,10 +822,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   }
 
   void _listen() {
+    _playingSub = _player.stream.playing.listen((_) {
+      if (Platform.isAndroid) {
+        unawaited(
+          _configureAutoPip(ref.read(settingsProvider).autoPictureInPicture),
+        );
+      }
+    });
     _positionSub = _player.stream.position.listen((pos) {
       if (!mounted || !_acceptPlaybackEvents) return;
       _positionMs = pos.inMilliseconds;
       if (!_resumed &&
+          ref.read(settingsProvider).autoResumePlayback &&
           _durationMs > 0 &&
           _ep.lastPositionMs.toInt() > 3000 &&
           !_ep.watched) {
@@ -779,13 +866,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         ),
       );
     });
-    // Autoplay the next episode when one finishes.
+    // Apply the current autoplay policy when one episode finishes.
     _completedSub = _player.stream.completed.listen((done) {
       if (_acceptPlaybackEvents && done && _durationMs > 0) {
-        _playNext(auto: true);
+        unawaited(_handlePlaybackCompleted());
       }
     });
     _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) => _save());
+  }
+
+  Future<void> _handlePlaybackCompleted() async {
+    if (_completionHandled) return;
+    _completionHandled = true;
+    final autoPlayNext = ref.read(settingsProvider).autoPlayNext;
+    if (autoPlayNext && _hasNext) {
+      await _playNext(auto: true);
+      return;
+    }
+    await _save();
+    if (mounted) Navigator.of(context).maybePop();
   }
 
   // ---- Track preference (per anime, remembered) ----
@@ -978,6 +1077,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _positionMs = 0;
     _durationMs = 0;
     _resumed = false;
+    _completionHandled = false;
     _acceptPlaybackEvents = false;
     _switchDebounce?.cancel();
     final seq = ++_openSeq;
@@ -1007,6 +1107,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     if (index < 0 || index >= widget.episodes.length || index == _index) return;
     setState(() => _index = index);
     _episodeIndex.value = index;
+    kurakoMediaSession?.updateEpisode(
+      index,
+      gestureSeekSeconds: ref.read(settingsProvider).gestureSeekDurationSec,
+    );
   }
 
   Future<void> _playPrev() async {
@@ -1076,11 +1180,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _seekDurationSubscription?.close();
     _themeSubscription?.close();
     _settingsSubscription?.close();
+    if (_mediaSessionBound) {
+      _mediaSessionBound = false;
+      final handler = kurakoMediaSession;
+      if (handler != null) unawaited(handler.unbind(_player));
+    }
+    if (Platform.isAndroid && _autoPipConfigured == true) {
+      unawaited(_configureAutoPip(false));
+    }
     _acceptPlaybackEvents = false;
     _openGeneration.value = ++_openSeq;
     _saveTimer?.cancel();
     _switchDebounce?.cancel();
     _unlockControlTimer?.cancel();
+    _playingSub?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
     _tracksSub?.cancel();
@@ -1143,9 +1256,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     // phones/tablets, while the same surface also understands mouse hover,
     // mouse double-click and hardware-keyboard shortcuts. This avoids giving
     // iPad Stage Manager and Android keyboards a different, weaker player.
+    final settings = ref.watch(settingsProvider);
     final video = Video(
       controller: _controller,
       controls: MaterialVideoControls,
+      pauseUponEnteringBackgroundMode:
+          !settings.backgroundPlayback &&
+          !(Platform.isAndroid && settings.autoPictureInPicture),
+      resumeUponEnteringForegroundMode: false,
       subtitleViewConfiguration: const SubtitleViewConfiguration(
         // libass draws subtitles onto the video texture; hide the Flutter
         // overlay to avoid double text.
@@ -1564,11 +1682,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       // Higher = less sensitive.
       verticalGestureSensitivity: 400,
       horizontalGestureSensitivity: 3000,
-      // Double-tap seek stays at the fixed 10s convention; the customizable
-      // duration ([seekDurationProvider]) drives only the top-bar quick-seek
-      // button so the two gestures are independent.
-      seekOnDoubleTapBackwardDuration: const Duration(seconds: 10),
-      seekOnDoubleTapForwardDuration: const Duration(seconds: 10),
+      // This gesture has its own duration, independent of the top quick-seek
+      // button controlled by [seekDurationProvider].
+      seekOnDoubleTapBackwardDuration: Duration(
+        seconds: ref.read(settingsProvider).gestureSeekDurationSec,
+      ),
+      seekOnDoubleTapForwardDuration: Duration(
+        seconds: ref.read(settingsProvider).gestureSeekDurationSec,
+      ),
       // Keep the picture visible, while taking a little glare off very bright
       // scenes.  The stronger, directional shading lives under the top/bottom
       // bars below instead of covering the middle of the video.

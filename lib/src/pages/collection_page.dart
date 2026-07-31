@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../rust/models.dart';
 import '../state/anime_sort.dart';
 import '../state/providers.dart';
+import '../ui/responsive_spacing.dart';
 import '../widgets/anime_card.dart';
 import 'detail_page.dart';
 
@@ -77,8 +78,9 @@ class _CollectionTab extends StatelessWidget {
         child: Text('这里还没有番剧', style: TextStyle(color: Colors.grey)),
       );
     }
+    final inset = adaptiveContentInset(context);
     return GridView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(inset, 16, inset, 24),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 200,
         childAspectRatio: 0.62,

@@ -22,6 +22,12 @@ void main() {
       'bangumi_mirror': false,
       'use_external_player': true,
       'super_resolution_mode': 'anime4k-light',
+      'auto_resume_playback': false,
+      'auto_play_next': false,
+      'background_playback': true,
+      'auto_picture_in_picture': true,
+      'media_session_enabled': true,
+      'gesture_seek_duration_sec': 30,
       'bangumi_token': 'secret-access-token',
       'bangumi_refresh_token': 'secret-refresh-token',
       'bangumi_token_expires_at': 1782604800,
@@ -53,6 +59,12 @@ void main() {
       expect(root['schemaVersion'], configurationBackupSchemaVersion);
       expect(settings['library_sort'], 3);
       expect(settings['decode_mode'], 'sw');
+      expect(settings['auto_resume_playback'], isFalse);
+      expect(settings['auto_play_next'], isFalse);
+      expect(settings['background_playback'], isTrue);
+      expect(settings['auto_picture_in_picture'], isTrue);
+      expect(settings['media_session_enabled'], isTrue);
+      expect(settings['gesture_seek_duration_sec'], 30);
       final account = root['account'] as Map<String, dynamic>;
       final smb = root['smb'] as Map<String, dynamic>;
       final webdav = root['webdav'] as Map<String, dynamic>;
@@ -84,6 +96,8 @@ void main() {
 
       await prefs.setInt('library_sort', 0);
       await prefs.setString('decode_mode', 'auto');
+      await prefs.setBool('auto_resume_playback', true);
+      await prefs.setInt('gesture_seek_duration_sec', 5);
       await prefs.setString('bangumi_token', 'other-token');
       await prefs.setString('smb_password', 'other-password');
       await prefs.setString('webdav_password', 'other-dav-password');
@@ -92,6 +106,8 @@ void main() {
 
       expect(prefs.getInt('library_sort'), 3);
       expect(prefs.getString('decode_mode'), 'sw');
+      expect(prefs.getBool('auto_resume_playback'), isFalse);
+      expect(prefs.getInt('gesture_seek_duration_sec'), 30);
       expect(prefs.getString('bangumi_token'), 'secret-access-token');
       expect(prefs.getString('bangumi_refresh_token'), 'secret-refresh-token');
       expect(prefs.getInt('bangumi_token_expires_at'), 1782604800);
@@ -111,6 +127,7 @@ void main() {
     final source = await ConfigurationBackupDocument.exportJson();
     final root = jsonDecode(source) as Map<String, dynamic>;
     root['schemaVersion'] = 2;
+    _removeVersion4PlayerSettings(root);
     root.remove('webdav');
     final document = ConfigurationBackupDocument.parse(jsonEncode(root));
     final prefs = await SharedPreferences.getInstance();
@@ -128,6 +145,7 @@ void main() {
     final source = await ConfigurationBackupDocument.exportJson();
     final root = jsonDecode(source) as Map<String, dynamic>;
     root['schemaVersion'] = 1;
+    _removeVersion4PlayerSettings(root);
     root.remove('account');
     root.remove('smb');
     root.remove('webdav');
@@ -210,4 +228,18 @@ void main() {
       throwsFormatException,
     );
   });
+}
+
+void _removeVersion4PlayerSettings(Map<String, dynamic> root) {
+  final settings = root['settings'] as Map<String, dynamic>;
+  for (final key in const [
+    'auto_resume_playback',
+    'auto_play_next',
+    'background_playback',
+    'auto_picture_in_picture',
+    'media_session_enabled',
+    'gesture_seek_duration_sec',
+  ]) {
+    settings.remove(key);
+  }
 }

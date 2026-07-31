@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 const configurationBackupKind = 'kurako.configuration';
-const configurationBackupSchemaVersion = 3;
+const configurationBackupSchemaVersion = 4;
 const _legacyConfigurationBackupSchemaVersion = 1;
 const _accountAndSmbSchemaVersion = 2;
 
@@ -23,7 +23,7 @@ bool _isIntInRange(Object value, int min, int max) =>
 bool _isOneOf(Object value, Set<String> values) =>
     value is String && values.contains(value);
 
-const _portableSettings = <String, _SettingDefinition>{
+const _portableSettingsV3 = <String, _SettingDefinition>{
   'library_sort': _SettingDefinition(0, _librarySortValidator),
   'pin_collected': _SettingDefinition(true, _isBool),
   'grouping_enabled': _SettingDefinition(false, _isBool),
@@ -37,6 +37,16 @@ const _portableSettings = <String, _SettingDefinition>{
   'bangumi_mirror': _SettingDefinition(true, _isBool),
   'use_external_player': _SettingDefinition(false, _isBool),
   'super_resolution_mode': _SettingDefinition('off', _superResolutionValidator),
+};
+
+const _portableSettings = <String, _SettingDefinition>{
+  ..._portableSettingsV3,
+  'auto_resume_playback': _SettingDefinition(true, _isBool),
+  'auto_play_next': _SettingDefinition(true, _isBool),
+  'background_playback': _SettingDefinition(false, _isBool),
+  'auto_picture_in_picture': _SettingDefinition(false, _isBool),
+  'media_session_enabled': _SettingDefinition(false, _isBool),
+  'gesture_seek_duration_sec': _SettingDefinition(10, _seekDurationValidator),
 };
 
 const _accountFields = <String, _SettingDefinition>{
@@ -204,6 +214,7 @@ class ConfigurationBackupDocument {
     final schemaVersion = decoded['schemaVersion'];
     if (schemaVersion != _legacyConfigurationBackupSchemaVersion &&
         schemaVersion != _accountAndSmbSchemaVersion &&
+        schemaVersion != 3 &&
         schemaVersion != configurationBackupSchemaVersion) {
       throw const FormatException('不支持此配置文件版本');
     }
@@ -214,7 +225,9 @@ class ConfigurationBackupDocument {
 
     final settings = _parseSection(
       decoded['settings'],
-      definitions: _portableSettings,
+      definitions: schemaVersion == configurationBackupSchemaVersion
+          ? _portableSettings
+          : _portableSettingsV3,
       label: '设置',
     );
     final account = schemaVersion >= _accountAndSmbSchemaVersion

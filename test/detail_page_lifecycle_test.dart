@@ -11,6 +11,7 @@ const anime = Anime(
   id: 1,
   titleRaw: 'Lifecycle test',
   nameCn: '生命周期测试',
+  hasNewFiles: false,
   collection: 0,
   matchConfidence: 'high',
   corrected: false,

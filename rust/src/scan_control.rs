@@ -7,9 +7,10 @@ use unicode_normalization::UnicodeNormalization;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
+static INCREMENTAL: AtomicBool = AtomicBool::new(false);
 static CLAIMED_FILE_NAMES: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
-pub fn begin() -> bool {
+pub fn begin(incremental: bool) -> bool {
     if ACTIVE
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -18,6 +19,7 @@ pub fn begin() -> bool {
     }
     CLAIMED_FILE_NAMES.lock().unwrap().clear();
     CANCELLED.store(false, Ordering::Release);
+    INCREMENTAL.store(incremental, Ordering::Release);
     true
 }
 
@@ -29,6 +31,7 @@ pub fn cancel() {
 
 pub fn finish() {
     ACTIVE.store(false, Ordering::Release);
+    INCREMENTAL.store(false, Ordering::Release);
     CLAIMED_FILE_NAMES.lock().unwrap().clear();
 }
 
@@ -38,6 +41,10 @@ pub fn is_active() -> bool {
 
 pub fn is_cancelled() -> bool {
     ACTIVE.load(Ordering::Acquire) && CANCELLED.load(Ordering::Acquire)
+}
+
+pub fn is_incremental() -> bool {
+    ACTIVE.load(Ordering::Acquire) && INCREMENTAL.load(Ordering::Acquire)
 }
 
 pub fn normalized_file_name(file_name: &str) -> String {
@@ -119,7 +126,7 @@ mod tests {
     #[test]
     fn claims_unicode_equivalent_names_once_ignoring_case() {
         let _guard = TEST_LOCK.lock().unwrap();
-        assert!(begin());
+        assert!(begin(false));
         assert!(claim_file_name("Azu\u{0308}manga 01.MKV"));
         assert!(!claim_file_name("Azümanga 01.mkv"));
         finish();
@@ -131,7 +138,8 @@ mod tests {
         finish();
         cancel();
         assert!(!is_cancelled());
-        assert!(begin());
+        assert!(begin(true));
+        assert!(is_incremental());
         cancel();
         assert!(is_cancelled());
         finish();
@@ -141,7 +149,7 @@ mod tests {
     fn duplicate_names_inside_one_folder_survive_but_lower_folder_loses() {
         let _guard = TEST_LOCK.lock().unwrap();
         finish();
-        assert!(begin());
+        assert!(begin(false));
         let (first, skipped) = claim_files(vec![
             file("/A/show/01.mkv", "01.mkv"),
             file("/A/other/01.mkv", "01.mkv"),
@@ -162,7 +170,7 @@ mod tests {
     fn existing_lower_priority_conflicts_return_their_paths() {
         let _guard = TEST_LOCK.lock().unwrap();
         finish();
-        assert!(begin());
+        assert!(begin(false));
         claim_file_name("Episode 01.mkv");
         let conflicts = claim_existing_entries(&[
             (
