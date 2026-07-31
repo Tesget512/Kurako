@@ -15,12 +15,24 @@ class AboutPage extends StatelessWidget {
     body: ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.movie_outlined),
-          title: Text('Kurako'),
-          subtitle: Text('本地番剧库播放器 · Flutter + Rust'),
+        const Center(
+          child: Column(
+            children: [
+              Image(
+                image: AssetImage('assets/images/kurako_icon.png'),
+                width: 112,
+                height: 112,
+              ),
+              SizedBox(height: 12),
+              Text('Kurako', style: TextStyle(fontSize: 22)),
+              SizedBox(height: 4),
+              Text('本地番剧库播放器 · Flutter + Rust'),
+              SizedBox(height: 10),
+              Text('这个只是暂定的图标！\n...嗯，暂定的...', textAlign: TextAlign.center),
+            ],
+          ),
         ),
+        const SizedBox(height: 12),
         ListTile(
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.schedule_outlined),

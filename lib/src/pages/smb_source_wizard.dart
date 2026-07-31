@@ -105,6 +105,7 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
   }
 
   Future<void> _loadShares() async {
+    FocusManager.instance.primaryFocus?.unfocus();
     final host = _host.text.trim();
     if (host.isEmpty) {
       setState(() => _error = '请填写或选择 SMB 主机');
