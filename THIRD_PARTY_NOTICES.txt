@@ -18,6 +18,9 @@ Core runtime and frameworks
   https://github.com/mpv-player/mpv
 - Anime4K - MIT License
   https://github.com/bloc97/Anime4K
+- LXGW WenKai GB Screen - SIL Open Font License 1.1
+  https://github.com/lxgw/LxgwWenKai
+  The complete font license is included at assets/fonts/OFL.txt.
 
 Services and design references
 

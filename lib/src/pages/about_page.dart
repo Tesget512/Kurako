@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../build_info.dart';
 import '../widgets/window_caption.dart';
@@ -8,6 +9,22 @@ import '../widgets/window_caption.dart';
 /// public GitHub repository URL is finalized.
 class AboutPage extends StatelessWidget {
   const AboutPage({super.key});
+
+  static final Uri _projectUri = Uri.parse(
+    'https://github.com/Tesget512/Kurako',
+  );
+
+  Future<void> _openProject(BuildContext context) async {
+    final opened = await launchUrl(
+      _projectUri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened && context.mounted) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('无法打开 GitHub 项目主页')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -44,11 +61,9 @@ class AboutPage extends StatelessWidget {
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.code_outlined),
           title: const Text('GitHub 项目主页'),
-          subtitle: const Text('项目公开后将在此处提供跳转链接'),
+          subtitle: const Text('github.com/Tesget512/Kurako'),
           trailing: const Icon(Icons.open_in_new),
-          onTap: () => ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('GitHub 项目主页尚未配置'))),
+          onTap: () => _openProject(context),
         ),
         const Divider(height: 32),
         const ListTile(
@@ -86,7 +101,11 @@ class _Acknowledgements extends StatelessWidget {
       ),
       _AcknowledgementGroup(
         title: '播放与图像',
-        entries: ['media_kit / mpv — 跨平台视频播放', 'Anime4K（bloc97）— 超分辨率着色器'],
+        entries: [
+          'media_kit / mpv — 跨平台视频播放',
+          'Anime4K（bloc97）— 超分辨率着色器',
+          '霞鹜文楷 GB 屏幕阅读版 — 应用字体（OFL-1.1）',
+        ],
       ),
       _AcknowledgementGroup(
         title: '数据与网络服务',

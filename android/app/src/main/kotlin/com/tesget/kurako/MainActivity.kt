@@ -1,4 +1,4 @@
-package com.alts.kurako
+package com.tesget.kurako
 
 import android.app.PictureInPictureParams
 import android.content.Context

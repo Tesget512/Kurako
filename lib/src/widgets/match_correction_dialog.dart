@@ -20,8 +20,10 @@ class MatchCorrectionDialog extends StatefulWidget {
     this.animeId,
     this.episodeId,
     required this.initialKeyword,
-  }) : assert((animeId == null) != (episodeId == null),
-            'exactly one of animeId / episodeId must be given');
+  }) : assert(
+         (animeId == null) != (episodeId == null),
+         'exactly one of animeId / episodeId must be given',
+       );
 
   @override
   State<MatchCorrectionDialog> createState() => _MatchCorrectionDialogState();

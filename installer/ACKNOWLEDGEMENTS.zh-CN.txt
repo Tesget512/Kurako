@@ -9,6 +9,7 @@ Kurako 建立在开源软件与公共服务之上，感谢以下项目、社区�
 - Bangumi 番组计划：番剧元数据、评分与收藏服务。
 - bangumi-proxy（Soyorin）：大陆网络环境下的 Bangumi API 与图片代理。
 - Kazumi：番剧详情页布局参考。
+- 霞鹜文楷 GB 屏幕阅读版：应用字体（SIL Open Font License 1.1）。
 
 各第三方项目的著作权与商标归其各自权利人所有，并继续适用各自的开源许可证。随安装目录提供的 THIRD_PARTY_NOTICES.txt 列出了主要组件与许可说明。
 

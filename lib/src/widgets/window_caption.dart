@@ -147,8 +147,13 @@ class _WindowButtonsState extends State<WindowButtons> with WindowListener {
     );
   }
 
-  Widget _btn(IconData icon, Color color, VoidCallback onTap,
-      {double size = 16, bool hoverRed = false}) {
+  Widget _btn(
+    IconData icon,
+    Color color,
+    VoidCallback onTap, {
+    double size = 16,
+    bool hoverRed = false,
+  }) {
     return _HoverButton(
       icon: icon,
       color: color,
@@ -236,8 +241,9 @@ class SysAppBar extends StatelessWidget implements PreferredSizeWidget {
     // descendants' own tap recognizers (the window buttons') share that same
     // gesture arena, so they were getting delayed too. Same fix as
     // WindowCaption/player_page, which only ever wrap the draggable title.
-    final draggableTitle =
-        useCustomCaption && title != null ? WindowDragArea(child: title!) : title;
+    final draggableTitle = useCustomCaption && title != null
+        ? WindowDragArea(child: title!)
+        : title;
     return AppBar(
       title: draggableTitle,
       leading: leading,

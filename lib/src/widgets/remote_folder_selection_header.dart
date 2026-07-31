@@ -35,7 +35,11 @@ class RemoteFolderSelectionHeader extends StatelessWidget {
                 scrollDirection: Axis.horizontal,
                 child: Row(
                   children: [
-                    for (var index = 0; index < breadcrumbs.length; index++) ...[
+                    for (
+                      var index = 0;
+                      index < breadcrumbs.length;
+                      index++
+                    ) ...[
                       if (index > 0) const SizedBox(width: 4),
                       breadcrumbs[index],
                     ],

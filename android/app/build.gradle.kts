@@ -15,7 +15,7 @@ plugins {
 }
 
 android {
-    namespace = "com.alts.kurako"
+    namespace = "com.tesget.kurako"
     // Force compileSdk 36 to satisfy flutter_plugin_android_lifecycle (file_picker
     // transitive dep was compiled against 34, causing AAR metadata check failure).
     compileSdk = 36
@@ -28,7 +28,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.alts.kurako"
+        applicationId = "com.tesget.kurako"
         // media_kit / libmpv require Android 5.0 (API 21) or newer.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion

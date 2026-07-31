@@ -1,64 +1,61 @@
-# Apple Platform Adaptation Record
+# Apple 平台构建与分发
 
-This document records the Apple-platform work introduced after the Windows and
-Android implementation, so that the platform-specific decisions are visible in
-the repository history rather than only in build output or commit titles.
+Kurako 的 iOS、iPadOS 与 macOS 界面使用 Flutter，跨平台核心由 Rust 和 flutter_rust_bridge 提供。系统桥接只用于权限、文件、认证会话、截图保存和窗口等 Apple 平台能力。
 
-## Supported Targets
+## 支持版本
 
-- iOS and iPadOS use the Flutter `ios/` project, CocoaPods, Cargokit, and the
-  Rust static library `rust_lib_kurako`.
-- macOS uses the Flutter `macos/` project and the same Rust core.
-- The checked-in Xcode projects, Podfiles, Podfile locks, launch assets, and
-  shared workspace files are source inputs. Derived Pods, build directories,
-  archives, and exported packages remain ignored.
+- iOS / iPadOS：13.0 及以上。
+- macOS：12.0 及以上。
+- iOS、iPadOS 与 macOS 的 Bundle ID 均使用 `com.tesget.kurako`。
 
-## Build And Signing
+## 环境
 
-- iOS supports a Release Dart build exported with a Development signing
-  profile, suitable for direct installation on devices that belong to the
-  selected Apple Development team. The release package is emitted as
-  `dist/out/Kurako-iOS-release.ipa`.
-- Rust is cross-compiled through Cargokit and embedded through the generated
-  podspec. The build scripts select the toolchain explicitly so Xcode shell
-  phases can find `rustc` and Cargo.
-- CocoaPods build settings are aligned to iOS 13, which keeps the application
-  compatible with older supported iPhone and iPad releases while satisfying
-  current pod deployment requirements.
-- macOS can be built from the checked-in project. On this machine's GTX 1050
-  Web Driver configuration, Flutter has no usable Metal renderer; software
-  rendering launches a blank Flutter surface. This is a host GPU limitation,
-  not an application feature flag, and does not affect iOS/iPadOS devices.
+1. 安装 Xcode、CocoaPods、Flutter 3.44.8 stable 和 Rust stable。
+2. 确保 `cargo` 与 `rustc` 位于 `~/.cargo/bin`、Homebrew rustup 目录，或通过 `RUSTUP_BIN` 指定目录。
+3. 使用项目要求的依赖镜像：
 
-## Playback, SMB, And Downloads
+```bash
+export PUB_HOSTED_URL=https://pub.flutter-io.cn
+export FLUTTER_STORAGE_BASE_URL=https://storage.flutter-io.cn
+flutter pub get
+cd ios && pod install && cd ..
+```
 
-- Apple SMB media is presented to the built-in player through a loopback proxy.
-  Share sessions are reused and closed deterministically after scans, subtitle
-  reads, downloads, and playback cancellation to reduce pressure on the SMB
-  server's connection limit.
-- iOS/iPadOS external playback of SMB media deliberately requires a completed
-  local download. The platform shares the downloaded local file with the chosen
-  player instead of handing that player a credential-bearing SMB URL.
-- The default download location is a KURAKO folder exposed through the Files
-  app. Completed downloads are recorded locally so player selection can prefer
-  the file over the remote share.
-- The Apple player includes the brightness integration needed by touch controls.
-  Double-tap seeking keeps the controls hidden, and iPad exposes an optional
-  desktop-style control layout while retaining touch controls by default.
+## iOS / iPadOS
 
-## Bangumi OAuth
+GitHub Release 默认提供完全未签名的 Release IPA。构建时不得选择 Team 或 Development/Distribution 签名：
 
-- Bangumi has one fixed callback registered for this application:
-  `kurako://oauth/callback`.
-- The app uses its operating system's authentication session and captures that
-  custom callback directly, then exchanges the returned authorization code in
-  the Rust core. This avoids an iOS/Android browser suspending a localhost
-  listener before the callback can be served.
+```bash
+flutter build ios --release --no-codesign \
+  --dart-define="KURAKO_BUILD_TIME=YYYY-MM-DD HH:MM:SS +0800"
+```
 
-## Verification
+打包前应确认 `Runner.app`、内嵌 Framework 和扩展中不存在 `_CodeSignature`、`embedded.mobileprovision` 或其他签名。接收者自行使用自己的 Apple ID/证书签名和侧载。
 
-- Rust unit tests cover media matching and the exact OAuth authorization URL.
-- Dart analysis is run against the changed application sources.
-- iOS Release archives are exported with the Development export options when a
-  personal Apple team is used; App Store distribution requires an appropriate
-  paid distribution profile.
+Xcode 真机 Debug 可以在本地选择个人 Team 并使用 Apple Development 签名，但该签名只用于调试，不得混入公开 IPA。
+
+## macOS
+
+macOS Release 必须包含 `arm64` 与 `x86_64`：
+
+```bash
+flutter build macos --release \
+  --dart-define="KURAKO_BUILD_TIME=YYYY-MM-DD HH:MM:SS +0800"
+lipo -archs build/macos/Build/Products/Release/kurako.app/Contents/MacOS/kurako
+```
+
+分发前必须对 App 及内嵌 Framework 签名，并用以下命令验证：
+
+```bash
+codesign --verify --deep --strict --verbose=2 path/to/kurako.app
+```
+
+交付记录应准确区分 ad-hoc、Apple Development 与 Developer ID 签名，并单独说明是否完成公证。
+
+## Apple 平台行为
+
+- iOS/iPadOS 默认下载目录为 Files 可见的 App Documents `KURAKO Downloads`。
+- SMB 外部播放先下载到本地，再交给系统分享面板或外部播放器。
+- Bangumi OAuth 使用系统认证会话和唯一回调 `kurako://oauth/callback`。
+- iPad 展示分享等 popover 控制器时必须设置锚点。
+- Flutter 在 Apple 平台依赖 Metal 渲染；不保证在没有可用 Metal 的 macOS 主机上正常显示界面。

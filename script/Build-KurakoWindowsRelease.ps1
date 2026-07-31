@@ -54,6 +54,7 @@ try {
     Copy-Item (Join-Path $Workspace 'installer\windows-info.zh-CN.txt') (Join-Path $docsDir '安装说明.txt') -Force
     Copy-Item (Join-Path $Workspace 'installer\windows-info.en.txt') (Join-Path $docsDir 'Installation.txt') -Force
     Copy-Item (Join-Path $Workspace 'THIRD_PARTY_NOTICES.txt') $docsDir -Force
+    Copy-Item (Join-Path $Workspace 'assets\fonts\OFL.txt') (Join-Path $docsDir 'LXGW-WenKai-OFL-1.1.txt') -Force
     $license = Join-Path $Workspace 'LICENSE'
     if (Test-Path -LiteralPath $license) {
         Copy-Item $license $docsDir -Force

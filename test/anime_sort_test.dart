@@ -5,18 +5,18 @@ import 'package:kurako/src/state/providers.dart';
 
 /// Minimal Anime with just the fields the sort logic reads.
 Anime a(String title, {String? airDate}) => Anime(
-      id: 0,
-      titleRaw: title,
-      hasNewFiles: false,
-      nameCn: title,
-      airDate: airDate,
-      collection: 0,
-      matchConfidence: 'none',
-      corrected: false,
-      episodeCount: 0,
-      watchedCount: 0,
-      specialCount: 0,
-    );
+  id: 0,
+  titleRaw: title,
+  hasNewFiles: false,
+  nameCn: title,
+  airDate: airDate,
+  collection: 0,
+  matchConfidence: 'none',
+  corrected: false,
+  episodeCount: 0,
+  watchedCount: 0,
+  specialCount: 0,
+);
 
 void main() {
   group('animeQuarter', () {
@@ -57,10 +57,17 @@ void main() {
         a('2024冬', airDate: '2024-01-05'),
         a('2024春', airDate: '2024-04-05'),
       ];
-      final sorted = sortAnime(list, LibrarySort.yearQuarter,
-          pinCollected: false);
-      expect(sorted.map(animeDisplayName).toList(),
-          ['2024夏', '2024春', '2024冬', '2023秋']);
+      final sorted = sortAnime(
+        list,
+        LibrarySort.yearQuarter,
+        pinCollected: false,
+      );
+      expect(sorted.map(animeDisplayName).toList(), [
+        '2024夏',
+        '2024春',
+        '2024冬',
+        '2023秋',
+      ]);
     });
 
     test('unknown quarter sorts last within its year', () {
@@ -68,8 +75,11 @@ void main() {
         a('无季度', airDate: '2024'),
         a('2024春', airDate: '2024-04-05'),
       ];
-      final sorted = sortAnime(list, LibrarySort.yearQuarter,
-          pinCollected: false);
+      final sorted = sortAnime(
+        list,
+        LibrarySort.yearQuarter,
+        pinCollected: false,
+      );
       expect(sorted.map(animeDisplayName).toList(), ['2024春', '无季度']);
     });
 
@@ -78,10 +88,15 @@ void main() {
         a('2024冬', airDate: '2024-01-05'),
         a('2024春', airDate: '2024-04-05'),
       ];
-      final sections =
-          groupAnime(list, LibrarySort.yearQuarter, pinCollected: false);
-      expect(sections.map((s) => s.label).toList(),
-          ['2024 年 · 4月春', '2024 年 · 1月冬']);
+      final sections = groupAnime(
+        list,
+        LibrarySort.yearQuarter,
+        pinCollected: false,
+      );
+      expect(sections.map((s) => s.label).toList(), [
+        '2024 年 · 4月春',
+        '2024 年 · 1月冬',
+      ]);
     });
   });
 }

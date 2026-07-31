@@ -69,6 +69,7 @@ Source: "{#ReleaseDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubd
 Source: "installer\windows-info.zh-CN.txt"; DestDir: "{app}\docs"; DestName: "安装说明.txt"; Flags: ignoreversion
 Source: "installer\windows-info.en.txt"; DestDir: "{app}\docs"; DestName: "Installation.txt"; Flags: ignoreversion
 Source: "THIRD_PARTY_NOTICES.txt"; DestDir: "{app}\docs"; Flags: ignoreversion
+Source: "assets\fonts\OFL.txt"; DestDir: "{app}\docs"; DestName: "LXGW-WenKai-OFL-1.1.txt"; Flags: ignoreversion
 #if FileExists("LICENSE")
 Source: "LICENSE"; DestDir: "{app}\docs"; Flags: ignoreversion
 #endif

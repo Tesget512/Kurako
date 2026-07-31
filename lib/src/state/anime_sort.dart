@@ -72,14 +72,16 @@ int _compareBySort(Anime a, Anime b, LibrarySort sort) {
       final c = (b.rating ?? -1).compareTo(a.rating ?? -1);
       if (c != 0) return c;
     case LibrarySort.weekday:
-      final c =
-          (a.airWeekday?.toInt() ?? 8).compareTo(b.airWeekday?.toInt() ?? 8);
+      final c = (a.airWeekday?.toInt() ?? 8).compareTo(
+        b.airWeekday?.toInt() ?? 8,
+      );
       if (c != 0) return c;
     case LibrarySort.yearWeekday:
       final cy = animeYear(b).compareTo(animeYear(a));
       if (cy != 0) return cy;
-      final cw =
-          (a.airWeekday?.toInt() ?? 8).compareTo(b.airWeekday?.toInt() ?? 8);
+      final cw = (a.airWeekday?.toInt() ?? 8).compareTo(
+        b.airWeekday?.toInt() ?? 8,
+      );
       if (cw != 0) return cw;
     case LibrarySort.yearQuarter:
       final cy = animeYear(b).compareTo(animeYear(a)); // newest year first
@@ -159,7 +161,10 @@ List<AnimeSection> groupAnime(
     if (bucket.isNotEmpty) {
       // Pin the collected subset to the front of this section.
       sections.add(
-        AnimeSection(currentKey!, sortAnime(bucket, sort, pinCollected: pinCollected)),
+        AnimeSection(
+          currentKey!,
+          sortAnime(bucket, sort, pinCollected: pinCollected),
+        ),
       );
     }
   }

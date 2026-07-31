@@ -271,12 +271,12 @@ mod tests {
         <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
           xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery">
           <s:Body><d:ProbeMatches><d:ProbeMatch>
-          <d:XAddrs>http://192.0.2.211:5357/abc https://server.local/wsd</d:XAddrs>
+          <d:XAddrs>http://192.0.2.10:5357/abc https://server.local/wsd</d:XAddrs>
           </d:ProbeMatch></d:ProbeMatches></s:Body>
         </s:Envelope>"#;
         let servers = parse_probe_response(xml);
         assert_eq!(servers.len(), 2);
-        assert!(servers.iter().any(|server| server.host == "192.0.2.211"));
+        assert!(servers.iter().any(|server| server.host == "192.0.2.10"));
         assert!(servers.iter().all(|server| server.port == 445));
     }
 

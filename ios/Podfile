@@ -26,6 +26,22 @@ require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelpe
 
 flutter_ios_podfile_setup
 
+rust_bin_candidates = [
+  ENV['RUSTUP_BIN'],
+  File.join(Dir.home, '.cargo', 'bin'),
+  '/opt/homebrew/opt/rustup/bin',
+  '/usr/local/opt/rustup/bin',
+].compact
+rust_bin = rust_bin_candidates.find do |candidate|
+  File.executable?(File.join(candidate, 'cargo')) &&
+    File.executable?(File.join(candidate, 'rustc'))
+end
+unless rust_bin
+  raise 'Rust toolchain not found. Install rustup and ensure cargo/rustc are available.'
+end
+rustup_home = ENV.fetch('RUSTUP_HOME', File.join(Dir.home, '.rustup'))
+cargo_home = ENV.fetch('CARGO_HOME', File.join(Dir.home, '.cargo'))
+
 target 'Runner' do
   use_frameworks!
 
@@ -52,11 +68,11 @@ post_install do |installer|
       config.build_settings['EXTRACT_APPINTENTS_METADATA'] = 'NO'
       config.build_settings['PUB_HOSTED_URL'] = 'https:/$()/pub.flutter-io.cn'
       config.build_settings['FLUTTER_STORAGE_BASE_URL'] = 'https:/$()/storage.flutter-io.cn'
-      config.build_settings['PATH'] = '$(inherited):/usr/local/opt/rustup/bin'
-      config.build_settings['CARGO'] = '/usr/local/opt/rustup/bin/cargo'
-      config.build_settings['RUSTC'] = '/usr/local/opt/rustup/bin/rustc'
-      config.build_settings['RUSTUP_HOME'] = '/Users/developer/.rustup'
-      config.build_settings['CARGO_HOME'] = '/Users/developer/.cargo'
+      config.build_settings['PATH'] = "$(inherited):#{rust_bin}"
+      config.build_settings['CARGO'] = File.join(rust_bin, 'cargo')
+      config.build_settings['RUSTC'] = File.join(rust_bin, 'rustc')
+      config.build_settings['RUSTUP_HOME'] = rustup_home
+      config.build_settings['CARGO_HOME'] = cargo_home
       if legacy_image_picker_targets.include?(target.name)
         # file_picker still depends on these archived/legacy Swift pods. Keep
         # their deprecation and Swift-concurrency warnings out of Runner's

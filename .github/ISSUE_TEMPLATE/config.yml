@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 私密安全问题
+    url: https://github.com/Tesget512/Kurako/security/advisories/new
+    about: 不要公开提交凭证或漏洞细节，请使用 GitHub Security Advisory。

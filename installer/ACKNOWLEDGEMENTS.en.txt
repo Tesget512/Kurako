@@ -10,6 +10,7 @@ projects, communities, maintainers, and contributors behind:
 - Bangumi
 - bangumi-proxy by Soyorin
 - Kazumi, for detail-page layout references
+- LXGW WenKai GB Screen, the application font (SIL Open Font License 1.1)
 
 Third-party copyrights and trademarks belong to their respective owners. Each
 component remains subject to its own license. See THIRD_PARTY_NOTICES.txt in the

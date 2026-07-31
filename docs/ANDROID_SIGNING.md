@@ -13,13 +13,13 @@ keyPassword=...
 keyAlias=kurako-release
 ```
 
-四个字段齐全时，`flutter build apk --release --split-per-abi` 会生成官方包名 `com.alts.kurako`，可覆盖其他由同一把 keystore 签名的官方 APK。
+四个字段齐全时，`flutter build apk --release --split-per-abi` 会生成官方包名 `com.tesget.kurako`，可覆盖其他由同一把 keystore 签名的官方 APK。
 
 Mac 与 Windows 必须复制同一份 `.jks` 和相应的 `key.properties`。Windows 仅需将 `storeFile` 改为该机的绝对路径；不要把这两个私有文件同步进 Git。
 
 ## 他人自行编译
 
-没有 `key.properties` 的源码检出会生成 `com.alts.kurako.dev` / `Kurako Dev`。它可与官方版共存，但不能覆盖官方版，避免第三方签名伪装为官方更新。
+没有 `key.properties` 的源码检出会生成 `com.tesget.kurako.dev` / `Kurako Dev`。它可与官方版共存，但不能覆盖官方版，避免第三方签名伪装为官方更新。
 
 ## GitHub Actions 官方构建
 

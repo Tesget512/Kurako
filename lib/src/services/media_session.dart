@@ -14,7 +14,7 @@ Future<void> initializeKurakoMediaSession() async {
   kurakoMediaSession = await AudioService.init<KurakoMediaSessionHandler>(
     builder: KurakoMediaSessionHandler.new,
     config: const AudioServiceConfig(
-      androidNotificationChannelId: 'com.alts.kurako.playback',
+      androidNotificationChannelId: 'com.tesget.kurako.playback',
       androidNotificationChannelName: 'Kurako 播放控制',
       androidNotificationChannelDescription: '显示当前视频的播放状态与控制按钮',
       androidNotificationIcon: 'mipmap/ic_launcher',

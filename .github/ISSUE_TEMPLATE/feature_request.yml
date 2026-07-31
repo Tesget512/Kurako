@@ -1,0 +1,35 @@
+name: 功能建议
+description: 提议新的跨平台功能或交互改进
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 要解决的问题
+      description: 说明当前使用场景和具体困难，而不仅是功能名称。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 建议方案
+    validations:
+      required: true
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: 主要影响平台
+      multiple: true
+      options:
+        - Android
+        - iOS / iPadOS
+        - macOS
+        - Windows
+        - 全平台
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 已考虑的替代方案

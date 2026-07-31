@@ -1,0 +1,59 @@
+name: 错误报告
+description: 报告可以稳定复现的 Kurako 功能或兼容性问题
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 请先移除日志、截图中的账号、密码、服务器地址和私人文件名。
+  - type: input
+    id: version
+    attributes:
+      label: Kurako 版本与编译时间
+      placeholder: 例如 1.0.0 / 2026-07-31 18:56:38 +0800
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 平台
+      options:
+        - Android
+        - iOS / iPadOS
+        - macOS
+        - Windows
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: 系统版本与设备
+      placeholder: 例如 Android 16 / Pixel 9，iOS 18.7 / iPad
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: 按顺序写出可以稳定触发问题的操作
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际行为与已脱敏日志
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我已确认内容中不包含密码、OAuth 凭证、私钥或不希望公开的媒体信息。
+          required: true

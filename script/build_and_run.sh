@@ -6,13 +6,14 @@ set -euo pipefail
 # cannot be used as a useful visual test here.
 MODE="${1:-run}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FLUTTER_BIN="${FLUTTER_BIN:-/Users/developer/development/flutter/bin/flutter}"
+FLUTTER_BIN="${FLUTTER_BIN:-$(command -v flutter || true)}"
 APP_NAME="kurako"
 APP_BUNDLE="$ROOT_DIR/build/macos/Build/Products/Debug/$APP_NAME.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
-if [[ ! -x "$FLUTTER_BIN" ]]; then
-  FLUTTER_BIN="$(command -v flutter)"
+if [[ -z "$FLUTTER_BIN" || ! -x "$FLUTTER_BIN" ]]; then
+  echo "Flutter not found. Add flutter to PATH or set FLUTTER_BIN." >&2
+  exit 1
 fi
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
