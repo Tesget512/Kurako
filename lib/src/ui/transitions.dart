@@ -8,9 +8,9 @@ import 'package:flutter/material.dart';
 /// preserves iOS behavior and makes the lighter desktop choices explicit.
 const kPageTransitionsTheme = PageTransitionsTheme(
   builders: {
-    // Tracks Android's system back gesture frame by frame and falls back to
-    // Material 3 FadeForwards for non-gesture pops.
-    TargetPlatform.android: PredictiveBackPageTransitionsBuilder(),
+    // Snapshot complex Flutter pages during the short in-app transition. The
+    // system still owns predictive back when leaving the app for the launcher.
+    TargetPlatform.android: ZoomPageTransitionsBuilder(allowSnapshotting: true),
     TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
     TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
     // Desktop has no edge-back gesture. A translation + fade avoids scaling

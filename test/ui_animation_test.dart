@@ -36,9 +36,11 @@ void main() {
   test('page transitions are explicit for every target platform', () {
     final builders = kPageTransitionsTheme.builders;
 
+    final androidBuilder = builders[TargetPlatform.android];
+    expect(androidBuilder, isA<ZoomPageTransitionsBuilder>());
     expect(
-      builders[TargetPlatform.android],
-      isA<PredictiveBackPageTransitionsBuilder>(),
+      (androidBuilder! as ZoomPageTransitionsBuilder).allowSnapshotting,
+      isTrue,
     );
     expect(
       builders[TargetPlatform.iOS],

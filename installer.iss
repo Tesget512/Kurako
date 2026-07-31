@@ -21,7 +21,8 @@ AppId={{17E6CBB0-5F44-446A-B193-51100DE2F0EB}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-AppComments=跨平台本地番剧库与视频播放器（Flutter + Rust）
+AppComments=支持本地文件夹、SMB 与 WebDAV 的跨平台番剧库与视频播放器
+AppCopyright=Copyright (C) 2026 Tesget512 and Kurako contributors
 DefaultDirName={autopf}\{#AppNameEn}
 DefaultGroupName={#AppName}
 DisableDirPage=no
@@ -40,10 +41,17 @@ SetupIconFile=windows\runner\resources\app_icon.ico
 VersionInfoDescription=Kurako Windows 安装程序
 VersionInfoCompany={#AppPublisher}
 VersionInfoProductName={#AppName}
+VersionInfoCopyright=Copyright (C) 2026 Tesget512 and Kurako contributors
 
 [Languages]
 Name: "cn"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"; LicenseFile: "LICENSE"; InfoBeforeFile: "installer\windows-info.zh-CN.txt"; InfoAfterFile: "installer\ACKNOWLEDGEMENTS.zh-CN.txt"
 Name: "english"; MessagesFile: "compiler:Default.isl"; LicenseFile: "LICENSE"; InfoBeforeFile: "installer\windows-info.en.txt"; InfoAfterFile: "installer\ACKNOWLEDGEMENTS.en.txt"
+
+[Messages]
+cn.WelcomeLabel1=欢迎安装 [name]
+cn.WelcomeLabel2=Kurako 是一款由 Flutter 与 Rust 构建的本地番剧库和视频播放器。%n%n安装向导将说明功能、数据位置与开源许可，并允许选择安装目录和快捷方式。
+english.WelcomeLabel1=Welcome to [name] Setup
+english.WelcomeLabel2=Kurako is a local anime library and video player built with Flutter and Rust.%n%nThis wizard explains its features, data locations, and open-source license, and lets you choose the installation folder and shortcuts.
 
 [CustomMessages]
 cn.ShortcutTasks=快捷方式：

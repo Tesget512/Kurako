@@ -1,30 +1,31 @@
 Kurako for Windows
 
-Kurako is a cross-platform local anime library and video player. Its interface
-is built with Flutter, while Rust provides reusable core functionality. Kurako
-can scan local folders and SMB shares, match titles with Bangumi metadata, play
-videos with the built-in player, and manage SMB videos and subtitles downloaded
-to this computer.
+Kurako is a cross-platform local anime library and video player. Its interface is built with Flutter, while Rust provides reusable core functionality.
 
-Installation
+Main features
 
-1. You can choose the Kurako installation folder on the next page.
-2. Desktop and Start Menu shortcuts are optional tasks.
-3. A newer version can be installed over the same folder without clearing your
-   media-library settings.
-4. Kurako stores its database, account settings, and default downloads under
-   Documents\KURAKO rather than the program installation folder.
-5. Uninstalling Kurako does not delete Documents\KURAKO. Use the maintenance
-   actions in Kurako first, then inspect that folder manually if you want to
-   remove all local data.
+- Scan local folders, Windows/NAS SMB shares, and WebDAV servers.
+- Match titles with Bangumi metadata, ratings, tags, and collection status.
+- Play videos and external subtitles with the built-in player, and manage videos and subtitles downloaded to this computer.
+- Use the same media-library and player workflow across Windows, Android, and Apple platforms.
 
-Requirements
+Installation and updates
+
+1. A later page lets you choose the Kurako installation folder.
+2. Desktop and Start Menu shortcuts are optional tasks and are disabled by default.
+3. A newer version can be installed over the existing folder without clearing media-library settings.
+4. Program files go into the selected installation folder. The database, account settings, network credentials, and default downloads are stored under Documents\KURAKO.
+5. Uninstalling Kurako does not delete Documents\KURAKO. To remove all local data, first use the cleanup actions on Kurako's Maintenance page, then inspect that folder manually.
+
+System and network requirements
 
 - 64-bit Windows 10 or Windows 11.
-- Bangumi login uses the default browser and returns to Kurako through the
-  kurako:// callback. If the browser asks whether it may open Kurako, allow it.
-- SMB features require network access to the Windows or NAS share and valid
-  share credentials.
+- SMB and WebDAV require network access to the Windows or NAS server, valid credentials, and permission to access the selected directories.
+- Bangumi login opens the default browser and returns to Kurako through the kurako:// callback. Allow the browser to open Kurako when prompted.
+- If Windows Firewall or security software asks for network access, grant only the access appropriate for the local network being used.
 
-This installer does not bundle browser changes, proxy changes, or unrelated
-software.
+License and privacy
+
+Kurako's original code is licensed under GNU General Public License v3.0 only (GPL-3.0-only). The complete license is shown on the next page and installed in the program's docs directory. Third-party components remain subject to their respective licenses.
+
+This installer does not bundle unrelated software or change browser settings, system proxy settings, or other unrelated system configuration.

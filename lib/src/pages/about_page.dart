@@ -51,6 +51,16 @@ class AboutPage extends StatelessWidget {
           ).showSnackBar(const SnackBar(content: Text('GitHub 项目主页尚未配置'))),
         ),
         const Divider(height: 32),
+        const ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: Icon(Icons.balance_outlined),
+          title: Text('开源许可'),
+          subtitle: Text(
+            'GNU General Public License v3.0 only（GPL-3.0-only）\n'
+            'Kurako 原创代码允许在该许可证约束下使用、研究、修改与再分发。',
+          ),
+        ),
+        const Divider(height: 32),
         const _Acknowledgements(),
       ],
     ),
