@@ -15,7 +15,7 @@
 | 平台 | 必需产物 | 签名要求 |
 | --- | --- | --- |
 | Android | `armeabi-v7a`、`arm64-v8a`、`x86_64` 三个单架构 Release APK | 使用 Kurako 正式 Android 私钥签名 |
-| iOS / iPadOS | `Kurako-iOS-unsigned-release.ipa` | 完全未签名，由使用者自行签名 |
+| iOS / iPadOS | `Kurako-iOS-<version>-no_sign-release.ipa` | 不含开发者身份，由使用者自行签名 |
 | macOS | `Kurako-macOS-universal-adhoc-release.dmg` | 通用 App 使用 ad-hoc 签名；DMG 未公证 |
 | Windows | x64 便携压缩包与 Inno Setup 安装包 | 当前不签名 |
 
@@ -23,15 +23,14 @@ Android 不发布 universal APK。缺少正式私钥时只能生成使用 `.dev`
 
 ## Apple 平台核验
 
-- iOS IPA 内的 Runner、Framework 和扩展不得包含 `_CodeSignature`、`embedded.mobileprovision` 或其他签名材料。
+- iOS `no_sign` IPA 可以包含无开发者身份的 Mach-O ad-hoc 内层签名，但不得包含 `embedded.mobileprovision`、`Authority` 或真实 `TeamIdentifier`。
 - macOS 使用 `lipo -archs` 确认主程序包含 `x86_64` 与 `arm64`。
 - macOS 使用 `codesign --verify --deep --strict --verbose=2` 验证 App，并确认签名类型为 ad-hoc。
 - 使用 `hdiutil verify` 验证 DMG；发布说明准确标注为 `ad-hoc、未公证`。
 
-## 归档与校验
+## 归档与验证
 
 1. 将最终 Release 产物整理到 `dist/out/`，不得直接上传临时 `build/` 目录内容。
 2. 解压或列出每个压缩包，确认文件完整且不包含调试符号、私钥、OAuth 凭证或本机路径。
-3. 记录每个产物的文件大小和 SHA-256，并随 GitHub Release 提供校验文件。
-4. 在至少一个对应平台验证安装与启动；若某平台没有完成真机验证，应在发布说明中明确标注。
-5. 将 `CHANGELOG.md` 中对应版本的 `Unreleased` 替换为实际发布日期后再创建标签。
+3. 在至少一个对应平台验证安装与启动；若某平台没有完成真机验证，应在发布说明中明确标注。
+4. 将 `CHANGELOG.md` 中对应版本的 `Unreleased` 替换为实际发布日期后再创建标签。

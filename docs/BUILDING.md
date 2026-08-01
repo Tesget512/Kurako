@@ -28,8 +28,8 @@ flutter pub get
 # Android：分别生成 armeabi-v7a、arm64-v8a、x86_64 APK
 flutter build apk --release --split-per-abi
 
-# iOS / iPadOS：无签名设备包，后续由使用者自行签名
-flutter build ios --release --no-codesign
+# iOS / iPadOS：生成 no_sign 分发 IPA
+script/Build-KurakoIOSRelease.sh
 
 # macOS
 flutter build macos --release
@@ -43,6 +43,6 @@ Windows 的便携版与 Inno Setup 安装包可在安装了 Inno Setup 6 的环�
 ## 签名与分发
 
 - Android：正式包需要项目私有 keystore；没有它时构建会使用独立的 `.dev` 包名。详见 [Android 签名说明](ANDROID_SIGNING.md)。
-- iOS / iPadOS：GitHub 分发包保持无签名，侧载前由使用者自行签名。
+- iOS / iPadOS：由 `script/Build-KurakoIOSRelease.sh` 生成 `no_sign` Release IPA，侧载前由使用者自行签名。
 - macOS：发布包使用 ad-hoc 签名的通用 App，并封装为未公证 DMG。详见 [Apple 平台说明](APPLE_PLATFORM.md)。
-- 发布产物、校验与版本检查详见 [发布检查清单](RELEASE.md)。
+- 发布产物、验证与版本检查详见 [发布检查清单](RELEASE.md)。

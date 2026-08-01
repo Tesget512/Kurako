@@ -23,14 +23,14 @@ cd ios && pod install && cd ..
 
 ## iOS / iPadOS
 
-GitHub Release 默认提供完全未签名的 Release IPA。构建时不得选择 Team 或 Development/Distribution 签名：
+GitHub Release 提供 `no_sign` IPA。构建时不得选择 Team 或 Development/Distribution 签名：
 
 ```bash
-flutter build ios --release --no-codesign \
-  --dart-define="KURAKO_BUILD_TIME=YYYY-MM-DD HH:MM:SS +0800"
+KURAKO_BUILD_TIME="YYYY-MM-DD HH:MM:SS +0800" \
+  ./script/Build-KurakoIOSRelease.sh
 ```
 
-打包前应确认 `Runner.app`、内嵌 Framework 和扩展中不存在 `_CodeSignature`、`embedded.mobileprovision` 或其他签名。接收者自行使用自己的 Apple ID/证书签名和侧载。
+使用 `script/Build-KurakoIOSRelease.sh` 生成的 `no_sign` IPA 不含开发者身份，可以保留无开发者身份的 ad-hoc 内层签名，不包含 `embedded.mobileprovision`；接收者仍需使用自己的 Apple ID/证书签名和侧载。
 
 Xcode 真机 Debug 可以在本地选择个人 Team 并使用 Apple Development 签名，但该签名只用于调试，不得混入公开 IPA。
 

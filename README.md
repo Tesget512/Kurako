@@ -56,12 +56,12 @@
 | 平台 | 最低版本 | 分发形式 |
 | --- | --- | --- |
 | Android | Android 7.0 / API 24 | `armeabi-v7a`、`arm64-v8a`、`x86_64` 单架构 APK |
-| iOS / iPadOS | iOS 13 | 完全未签名 IPA，由使用者自行签名和侧载 |
+| iOS / iPadOS | iOS 13 | `no_sign` IPA，由使用者自行签名和侧载 |
 | macOS | macOS 12 | `arm64 + x86_64` 通用 App，使用 ad-hoc 签名封装为 DMG |
 | Windows | 64 位 Windows 10 / 11 | Inno Setup 安装包与便携压缩包 |
 | Linux | 在写了在写了 | `新建文件夹.jpg` |
 
-正式安装包将在 [GitHub Releases](https://github.com/Tesget512/Kurako/releases) 提供，并附带 SHA-256 校验文件。
+正式安装包将在 [GitHub Releases](https://github.com/Tesget512/Kurako/releases) 提供。
 
 ## 构建
 
