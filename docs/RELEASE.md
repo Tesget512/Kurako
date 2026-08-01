@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | Android | `armeabi-v7a`、`arm64-v8a`、`x86_64` 三个单架构 Release APK | 使用 Kurako 正式 Android 私钥签名 |
 | iOS / iPadOS | `Kurako-iOS-unsigned-release.ipa` | 完全未签名，由使用者自行签名 |
-| macOS | 包含 `arm64` 与 `x86_64` 的通用 App 压缩包 | 必须签名，并在发布说明中写明实际签名类型和是否公证 |
+| macOS | `Kurako-macOS-universal-adhoc-release.dmg` | 通用 App 使用 ad-hoc 签名；DMG 未公证 |
 | Windows | x64 便携压缩包与 Inno Setup 安装包 | 当前不签名 |
 
 Android 不发布 universal APK。缺少正式私钥时只能生成使用 `.dev` 包名的开发包，不能作为正式 Release。
@@ -25,8 +25,8 @@ Android 不发布 universal APK。缺少正式私钥时只能生成使用 `.dev`
 
 - iOS IPA 内的 Runner、Framework 和扩展不得包含 `_CodeSignature`、`embedded.mobileprovision` 或其他签名材料。
 - macOS 使用 `lipo -archs` 确认主程序包含 `x86_64` 与 `arm64`。
-- macOS 使用 `codesign --verify --deep --strict --verbose=2` 验证 App；ad-hoc、Apple Development 与 Developer ID 必须准确区分。
-- 签名不代表已经公证，发布说明必须分别记录。
+- macOS 使用 `codesign --verify --deep --strict --verbose=2` 验证 App，并确认签名类型为 ad-hoc。
+- 使用 `hdiutil verify` 验证 DMG；发布说明准确标注为 `ad-hoc、未公证`。
 
 ## 归档与校验
 

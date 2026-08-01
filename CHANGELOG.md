@@ -1,8 +1,8 @@
 # 变更记录
 
-本项目遵循语义化版本。首次公开发布前的内部提交统一整理到 1.0.0。
+本项目遵循语义化版本。首次公开发布前的内部提交统一整理到 1.0.1。
 
-## [1.0.0] - Unreleased
+## [1.0.1] - 2026-08-01
 
 ### 新增
 
@@ -16,4 +16,4 @@
 
 - 项目采用 GPL-3.0-only。
 - 正式包标识为 `com.tesget.kurako`。
-- Android 分架构发布；iOS/iPadOS 提供完全未签名 IPA；macOS 提供通用 App；Windows 提供安装包和便携包。
+- Android 分架构发布；iOS/iPadOS 提供完全未签名 IPA；macOS 提供内含 ad-hoc 签名通用 App 的 DMG；Windows 提供安装包和便携包。

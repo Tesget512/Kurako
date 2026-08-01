@@ -35,6 +35,12 @@ migrate_working_dir/
 /macos/build/
 /coverage/
 
+# Xcode workspace-local Swift Package Manager settings.
+/ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+/ios/Runner.xcworkspace/xcshareddata/swiftpm/
+/macos/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+/macos/Runner.xcworkspace/xcshareddata/swiftpm/
+
 # Symbolication related
 app.*.symbols
 

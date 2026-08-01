@@ -330,7 +330,7 @@ class _StringPrefNotifier extends StateNotifier<String> {
 String appDataDirPath = '';
 
 /// Default SMB download location, initialized by main. On iOS this is the
-/// Files-visible Documents/KURAKO Downloads folder.
+/// Files-visible Documents/Kurako Downloads folder.
 String defaultDownloadDirPath = '';
 
 /// The effective downloads directory: the user-chosen one, or

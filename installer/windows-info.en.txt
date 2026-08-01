@@ -2,6 +2,10 @@ Kurako for Windows
 
 Kurako is a cross-platform local anime library and video player. Its interface is built with Flutter, while Rust provides reusable core functionality.
 
+License summary
+
+Kurako's original code is licensed under GNU General Public License v3.0 only (GPL-3.0-only). The complete license follows these installation notes on the same page and is installed in the program's docs directory. Third-party components remain subject to their respective licenses.
+
 Main features
 
 - Scan local folders, Windows/NAS SMB shares, and WebDAV servers.
@@ -14,8 +18,8 @@ Installation and updates
 1. A later page lets you choose the Kurako installation folder.
 2. Desktop and Start Menu shortcuts are optional tasks and are disabled by default.
 3. A newer version can be installed over the existing folder without clearing media-library settings.
-4. Program files go into the selected installation folder. The database, account settings, network credentials, and default downloads are stored under Documents\KURAKO.
-5. Uninstalling Kurako does not delete Documents\KURAKO. To remove all local data, first use the cleanup actions on Kurako's Maintenance page, then inspect that folder manually.
+4. Program files go into the selected installation folder. The database, account settings, network credentials, and default downloads are stored under Documents\Kurako.
+5. Uninstalling Kurako does not delete Documents\Kurako. To remove all local data, first use the cleanup actions on Kurako's Maintenance page, then inspect that folder manually.
 
 System and network requirements
 
@@ -23,9 +27,5 @@ System and network requirements
 - SMB and WebDAV require network access to the Windows or NAS server, valid credentials, and permission to access the selected directories.
 - Bangumi login opens the default browser and returns to Kurako through the kurako:// callback. Allow the browser to open Kurako when prompted.
 - If Windows Firewall or security software asks for network access, grant only the access appropriate for the local network being used.
-
-License and privacy
-
-Kurako's original code is licensed under GNU General Public License v3.0 only (GPL-3.0-only). The complete license is shown on the next page and installed in the program's docs directory. Third-party components remain subject to their respective licenses.
 
 This installer does not bundle unrelated software or change browser settings, system proxy settings, or other unrelated system configuration.

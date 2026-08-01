@@ -175,7 +175,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.info_outline),
             title: const Text('关于 Kurako'),
-            subtitle: const Text('版本信息、致谢与项目主页'),
+            subtitle: const Text('版本信息、开源许可、致谢与项目主页'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => Navigator.of(
               context,

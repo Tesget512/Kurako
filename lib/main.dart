@@ -1,7 +1,9 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -17,6 +19,7 @@ import 'src/services/media_session.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _registerBundledLicenses();
   MediaKit.ensureInitialized();
   await initializeKurakoMediaSession();
 
@@ -54,7 +57,7 @@ Future<void> main() async {
   }
 
   // Open the SQLite database in the app data directory. On Windows this lives
-  // under Documents/KURAKO so it survives installer updates and portable
+  // under Documents/Kurako so it survives installer updates and portable
   // relocations; other platforms use the sandboxed app-support dir.
   final dir = await _dataDir();
   final dbPath = p.join(dir.path, 'anime_library.db');
@@ -96,9 +99,23 @@ Future<void> main() async {
   runApp(const ProviderScope(child: AnimeBdApp()));
 }
 
+void _registerBundledLicenses() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Kurako',
+    ], await rootBundle.loadString('LICENSE'));
+    yield LicenseEntryWithLineBreaks([
+      'Kurako third-party notices',
+    ], await rootBundle.loadString('THIRD_PARTY_NOTICES.txt'));
+    yield LicenseEntryWithLineBreaks([
+      'LXGW WenKai GB Screen',
+    ], await rootBundle.loadString('assets/fonts/OFL.txt'));
+  });
+}
+
 /// The directory holding the app's SQLite DB and caches.
 ///
-/// On Windows we use `Documents/KURAKO` so data survives installer updates
+/// On Windows we use `Documents/Kurako` so data survives installer updates
 /// and moving the portable folder. Other platforms keep their sandboxed
 /// app-support directory.
 Future<Directory> _dataDir() async {
@@ -106,7 +123,7 @@ Future<Directory> _dataDir() async {
     return getApplicationSupportDirectory();
   }
   final docs = await getApplicationDocumentsDirectory();
-  final dir = Directory(p.join(docs.path, 'KURAKO'));
+  final dir = Directory(p.join(docs.path, 'Kurako'));
   if (!await dir.exists()) {
     await dir.create(recursive: true);
   }
@@ -114,12 +131,12 @@ Future<Directory> _dataDir() async {
 }
 
 /// iOS downloads belong in the app's Documents container, not App Support:
-/// with file sharing enabled this is visible in Files as KURAKO's own folder.
+/// with file sharing enabled this is visible in Files as Kurako's own folder.
 /// The database remains private in App Support.
 Future<String> _defaultDownloadDir(Directory dataDir) async {
   if (!Platform.isIOS) return p.join(dataDir.path, 'downloads');
   final documents = await getApplicationDocumentsDirectory();
-  final downloads = Directory(p.join(documents.path, 'KURAKO Downloads'));
+  final downloads = Directory(p.join(documents.path, 'Kurako Downloads'));
   if (!await downloads.exists()) {
     await downloads.create(recursive: true);
   }

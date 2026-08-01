@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../build_info.dart';
 import '../widgets/window_caption.dart';
 
 /// Product and attribution information kept out of the operational settings
-/// page. The project-home row is deliberately a visible placeholder until the
-/// public GitHub repository URL is finalized.
-class AboutPage extends StatelessWidget {
+/// page.
+class AboutPage extends StatefulWidget {
   const AboutPage({super.key});
+
+  @override
+  State<AboutPage> createState() => _AboutPageState();
+}
+
+class _AboutPageState extends State<AboutPage> {
+  late final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
   static final Uri _projectUri = Uri.parse(
     'https://github.com/Tesget512/Kurako',
@@ -24,6 +31,23 @@ class AboutPage extends StatelessWidget {
         context,
       ).showSnackBar(const SnackBar(content: Text('无法打开 GitHub 项目主页')));
     }
+  }
+
+  Future<void> _openLicenses(BuildContext context) async {
+    final packageInfo = await _packageInfo;
+    if (!context.mounted) return;
+    showLicensePage(
+      context: context,
+      applicationName: 'Kurako',
+      applicationVersion: packageInfo.version,
+      applicationIcon: const Image(
+        image: AssetImage('assets/images/kurako_icon.png'),
+        width: 64,
+        height: 64,
+      ),
+      applicationLegalese:
+          'Kurako 原创代码采用 GNU General Public License v3.0 only。',
+    );
   }
 
   @override
@@ -54,7 +78,13 @@ class AboutPage extends StatelessWidget {
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.schedule_outlined),
           title: const Text('版本与编译时间'),
-          subtitle: Text('版本 1.0.0\n编译时间：$kBuildTime'),
+          subtitle: FutureBuilder<PackageInfo>(
+            future: _packageInfo,
+            builder: (context, snapshot) {
+              final version = snapshot.data?.version ?? '1.0.1';
+              return Text('版本 $version\n编译时间：$kBuildTime');
+            },
+          ),
         ),
         const Divider(height: 32),
         ListTile(
@@ -66,14 +96,16 @@ class AboutPage extends StatelessWidget {
           onTap: () => _openProject(context),
         ),
         const Divider(height: 32),
-        const ListTile(
+        ListTile(
           contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.balance_outlined),
-          title: Text('开源许可'),
-          subtitle: Text(
+          leading: const Icon(Icons.balance_outlined),
+          title: const Text('开源许可'),
+          subtitle: const Text(
             'GNU General Public License v3.0 only（GPL-3.0-only）\n'
-            'Kurako 原创代码允许在该许可证约束下使用、研究、修改与再分发。',
+            '查看 Kurako、Flutter 依赖与随附资源的详细许可。',
           ),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () => _openLicenses(context),
         ),
         const Divider(height: 32),
         const _Acknowledgements(),

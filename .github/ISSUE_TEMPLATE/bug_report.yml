@@ -10,7 +10,7 @@ body:
     id: version
     attributes:
       label: Kurako 版本与编译时间
-      placeholder: 例如 1.0.0 / 2026-07-31 18:56:38 +0800
+      placeholder: 例如 1.0.1 / 2026-08-01 18:56:38 +0800
     validations:
       required: true
   - type: dropdown

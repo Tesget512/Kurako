@@ -32,7 +32,7 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-	<!-- Make Documents/KURAKO Downloads available in the Files app. -->
+	<!-- Make Documents/Kurako Downloads available in the Files app. -->
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<!-- SMB playback is served only from KURAKO's own loopback HTTP proxy. -->

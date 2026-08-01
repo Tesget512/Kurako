@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     # The bare repository stores Git objects only; do not use it as the build folder.
     [string]$BareRepository = 'D:\KURAKO-Git\KURAKO.git',

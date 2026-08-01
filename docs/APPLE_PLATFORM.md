@@ -47,14 +47,31 @@ lipo -archs build/macos/Build/Products/Release/kurako.app/Contents/MacOS/kurako
 分发前必须对 App 及内嵌 Framework 签名，并用以下命令验证：
 
 ```bash
+codesign --force --deep --sign - --options runtime \
+  --entitlements macos/Runner/Release.entitlements \
+  path/to/kurako.app
 codesign --verify --deep --strict --verbose=2 path/to/kurako.app
 ```
 
-交付记录应准确区分 ad-hoc、Apple Development 与 Developer ID 签名，并单独说明是否完成公证。
+当前 GitHub 分发不使用付费 Apple Developer Program，默认对 App 采用 ad-hoc 签名，再使用系统 `hdiutil` 封装为 DMG：
+
+```bash
+stage_dir="$(mktemp -d)"
+ditto path/to/kurako.app "$stage_dir/Kurako.app"
+ln -s /Applications "$stage_dir/Applications"
+hdiutil create \
+  -volname Kurako \
+  -srcfolder "$stage_dir" \
+  -ov -format UDZO \
+  dist/out/Kurako-macOS-universal-adhoc-release.dmg
+hdiutil verify dist/out/Kurako-macOS-universal-adhoc-release.dmg
+```
+
+ad-hoc 签名不包含开发者身份，也不能进行 Apple 公证；它与 Apple Development、Developer ID 签名均不同。交付记录必须准确写明 `ad-hoc、未公证`。
 
 ## Apple 平台行为
 
-- iOS/iPadOS 默认下载目录为 Files 可见的 App Documents `KURAKO Downloads`。
+- iOS/iPadOS 默认下载目录为 Files 可见的 App Documents `Kurako Downloads`。
 - SMB 外部播放先下载到本地，再交给系统分享面板或外部播放器。
 - Bangumi OAuth 使用系统认证会话和唯一回调 `kurako://oauth/callback`。
 - iPad 展示分享等 popover 控制器时必须设置锚点。
