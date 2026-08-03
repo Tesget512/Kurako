@@ -18,8 +18,9 @@
 | iOS / iPadOS | `Kurako-iOS-<version>-no_sign-release.ipa` | 不含开发者身份，由使用者自行签名 |
 | macOS | `Kurako-macOS-universal-adhoc-release.dmg` | 通用 App 使用 ad-hoc 签名；DMG 未公证 |
 | Windows | x64 便携压缩包与 Inno Setup 安装包 | 当前不签名 |
+| Linux（实验性） | x86_64 Debian `.deb` 测试包 | 不签名；不提供 AppImage、Arch 或 arm64 包 |
 
-Android 不发布 universal APK。缺少正式私钥时只能生成使用 `.dev` 包名的开发包，不能作为正式 Release。
+Android 不发布 universal APK。缺少正式私钥时只能生成使用 `.dev` 包名的开发包，不能作为正式 Release。Linux 仍处于实验阶段，发布说明必须明确桌面环境、GPU/驱动及发行版覆盖有限，不能与其他平台的稳定支持状态等同表述。
 
 ## Apple 平台核验
 

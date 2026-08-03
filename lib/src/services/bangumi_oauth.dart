@@ -15,13 +15,14 @@ import '../rust/api.dart' show OAuthResult;
 /// with Rust's `OAUTH_REDIRECT_URI`.
 ///
 /// This must remain the application's only configured Bangumi callback URL.
-/// Mobile authentication sessions intercept it directly; Windows registers it
-/// as a per-user protocol and forwards the callback to the running app.
+/// Mobile authentication sessions intercept it directly; desktop platforms
+/// register it as a protocol handler and forward the callback to the running
+/// app.
 const String kOAuthRedirectUri = 'kurako://oauth/callback';
 const String _kCallbackScheme = 'kurako';
 const String _kCallbackHost = 'oauth';
 const String _kCallbackPath = '/callback';
-const MethodChannel _windowsOAuthChannel = MethodChannel(
+const MethodChannel _desktopOAuthChannel = MethodChannel(
   'com.tesget.kurako/oauth_callback',
 );
 
@@ -30,12 +31,12 @@ const MethodChannel _windowsOAuthChannel = MethodChannel(
 /// 2. capture Bangumi's `kurako://oauth/callback?code=...` redirect,
 /// 3. exchange the one-time code (valid for 60 seconds) for tokens in Rust.
 ///
-/// Apple/Android use the platform authentication session. Windows uses the
-/// user's default browser and a registered `kurako://` protocol handler, which
-/// keeps the one callback registered for all platforms while sharing the
+/// Apple/Android use the platform authentication session. Windows/Linux use
+/// the user's default browser and a registered `kurako://` protocol handler,
+/// which keeps the one callback registered for all platforms while sharing the
 /// browser's existing Bangumi login.
 class BangumiOAuth {
-  static Completer<String>? _activeWindowsCallback;
+  static Completer<String>? _activeDesktopCallback;
 
   /// Runs the full flow and returns the tokens, or throws on error/timeout.
   static Future<OAuthResult> login({
@@ -48,8 +49,8 @@ class BangumiOAuth {
         .toString();
     String callbackUrl;
     try {
-      callbackUrl = Platform.isWindows
-          ? await _authenticateWithWindowsBrowser(authUrl, timeout)
+      callbackUrl = Platform.isWindows || Platform.isLinux
+          ? await _authenticateWithDesktopBrowser(authUrl, timeout)
           : await FlutterWebAuth2.authenticate(
               url: authUrl,
               callbackUrlScheme: _kCallbackScheme,
@@ -65,16 +66,16 @@ class BangumiOAuth {
     return rust.oauthExchangeCode(code: code);
   }
 
-  static Future<String> _authenticateWithWindowsBrowser(
+  static Future<String> _authenticateWithDesktopBrowser(
     String authUrl,
     Duration timeout,
   ) async {
-    if (_activeWindowsCallback != null) {
+    if (_activeDesktopCallback != null) {
       throw const OAuthException('已有 Bangumi 授权正在进行，请先在浏览器中完成。');
     }
     final callback = Completer<String>();
-    _activeWindowsCallback = callback;
-    _windowsOAuthChannel.setMethodCallHandler((call) async {
+    _activeDesktopCallback = callback;
+    _desktopOAuthChannel.setMethodCallHandler((call) async {
       if (call.method != 'onOAuthCallback' || callback.isCompleted) return;
       final url = call.arguments;
       if (url is! String) return;
@@ -87,16 +88,16 @@ class BangumiOAuth {
         mode: LaunchMode.externalApplication,
       );
       if (!opened) {
-        throw const OAuthException('无法打开系统默认浏览器，请检查 Windows 默认浏览器设置。');
+        throw const OAuthException('无法打开系统默认浏览器，请检查桌面默认浏览器设置。');
       }
       return await callback.future.timeout(
         timeout,
         onTimeout: () => throw const OAuthException('授权超时，请重试'),
       );
     } finally {
-      if (identical(_activeWindowsCallback, callback)) {
-        _windowsOAuthChannel.setMethodCallHandler(null);
-        _activeWindowsCallback = null;
+      if (identical(_activeDesktopCallback, callback)) {
+        _desktopOAuthChannel.setMethodCallHandler(null);
+        _activeDesktopCallback = null;
       }
     }
   }

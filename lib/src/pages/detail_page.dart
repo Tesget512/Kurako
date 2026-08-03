@@ -199,6 +199,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       valueListenable: _collapsed,
       builder: (context, collapsed, _) => AnimatedSwitcher(
         duration: const Duration(milliseconds: 150),
+        layoutBuilder: (currentChild, previousChildren) => Stack(
+          alignment: Alignment.centerLeft,
+          children: [...previousChildren, ?currentChild],
+        ),
         child: collapsed
             ? _MarqueeText(
                 _titleOf(anime),
@@ -208,8 +212,15 @@ class _DetailPageState extends ConsumerState<DetailPage> {
             : const SizedBox.shrink(key: ValueKey('detail-expanded-title')),
       ),
     );
+    // Give the title slot a concrete full width before adding the drag
+    // recognizer; otherwise a short/hidden title makes the hit area shrink to
+    // its intrinsic width inside SliverAppBar.
+    title = SizedBox(
+      width: double.infinity,
+      height: kToolbarHeight,
+      child: title,
+    );
     if (useCustomCaption) title = WindowDragArea(child: title);
-    title = SizedBox(height: kToolbarHeight, child: title);
 
     return SliverAppBar(
       pinned: true,
@@ -528,25 +539,20 @@ class _FloatingToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final topPad = MediaQuery.paddingOf(context).top;
-    // Only the title region drags the window (and double-click-to-maximizes)
-    // — NOT wrapped around the whole bar. A GestureDetector with onDoubleTap
-    // forces every tap that lands in its hit-test area to wait out the
-    // double-tap disambiguation window (~300ms) before it's allowed to
-    // resolve, and that delay applies to descendants' own tap recognizers too
-    // (they share the same gesture arena). Wrapping the whole toolbar used to
-    // put the window buttons inside that area, so minimize/close felt
-    // sluggish specifically on this page. Same fix as WindowCaption/player_page,
-    // which only ever wrapped the draggable title text, never the buttons.
+    // The whole flexible region between the back button and the toolbar
+    // actions drags the window (and double-click-to-maximizes), even while the
+    // title is hidden. Do not wrap the entire bar: a GestureDetector with
+    // onDoubleTap would put action/window buttons in the same gesture arena
+    // and delay their taps while Flutter disambiguates a possible double tap.
     // On narrow (phone-width) screens a long anime title often can't fit the
     // toolbar even ellipsized — auto-scroll it into view periodically instead
     // of just truncating. _MarqueeText only animates when the text actually
     // overflows its available width, so wide desktop windows render a plain
     // static (ellipsized) title with no animation overhead.
-    Widget titleText = _MarqueeText(
+    final titleText = _MarqueeText(
       title,
       style: Theme.of(context).textTheme.titleMedium,
     );
-    if (useCustomCaption) titleText = WindowDragArea(child: titleText);
     return SizedBox(
       height: topPad + kToolbarHeight,
       child: Container(
@@ -567,11 +573,19 @@ class _FloatingToolbar extends StatelessWidget {
               onPressed: () => Navigator.of(context).maybePop(),
             ),
             Expanded(
-              child: AnimatedOpacity(
-                opacity: showTitle ? 1 : 0,
-                duration: const Duration(milliseconds: 150),
-                child: titleText,
-              ),
+              child: useCustomCaption
+                  ? WindowDragArea(
+                      child: AnimatedOpacity(
+                        opacity: showTitle ? 1 : 0,
+                        duration: const Duration(milliseconds: 150),
+                        child: titleText,
+                      ),
+                    )
+                  : AnimatedOpacity(
+                      opacity: showTitle ? 1 : 0,
+                      duration: const Duration(milliseconds: 150),
+                      child: titleText,
+                    ),
             ),
             ...actions,
             if (useCustomCaption) ...[

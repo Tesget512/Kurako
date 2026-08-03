@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.tesget.kurako</id>
+  <name>Kurako</name>
+  <summary>Experimental Linux build of a cross-platform anime library and player</summary>
+  <summary xml:lang="zh-CN">实验性 Linux 版跨平台本地番剧库与视频播放器</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <description>
+    <p>Kurako organizes and plays local, SMB, and WebDAV anime libraries with Bangumi metadata, subtitle support, and download management.</p>
+    <p xml:lang="zh-CN">Kurako 用于整理和播放本地、SMB 与 WebDAV 番剧媒体库，支持 Bangumi 元数据、外挂字幕和下载管理。</p>
+  </description>
+  <launchable type="desktop-id">com.tesget.kurako.desktop</launchable>
+  <url type="homepage">https://github.com/Tesget512/Kurako</url>
+  <url type="bugtracker">https://github.com/Tesget512/Kurako/issues</url>
+  <developer id="com.tesget">
+    <name>Tesget512 and Kurako contributors</name>
+  </developer>
+  <content_rating type="oars-1.1" />
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </recommends>
+</component>

@@ -7,6 +7,7 @@
 ### 新增
 
 - Windows、Android、iOS、iPadOS 与 macOS 跨平台支持。
+- 新增实验性 Linux 桌面支持，当前仅提供 x86_64 Debian `.deb` 测试包；AppImage、Arch 和 Linux arm64 暂不提供。
 - 本地文件夹、SMB 与 WebDAV 媒体源及目录选择。
 - Bangumi 匹配、评分、标签与收藏状态。
 - 基于 media_kit/mpv 的内置播放器、外挂字幕和 Anime4K 超分辨率。

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Kurako
+Name[zh_CN]=Kurako
+Comment=A cross-platform local anime library and video player
+Comment[zh_CN]=跨平台本地番剧库与视频播放器
+Exec=kurako %u
+Icon=com.tesget.kurako
+Terminal=false
+Categories=AudioVideo;Video;
+Keywords=anime;video;player;library;Bangumi;
+Keywords[zh_CN]=番剧;视频;播放器;媒体库;Bangumi;
+StartupNotify=true
+StartupWMClass=com.tesget.kurako
+MimeType=x-scheme-handler/kurako;
