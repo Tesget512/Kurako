@@ -162,7 +162,7 @@ pub fn oauth_exchange_code(code: String) -> Result<OAuthResult, String> {
         .await
     })
     .map(Into::into)
-    .map_err(|e| e.to_string())
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// Refresh an access token using a stored refresh token.
@@ -177,7 +177,7 @@ pub fn oauth_refresh(refresh_token: String) -> Result<OAuthResult, String> {
         .await
     })
     .map(Into::into)
-    .map_err(|e| e.to_string())
+    .map_err(|e| format!("{e:#}"))
 }
 
 /// The detected system HTTP proxy (e.g. "http://127.0.0.1:7890"), or None.

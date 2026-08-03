@@ -11,7 +11,7 @@
 <p align="center">
   <img alt="License" src="https://img.shields.io/badge/license-GPL--3.0--only-blue">
   <img alt="Flutter" src="https://img.shields.io/badge/Flutter-3.44.8-02569B?logo=flutter">
-  <img alt="Platforms" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows-555">
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Android%20%7C%20iOS%20%7C%20macOS%20%7C%20Windows%20%7C%20Linux-555">
 </p>
 
 ## 功能
@@ -59,7 +59,9 @@
 | iOS / iPadOS | iOS 13 | `no_sign` IPA，由使用者自行签名和侧载 |
 | macOS | macOS 12 | `arm64 + x86_64` 通用 App，使用 ad-hoc 签名封装为 DMG |
 | Windows | 64 位 Windows 10 / 11 | Inno Setup 安装包与便携压缩包 |
-| Linux | 在写了在写了 | `新建文件夹.jpg` |
+| Linux（实验性） | Linux Mint 22.3 / Ubuntu 24.04 同代环境 | 仅提供 `x86_64` Debian `.deb` 测试包 |
+
+> Linux 版本目前处于实验阶段，仅提供 x86_64 Debian `.deb` 包。不同桌面环境、显卡、驱动和发行版组合尚未完成全面验证，不提供 AppImage、Arch 包或 arm64 Linux 包。
 
 正式安装包将在 [GitHub Releases](https://github.com/Tesget512/Kurako/releases) 提供。
 

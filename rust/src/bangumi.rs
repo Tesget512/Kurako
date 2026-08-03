@@ -126,8 +126,8 @@ fn client() -> Result<reqwest::Client> {
     Ok(built)
 }
 
-/// Detect a system HTTP proxy: env vars first, then (on Windows) the per-user
-/// Internet Settings registry key that clash/v2rayN/etc. configure.
+/// Detect a system HTTP proxy: environment variables first, then the native
+/// desktop setting used by the current platform.
 pub fn detect_system_proxy() -> Option<String> {
     for var in [
         "HTTPS_PROXY",
@@ -150,6 +150,12 @@ pub fn detect_system_proxy() -> Option<String> {
             return Some(p);
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(p) = read_linux_desktop_proxy() {
+            return Some(p);
+        }
+    }
     None
 }
 
@@ -160,6 +166,65 @@ fn normalize_proxy(v: &str) -> String {
     } else {
         format!("http://{}", v)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn read_linux_desktop_proxy() -> Option<String> {
+    let mode = gsettings_value(&["get", "org.gnome.system.proxy", "mode"])?;
+    let https = gsettings_proxy_endpoint("org.gnome.system.proxy.https");
+    let http = gsettings_proxy_endpoint("org.gnome.system.proxy.http");
+    desktop_proxy_from_values(&mode, https.as_ref(), http.as_ref())
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_proxy_endpoint(schema: &str) -> Option<(String, u16)> {
+    let host = gsettings_value(&["get", schema, "host"])?;
+    let host = host.trim_matches('\'').trim().to_string();
+    let port = gsettings_value(&["get", schema, "port"])?;
+    let port = port.trim().parse::<u16>().ok()?;
+    Some((host, port))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn desktop_proxy_from_values(
+    mode: &str,
+    https: Option<&(String, u16)>,
+    http: Option<&(String, u16)>,
+) -> Option<String> {
+    if mode.trim_matches('\'') != "manual" {
+        return None;
+    }
+
+    // HTTPS URLs use an HTTP CONNECT proxy in the standard GNOME settings.
+    // Prefer the HTTPS entry, then fall back to the HTTP entry when desktops
+    // are configured to use the same proxy for all protocols.
+    for (host, port) in [https, http].into_iter().flatten() {
+        let host = host.trim();
+        if host.is_empty() || *port == 0 {
+            continue;
+        }
+        let host = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]")
+        } else {
+            host.to_string()
+        };
+        return Some(format!("http://{host}:{port}"));
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn gsettings_value(args: &[&str]) -> Option<String> {
+    use std::process::Command;
+
+    let output = Command::new("gsettings").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 #[cfg(windows)]
@@ -1231,6 +1296,30 @@ pub async fn subject_episode_titles(subject_id: i64, limit: u32) -> Result<Vec<E
 #[cfg(test)]
 mod match_tests {
     use super::*;
+
+    #[test]
+    fn desktop_proxy_prefers_https_and_requires_manual_mode() {
+        let https = ("127.0.0.1".to_string(), 7890);
+        let http = ("127.0.0.1".to_string(), 8080);
+        assert_eq!(
+            desktop_proxy_from_values("'manual'", Some(&https), Some(&http)),
+            Some("http://127.0.0.1:7890".to_string())
+        );
+        assert_eq!(
+            desktop_proxy_from_values("'none'", Some(&https), Some(&http)),
+            None
+        );
+    }
+
+    #[test]
+    fn desktop_proxy_falls_back_to_http_and_formats_ipv6() {
+        let empty_https = (String::new(), 0);
+        let http = ("::1".to_string(), 7890);
+        assert_eq!(
+            desktop_proxy_from_values("manual", Some(&empty_https), Some(&http)),
+            Some("http://[::1]:7890".to_string())
+        );
+    }
 
     fn subj(id: i64, name: &str, cn: &str) -> BangumiSubject {
         BangumiSubject {

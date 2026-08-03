@@ -214,7 +214,9 @@ class PlayerSettingsPage extends ConsumerWidget {
           const Text('解码方式'),
           const SizedBox(height: 2),
           Text(
-            '自动优先硬解，异常花屏或绿屏时可改用软件解码；重新进入播放器后生效',
+            Platform.isLinux
+                ? 'Linux 自动/硬解会请求 VAAPI/VDPAU 复制解码，并使用兼容的像素纹理输出；实际解码器取决于驱动与片源，重新进入播放器后生效'
+                : '自动优先硬解，异常花屏或绿屏时可改用软件解码；重新进入播放器后生效',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),

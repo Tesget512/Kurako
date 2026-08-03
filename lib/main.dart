@@ -38,9 +38,11 @@ Future<void> main() async {
   final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
   if (isDesktop) {
     await windowManager.ensureInitialized();
-    const options = WindowOptions(
-      size: Size(1280, 800),
-      minimumSize: Size(800, 600),
+    final options = WindowOptions(
+      size: Platform.isLinux ? const Size(1440, 900) : const Size(1280, 800),
+      minimumSize: Platform.isLinux
+          ? const Size(960, 640)
+          : const Size(800, 600),
       center: true,
       titleBarStyle: TitleBarStyle.hidden,
       // macOS-only: window_manager's Windows plugin ignores this flag

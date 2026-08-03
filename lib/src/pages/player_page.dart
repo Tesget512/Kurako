@@ -84,12 +84,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
   static VideoControllerConfiguration _decodeConfig() {
     // Read the persisted decode mode synchronously from the cached prefs value
-    // set at startup; default 'auto' keeps media_kit's platform defaults.
+    // set at startup. `enableHardwareAcceleration` controls media_kit_video's
+    // output texture renderer; it is independent from libmpv's `hwdec` option.
+    // Flutter 3.38+ can corrupt or crash the legacy Linux FlTextureGL path, so
+    // Linux renders into a stable pixel-buffer texture. Automatic/hardware mode
+    // still requests `auto-copy`, allowing VAAPI/VDPAU decoding while copying
+    // decoded frames into that output buffer. Other platforms retain the
+    // established media_kit GPU texture path.
     switch (decodeModeStartupValue) {
       case 'hw':
-        return const VideoControllerConfiguration(
-          enableHardwareAcceleration: true,
-          hwdec: 'auto',
+        return VideoControllerConfiguration(
+          enableHardwareAcceleration: !Platform.isLinux,
+          hwdec: Platform.isLinux ? 'auto-copy' : 'auto',
         );
       case 'sw':
         return const VideoControllerConfiguration(
@@ -97,7 +103,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           hwdec: 'no',
         );
       default:
-        return const VideoControllerConfiguration();
+        return Platform.isLinux
+            ? const VideoControllerConfiguration(
+                enableHardwareAcceleration: false,
+                hwdec: 'auto-copy',
+              )
+            : const VideoControllerConfiguration();
     }
   }
 
@@ -1672,7 +1683,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       seekOnDoubleTapLayoutTapsRatios: const [1, 2, 1],
       seekOnDoubleTapLayoutWidgetRatios: const [1, 2, 1],
       volumeGesture: true,
-      brightnessGesture: true,
+      // screen_brightness has no Linux implementation. Keep the established
+      // touch behavior everywhere else while avoiding a dead gesture or a
+      // MissingPluginException on Linux desktops.
+      brightnessGesture: !Platform.isLinux,
       seekGesture: true,
       controlsLocked: _controlsLocked,
       speedUpOnLongPress: true,

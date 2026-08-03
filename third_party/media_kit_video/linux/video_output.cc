@@ -205,12 +205,27 @@ VideoOutput* video_output_new(FlTextureRegistrar* texture_registrar,
                       gint32 pitch = 4 * (gint32)width;
                       mpv_render_param params[]{
                           {MPV_RENDER_PARAM_SW_SIZE, size},
+                          // mpv guarantees RGB in the first three bytes of
+                          // `rgb0`; the fourth byte is padding, not alpha.
+                          // It is normalized to opaque RGBA after rendering.
                           {MPV_RENDER_PARAM_SW_FORMAT, (void*)"rgb0"},
                           {MPV_RENDER_PARAM_SW_STRIDE, &pitch},
                           {MPV_RENDER_PARAM_SW_POINTER, self->pixel_buffer},
                           {MPV_RENDER_PARAM_INVALID, (void*)0},
                       };
                       mpv_render_context_render(self->render_context, params);
+                      // Flutter's FlPixelBufferTexture requires RGBA bytes,
+                      // while mpv's `rgb0` format leaves the fourth byte
+                      // uninitialized padding. Make the alpha channel opaque
+                      // before handing the buffer to Flutter; otherwise the
+                      // video becomes fully transparent over the blue page
+                      // background (especially visible with p010 sources).
+                      for (gint64 y = 0; y < height; ++y) {
+                        guint8* row = self->pixel_buffer + y * pitch;
+                        for (gint64 x = 0; x < width; ++x) {
+                          row[x * 4 + 3] = 255;
+                        }
+                      }
                       fl_texture_registrar_mark_texture_frame_available(
                           self->texture_registrar,
                           FL_TEXTURE(self->texture_sw));
