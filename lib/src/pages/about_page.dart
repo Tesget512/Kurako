@@ -81,7 +81,7 @@ class _AboutPageState extends State<AboutPage> {
           subtitle: FutureBuilder<PackageInfo>(
             future: _packageInfo,
             builder: (context, snapshot) {
-              final version = snapshot.data?.version ?? '1.0.1';
+              final version = snapshot.data?.version ?? '1.0.2';
               return Text('版本 $version\n编译时间：$kBuildTime');
             },
           ),
