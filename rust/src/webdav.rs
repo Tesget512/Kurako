@@ -173,6 +173,7 @@ async fn list_entries_with(
         anyhow::bail!("WebDAV PROPFIND 返回 HTTP {}", response.status());
     }
     let body = read_response_limited(response, MAX_PROPFIND_BYTES, SETUP_TIMEOUT).await?;
+    validate_listing_properties(&body)?;
     let responses = serde_xml_rs::from_reader::<_, ListMultiStatus>(body.as_slice())
         .context("WebDAV PROPFIND XML 无效")?
         .responses;
@@ -276,6 +277,65 @@ pub fn setup_commit(token: &str) -> Result<()> {
     Ok(())
 }
 
+/// allprop may report optional fields in a separate 404 propstat. Only
+/// successful resource type establishes whether this entry is a directory;
+/// failed core type/size properties cannot be treated as a complete snapshot.
+fn validate_listing_properties(bytes: &[u8]) -> Result<()> {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    let mut in_block = false;
+    let mut in_status = false;
+    let mut block_type = false;
+    let mut block_size = false;
+    let mut status = String::new();
+    let mut known_type = false;
+    loop {
+        match reader.read_event()? {
+            Event::Start(tag) => match tag.local_name().as_ref() {
+                b"response" => known_type = false,
+                b"propstat" => {
+                    in_block = true;
+                    block_type = false;
+                    block_size = false;
+                    status.clear();
+                }
+                b"status" if in_block => in_status = true,
+                b"resourcetype" if in_block => block_type = true,
+                b"getcontentlength" if in_block => block_size = true,
+                _ => {}
+            },
+            Event::Empty(tag) if in_block => match tag.local_name().as_ref() {
+                b"resourcetype" => block_type = true,
+                b"getcontentlength" => block_size = true,
+                _ => {}
+            },
+            Event::Text(text) if in_status => status.push_str(&text.decode()?),
+            Event::End(tag) => match tag.local_name().as_ref() {
+                b"status" => in_status = false,
+                b"propstat" => {
+                    let success = status
+                        .split_whitespace()
+                        .nth(1)
+                        .and_then(|code| code.parse::<u16>().ok())
+                        .is_some_and(|code| (200..300).contains(&code));
+                    if !success && (block_type || block_size) {
+                        anyhow::bail!("WebDAV 核心项目属性读取失败，保留既有索引");
+                    }
+                    known_type |= success && block_type;
+                    in_block = false;
+                }
+                b"response" if !known_type => {
+                    anyhow::bail!("WebDAV 项目缺少成功的资源类型，保留既有索引")
+                }
+                _ => {}
+            },
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn entries_from_responses(
     creds: &WebDavCreds,
     requested: &str,
@@ -289,20 +349,22 @@ fn entries_from_responses(
         if relative == requested {
             continue;
         }
-        let Some(prop) = response
+        let props = response
             .prop_stat
             .iter()
-            .find(|status| {
+            .filter(|status| {
                 status
                     .status
                     .split_whitespace()
                     .nth(1)
-                    .is_some_and(|v| v.starts_with('2'))
+                    .and_then(|code| code.parse::<u16>().ok())
+                    .is_some_and(|code| (200..300).contains(&code))
             })
             .map(|status| &status.prop)
-        else {
-            continue;
-        };
+            .collect::<Vec<_>>();
+        if props.is_empty() {
+            anyhow::bail!("WebDAV 目录项目读取失败，保留既有索引：{relative}");
+        }
         let name = relative.rsplit('/').next().unwrap_or(&relative).to_string();
         if name.is_empty() {
             continue;
@@ -310,8 +372,13 @@ fn entries_from_responses(
         entries.push(RemoteEntry {
             path: relative,
             name,
-            is_directory: prop.resource_type.collection.is_some(),
-            size: prop.content_length.unwrap_or(0),
+            is_directory: props
+                .iter()
+                .any(|prop| prop.resource_type.collection.is_some()),
+            size: props
+                .iter()
+                .find_map(|prop| prop.content_length)
+                .unwrap_or(0),
         });
     }
     entries.sort_by(|a, b| {
@@ -1082,6 +1149,53 @@ fn safe_leaf_name(name: &str) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn propfind_item_errors_reject_partial_deletion_snapshot() {
+        let creds = WebDavCreds {
+            base_url: "https://example.com/dav/".into(),
+            user: String::new(),
+            password: String::new(),
+            auth_mode: "anonymous".into(),
+            allow_insecure_tls: false,
+        };
+        for status in [
+            "HTTP/1.1 403 Forbidden",
+            "HTTP/1.1 404 Not Found",
+            "invalid 2oops",
+        ] {
+            let xml = format!(
+                r#"<multistatus xmlns="DAV:"><response><href>/dav/Anime/01.mkv</href><propstat><prop><resourcetype/><getcontentlength>100</getcontentlength></prop><status>HTTP/1.1 200 OK</status></propstat></response><response><href>/dav/Anime/hidden</href><propstat><prop><resourcetype/></prop><status>{status}</status></propstat></response></multistatus>"#
+            );
+            let parsed: ListMultiStatus = serde_xml_rs::from_str(&xml).unwrap();
+            assert!(validate_listing_properties(xml.as_bytes()).is_err());
+            let _ = parsed;
+        }
+        let xml = r#"<multistatus xmlns="DAV:"><response><href>/dav/Anime/01.mkv</href><propstat><prop><resourcetype/><getcontentlength>100</getcontentlength></prop><status>HTTP/1.1 200 OK</status></propstat></response></multistatus>"#;
+        let parsed: ListMultiStatus = serde_xml_rs::from_str(xml).unwrap();
+        validate_listing_properties(xml.as_bytes()).unwrap();
+        let entries = entries_from_responses(&creds, "Anime", parsed.responses).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].size, 100);
+    }
+
+    #[test]
+    fn propfind_optional_404_preserves_successful_type_and_size() {
+        let xml = r#"<multistatus xmlns="DAV:"><response><href>/dav/Anime/01.mkv</href><propstat><prop><resourcetype/><getcontentlength>100</getcontentlength></prop><status>HTTP/1.1 200 OK</status></propstat><propstat><prop><getetag/></prop><status>HTTP/1.1 404 Not Found</status></propstat></response></multistatus>"#;
+        validate_listing_properties(xml.as_bytes()).unwrap();
+        let parsed: ListMultiStatus = serde_xml_rs::from_str(xml).unwrap();
+        let creds = WebDavCreds {
+            base_url: "https://example.com/dav/".into(),
+            user: String::new(),
+            password: String::new(),
+            auth_mode: "anonymous".into(),
+            allow_insecure_tls: false,
+        };
+        let entries = entries_from_responses(&creds, "Anime", parsed.responses).unwrap();
+        assert_eq!(entries[0].size, 100);
+        let missing_type = xml.replace("<resourcetype/>", "");
+        assert!(validate_listing_properties(missing_type.as_bytes()).is_err());
+    }
 
     async fn spawn_range_server(
         body: &'static [u8],

@@ -8,7 +8,7 @@ import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scan_progress_sheet.dart';
-import '../widgets/window_caption.dart';
+import '../services/scan_coordinator.dart';
 import 'blacklist_page.dart';
 import 'detail_page.dart';
 
@@ -34,6 +34,12 @@ class LibraryPage extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('番剧库'),
+        bottom: ref.watch(scanCoordinatorProvider).visible
+            ? const PreferredSize(
+                preferredSize: Size.fromHeight(52),
+                child: ScanProgressSheet(),
+              )
+            : null,
         actions: [
           _sortMenu(context, ref, sort, grouping, pinCollected),
           IconButton(
@@ -42,6 +48,7 @@ class LibraryPage extends ConsumerWidget {
             onPressed: () => _syncCollections(context, ref),
           ),
           PopupMenuButton<String>(
+            enabled: !ref.watch(scanCoordinatorProvider).running,
             tooltip: '扫描',
             icon: const Icon(Icons.refresh),
             onSelected: (v) {
@@ -65,7 +72,7 @@ class LibraryPage extends ConsumerWidget {
                 child: ListTile(
                   leading: Icon(Icons.bolt_outlined),
                   title: Text('增量扫描'),
-                  subtitle: Text('只扫改动过的文件夹（快）'),
+                  subtitle: Text('列举全部目录，仅处理新增与变化文件'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -306,68 +313,9 @@ class LibraryPage extends ConsumerWidget {
     bool clearFirst = false,
     bool incremental = false,
   }) async {
-    final folders = await rust.listLibraryFolders();
-    if (folders.isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('请先在设置中添加番剧文件夹')));
-      }
-      return;
-    }
-    if (clearFirst) {
-      await rust.clearLibrary();
-    }
-    if (!context.mounted) return;
-    // HomePage renders its own WindowCaption (the 36px min/max/close title bar)
-    // inline at the top of the SAME route library_page lives in — there's no
-    // separate page route for it to push a dialog over. So the modal sheet's
-    // full-screen barrier below is inserted into that SAME Navigator's Overlay,
-    // stacking above the entire HomePage including that title bar, and blocks
-    // its drag gesture for as long as the sheet is up (isDismissible/enableDrag
-    // being false doesn't change this — the barrier still occupies the screen
-    // that whole time). Insert our own drag-only strip ABOVE the barrier (added
-    // to the Overlay right after the route so it stacks on top) so the window
-    // can still be repositioned — e.g. if it ended up off-screen and the "完成"
-    // button in the sheet is unreachable otherwise.
-    OverlayEntry? dragCatcher;
-    if (useCustomCaption) {
-      final overlay = Overlay.of(context);
-      dragCatcher = OverlayEntry(
-        builder: (_) => const Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: 36,
-          child: WindowDragArea(child: SizedBox.expand()),
-        ),
-      );
-      final sheetFuture = showModalBottomSheet(
-        context: context,
-        isDismissible: false,
-        enableDrag: false,
-        builder: (_) => ScanProgressSheet(incremental: incremental),
-      );
-      overlay.insert(dragCatcher);
-      await sheetFuture;
-      dragCatcher.remove();
-    } else {
-      await showModalBottomSheet(
-        context: context,
-        isDismissible: false,
-        enableDrag: false,
-        builder: (_) => ScanProgressSheet(incremental: incremental),
-      );
-    }
-    // Invalidating just the list left any already-open detail page (or one
-    // opened right after) showing pre-scan data: a scan can add/remove
-    // episodes or update match info for anime the family providers below
-    // already cached. Calling invalidate on the family provider itself
-    // (no id argument) invalidates every currently-alive instance, not just
-    // one — refreshing whichever anime the user is looking at too.
-    ref.invalidate(animeListProvider);
-    ref.invalidate(animeDetailProvider);
-    ref.invalidate(episodesProvider);
+    await ref
+        .read(scanCoordinatorProvider.notifier)
+        .start(incremental: incremental, clearFirst: clearFirst);
   }
 }
 

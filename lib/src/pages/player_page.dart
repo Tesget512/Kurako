@@ -22,6 +22,8 @@ import '../services/media_source.dart';
 import '../services/media_session.dart';
 import '../services/playback_metadata.dart';
 import '../state/providers.dart';
+import '../state/player_appearance.dart';
+import '../widgets/player_visuals.dart';
 import '../widgets/window_caption.dart';
 
 /// A video chapter marker parsed from mpv's `chapter-list`.
@@ -1656,6 +1658,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   // ---- Mobile controls (touch gestures) ----
 
   MaterialVideoControlsThemeData _mobileTheme() {
+    final appearance = ref.watch(playerAppearanceProvider);
     return MaterialVideoControlsThemeData(
       // The visual controls stay unified across touch and desktop, but a real
       // mouse follows desktop conventions: leaving the whole video hides the
@@ -1726,6 +1729,52 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         right: 10,
         bottom: 12,
       ),
+      bufferingIndicatorBuilder: (_) => const PlayerBufferingIndicator(),
+      controlsOverlayBuilder: (_) => PlayerActionRail(
+        locked: false,
+        takingScreenshot: _takingScreenshot,
+        onLock: () => _setControlsLocked(true),
+        onScreenshot: _takeScreenshot,
+      ),
+      verticalGestureIndicatorBuilder: (context, data) {
+        final brightness = data.kind == MaterialVerticalGestureKind.brightness;
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final padding = MediaQuery.paddingOf(context);
+            final bounds = Rect.fromLTRB(
+              padding.left + 8,
+              padding.top + 8,
+              constraints.maxWidth - padding.right - 8,
+              constraints.maxHeight - padding.bottom - 8,
+            );
+            final position =
+                data.position ??
+                Offset(
+                  brightness ? bounds.left + 24 : bounds.right - 24,
+                  bounds.center.dy,
+                );
+            final rect = playerLevelIndicatorRect(
+              position: position,
+              bounds: bounds,
+              brightness: brightness,
+            );
+            return Stack(
+              children: [
+                Positioned.fromRect(
+                  rect: rect,
+                  child: PlayerLevelIndicator(
+                    value: data.value,
+                    brightness: brightness,
+                    color: brightness
+                        ? appearance.brightness
+                        : appearance.volume,
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
       // Top bar: back + title + quick-seek + rate + episode drawer + overflow.
       topButtonBar: [Expanded(child: _readableTopBar())],
       // Do not put a large prev / pause / next group in the middle of the
@@ -1740,11 +1789,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     );
   }
 
-  Widget _readableBar({required Widget child}) => DefaultTextStyle.merge(
-    style: const TextStyle(
-      shadows: [Shadow(color: Color(0xBB000000), blurRadius: 4)],
+  Widget _readableBar({required Widget child}) => Material(
+    color: _cs.surfaceContainerHigh.withValues(alpha: 0.78),
+    borderRadius: BorderRadius.circular(24),
+    child: DefaultTextStyle.merge(
+      style: TextStyle(color: _cs.onSurface),
+      child: child,
     ),
-    child: child,
   );
 
   Widget _readableTopBar() => _readableBar(
@@ -1762,22 +1813,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
             onPressed: _enterPip,
           ),
         _rateButton(),
-        MaterialCustomButton(
-          icon: Icon(
-            _takingScreenshot
-                ? Icons.hourglass_top
-                : Icons.photo_camera_outlined,
-            color: Colors.white,
-          ),
-          onPressed: _takingScreenshot ? () {} : () => _takeScreenshot(),
-        ),
-        MaterialCustomButton(
-          icon: Icon(
-            _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
-            color: Colors.white,
-          ),
-          onPressed: () => _setControlsLocked(!_controlsLocked),
-        ),
         MaterialCustomButton(
           icon: const Icon(Icons.tune, color: Colors.white),
           onPressed: () => _openPanel(_Panel.menu),
@@ -1899,26 +1934,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     });
   }
 
-  Widget _buildUnlockControlsButton() => Align(
-    alignment: Alignment.centerLeft,
-    child: SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.only(left: 8),
-        child: Material(
-          color: Colors.transparent,
-          child: IconButton(
-            tooltip: '解锁播放器',
-            onPressed: () => _setControlsLocked(false),
-            icon: const Icon(
-              Icons.lock_outline,
-              color: Colors.white70,
-              size: 24,
-              shadows: [Shadow(color: Colors.black, blurRadius: 4)],
-            ),
-          ),
-        ),
-      ),
-    ),
+  Widget _buildUnlockControlsButton() => PlayerActionRail(
+    locked: true,
+    onLock: () => _setControlsLocked(false),
+    onScreenshot: _takeScreenshot,
   );
 
   /// Windows-touch fullscreen toggle; icon tracks [_fullscreen] live.
@@ -2443,16 +2462,20 @@ class _PlayerPlayPauseButtonState extends State<_PlayerPlayPauseButton>
     child: SizedBox(
       width: 36,
       height: 30,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => widget.onTap(),
-        child: Center(
-          child: AnimatedIcon(
-            icon: AnimatedIcons.play_pause,
-            progress: _animation,
-            color: Colors.white,
-            size: 27,
-            semanticLabel: _playing ? '暂停' : '播放',
+      child: Material(
+        color: Theme.of(context).colorScheme.primaryContainer,
+        shape: const StadiumBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: () => widget.onTap(),
+          child: Center(
+            child: AnimatedIcon(
+              icon: AnimatedIcons.play_pause,
+              progress: _animation,
+              color: Theme.of(context).colorScheme.onPrimaryContainer,
+              size: 27,
+              semanticLabel: _playing ? '暂停' : '播放',
+            ),
           ),
         ),
       ),
@@ -2481,6 +2504,8 @@ class _PlaybackInfoSheet extends StatefulWidget {
 class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
   Timer? _timer;
   String _hwdec = '…';
+  final Map<String, String> _renderInfo = {};
+  bool _refreshing = false;
   double? _audioBitrateProp;
   double? _videoBitrateProp;
   String? _containerFormat;
@@ -2499,34 +2524,50 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
   }
 
   Future<void> _refresh() async {
+    if (_refreshing) return;
+    _refreshing = true;
     try {
-      final hw =
-          await (widget.player.platform as dynamic)?.getProperty(
-                'hwdec-current',
-              )
-              as String?;
-      if (hw != null && hw.isNotEmpty) _hwdec = hw;
-    } catch (_) {}
-    _audioBitrateProp = await _numericProperty('audio-bitrate');
-    _videoBitrateProp = await _numericProperty('video-bitrate');
-    _containerFormat = await _stringProperty('file-format');
-    _videoCodecProp = await _stringProperty('video-codec');
-    _audioCodecProp = await _stringProperty('audio-codec');
-    if (widget.proxySourceType != null) {
-      try {
-        final bytes = switch (widget.proxySourceType) {
-          'smb' => await rust.smbProxyStats(),
-          'webdav' => await rust.webdavProxyStats(),
-          _ => BigInt.zero,
-        };
-        if (_lastBytes != null) {
-          _speedBps = (bytes - _lastBytes!).toDouble();
+      _hwdec = await _stringProperty('hwdec-current') ?? '未知';
+      for (final property in const {
+        'mpv-version': 'mpv 版本',
+        'current-vo': '视频输出',
+        'video-sync': '同步策略（请求）',
+        'display-sync-active': '显示同步（实际）',
+        'interpolation': '插帧（请求）',
+        'avsync': '音视频时差（秒）',
+        'frame-drop-count': '输出丢帧累计',
+        'decoder-frame-drop-count': '解码丢帧累计',
+      }.entries) {
+        final value = await _stringProperty(property.key);
+        if (value == null) {
+          _renderInfo.remove(property.value);
+        } else {
+          _renderInfo[property.value] = value;
         }
-        _lastBytes = bytes;
-        _totalBytes = bytes;
-      } catch (_) {}
+      }
+      _audioBitrateProp = await _numericProperty('audio-bitrate');
+      _videoBitrateProp = await _numericProperty('video-bitrate');
+      _containerFormat = await _stringProperty('file-format');
+      _videoCodecProp = await _stringProperty('video-codec');
+      _audioCodecProp = await _stringProperty('audio-codec');
+      if (widget.proxySourceType != null) {
+        try {
+          final bytes = switch (widget.proxySourceType) {
+            'smb' => await rust.smbProxyStats(),
+            'webdav' => await rust.webdavProxyStats(),
+            _ => BigInt.zero,
+          };
+          if (_lastBytes != null) {
+            _speedBps = (bytes - _lastBytes!).toDouble();
+          }
+          _lastBytes = bytes;
+          _totalBytes = bytes;
+        } catch (_) {}
+      }
+      if (mounted) setState(() {});
+    } finally {
+      _refreshing = false;
     }
-    if (mounted) setState(() {});
   }
 
   Future<String?> _stringProperty(String name) async {
@@ -2602,7 +2643,16 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
       ('视频码率', formatMediaBitrate(videoBitrate)),
       if (videoTrack?.fps case final fps? when fps > 0)
         ('帧率', '${fps.toStringAsFixed(3)} FPS'),
-      ('解码方式', _hwdec == 'no' || _hwdec == '' ? '软件解码' : '硬件解码（$_hwdec）'),
+      (
+        '解码方式',
+        _hwdec == 'no'
+            ? '软件解码'
+            : _hwdec == '未知' || _hwdec == '…'
+            ? '未知'
+            : '硬件解码（$_hwdec）',
+      ),
+      ..._renderInfo.entries.map((entry) => (entry.key, entry.value)),
+      ('纹理渲染后端', '实际后端未由插件上报'),
       if (vp.pixelformat != null) ('像素格式', vp.pixelformat!),
       if (hwActive) ('硬解像素格式', vp.hwPixelformat!),
       if (vp.aspect != null) ('宽高比', vp.aspect!.toStringAsFixed(3)),

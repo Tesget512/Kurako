@@ -2,8 +2,10 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../state/player_appearance.dart';
+
 const configurationBackupKind = 'kurako.configuration';
-const configurationBackupSchemaVersion = 5;
+const configurationBackupSchemaVersion = 6;
 const _legacyConfigurationBackupSchemaVersion = 1;
 const _accountAndSmbSchemaVersion = 2;
 const _webDavSchemaVersion = 4;
@@ -35,7 +37,7 @@ const _portableSettingsV3 = <String, _SettingDefinition>{
   'touch_mode_player': _SettingDefinition(false, _isBool),
   'use_system_font': _SettingDefinition(false, _isBool),
   'decode_mode': _SettingDefinition('auto', _decodeModeValidator),
-  'bangumi_mirror': _SettingDefinition(true, _isBool),
+  'bangumi_mirror': _SettingDefinition(false, _isBool),
   'use_external_player': _SettingDefinition(false, _isBool),
   'super_resolution_mode': _SettingDefinition('off', _superResolutionValidator),
 };
@@ -50,9 +52,21 @@ const _portableSettingsV4 = <String, _SettingDefinition>{
   'gesture_seek_duration_sec': _SettingDefinition(10, _seekDurationValidator),
 };
 
-const _portableSettings = <String, _SettingDefinition>{
+const _portableSettingsV5 = <String, _SettingDefinition>{
   ..._portableSettingsV4,
   'theme_mode': _SettingDefinition('system', _themeModeValidator),
+};
+
+const _portableSettings = <String, _SettingDefinition>{
+  ..._portableSettingsV5,
+  playerBrightnessColorKey: _SettingDefinition(
+    defaultPlayerBrightnessColor,
+    _playerColorValidator,
+  ),
+  playerVolumeColorKey: _SettingDefinition(
+    defaultPlayerVolumeColor,
+    _playerColorValidator,
+  ),
 };
 
 const _accountFields = <String, _SettingDefinition>{
@@ -97,6 +111,8 @@ const _webDavPreferenceKeys = <String, String>{
   'allowInsecureTls': 'webdav_allow_insecure_tls',
 };
 
+bool _playerColorValidator(Object value) =>
+    _isIntInRange(value, 0xFF000000, 0xFFFFFFFF);
 bool _librarySortValidator(Object value) => _isIntInRange(value, 0, 5);
 bool _themeSeedValidator(Object value) => _isIntInRange(value, 0, 7);
 bool _seekDurationValidator(Object value) => _isIntInRange(value, 5, 90);
@@ -224,6 +240,7 @@ class ConfigurationBackupDocument {
         schemaVersion != _accountAndSmbSchemaVersion &&
         schemaVersion != 3 &&
         schemaVersion != _webDavSchemaVersion &&
+        schemaVersion != 5 &&
         schemaVersion != configurationBackupSchemaVersion) {
       throw const FormatException('不支持此配置文件版本');
     }
@@ -236,6 +253,7 @@ class ConfigurationBackupDocument {
       decoded['settings'],
       definitions: switch (schemaVersion) {
         configurationBackupSchemaVersion => _portableSettings,
+        5 => _portableSettingsV5,
         _webDavSchemaVersion => _portableSettingsV4,
         _ => _portableSettingsV3,
       },

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../build_info.dart';
+import '../state/update_provider.dart';
 import '../widgets/window_caption.dart';
 
 /// Product and attribution information kept out of the operational settings
@@ -81,11 +83,14 @@ class _AboutPageState extends State<AboutPage> {
           subtitle: FutureBuilder<PackageInfo>(
             future: _packageInfo,
             builder: (context, snapshot) {
-              final version = snapshot.data?.version ?? '1.0.2';
-              return Text('版本 $version\n编译时间：$kBuildTime');
+              final version = snapshot.data?.version;
+              return Text(
+                '${version == null ? '版本读取中' : '版本 $version'}\n编译时间：$kBuildTime',
+              );
             },
           ),
         ),
+        const _UpdateCheckSection(),
         const Divider(height: 32),
         ListTile(
           contentPadding: EdgeInsets.zero,
@@ -112,6 +117,75 @@ class _AboutPageState extends State<AboutPage> {
       ],
     ),
   );
+}
+
+class _UpdateCheckSection extends ConsumerWidget {
+  const _UpdateCheckSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(updateCheckProvider);
+    final notifier = ref.read(updateCheckProvider.notifier);
+    final statusText = switch (state.status) {
+      UpdateCheckStatus.idle => '启动时静默检查 GitHub 最新稳定版本。',
+      UpdateCheckStatus.checking => '正在检查 GitHub 最新稳定版本…',
+      UpdateCheckStatus.noRelease => '未找到公开的稳定版本。',
+      UpdateCheckStatus.upToDate =>
+        '当前版本 ${state.result!.currentVersion} 已是最新。',
+      UpdateCheckStatus.available =>
+        '发现新版本 ${state.result!.release!.tagName}（当前 ${state.result!.currentVersion}）',
+      UpdateCheckStatus.failed => state.failureMessage ?? '检查失败，请重试。',
+    };
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.system_update_alt),
+          title: const Text('检查更新'),
+          subtitle: Text('$statusText\n只提示并跳转 Release 页面，不会自动下载或安装。'),
+        ),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            OutlinedButton.icon(
+              onPressed: state.status == UpdateCheckStatus.checking
+                  ? null
+                  : notifier.checkManually,
+              icon: state.status == UpdateCheckStatus.checking
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+              label: Text(
+                state.status == UpdateCheckStatus.checking
+                    ? '正在检查'
+                    : state.status == UpdateCheckStatus.failed
+                    ? '重试'
+                    : '检查更新',
+              ),
+            ),
+            if (state.status == UpdateCheckStatus.available)
+              FilledButton.icon(
+                onPressed: () async {
+                  final opened = await notifier.openRelease();
+                  if (!opened && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('无法打开 Release 页面，请重试')),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('查看新版本'),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 class _Acknowledgements extends StatelessWidget {
@@ -141,10 +215,7 @@ class _Acknowledgements extends StatelessWidget {
       ),
       _AcknowledgementGroup(
         title: '数据与网络服务',
-        entries: [
-          'Bangumi 番组计划 — 番剧元数据与评分',
-          'bangumi-proxy（Yuri-NagaSaki）— 大陆可达镜像',
-        ],
+        entries: ['Bangumi 番组计划 — 番剧元数据与评分', 'Mirrox（bangumi.vip）— 可选镜像，开启需验证'],
       ),
       _AcknowledgementGroup(
         title: '跨平台基础',

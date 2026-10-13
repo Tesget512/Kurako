@@ -5,20 +5,26 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
 const BASE_OFFICIAL: &str = "https://api.bgm.tv";
-/// Soyorin's public bangumi-proxy instance (github.com/Yuri-NagaSaki/bangumi-proxy):
-/// a transparent host-swap reverse proxy reachable from mainland China. Paths
-/// and the Authorization header pass through unchanged; JSON image URLs are
-/// rewritten by the proxy to its image host.
-const BASE_MIRROR: &str = "https://bgmapi.anibt.net";
+/// Public, read-only Bangumi mirror. Account/OAuth traffic always stays official.
+pub const BASE_MIRROR: &str = "https://api.bangumi.vip";
+pub const IMAGE_MIRROR_HOST: &str = "lain.bangumi.vip";
 /// OAuth stays on the official domain: the login flow needs the real site's
 /// cookies and the token endpoint validates the registered redirect URI.
 const OAUTH_BASE: &str = "https://bgm.tv/oauth";
 
-/// Whether API calls go through the mirror (default on; toggled from settings).
-static MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+/// Mirror is opt-in and only becomes enabled after an application-side probe.
+static MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_mirror(enabled: bool) {
-    MIRROR.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    let guard = MIRROR_VERIFICATION.lock().unwrap();
+    let verified = guard
+        .as_ref()
+        .is_some_and(|v| v.api_verified && v.image_verified);
+    MIRROR.store(enabled && verified, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn mirror_is_enabled() -> bool {
+    MIRROR.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn api_base() -> &'static str {
@@ -29,6 +35,231 @@ fn api_base() -> &'static str {
     }
 }
 const USER_AGENT: &str = "Kurako/1.0";
+const MIRROR_FAILURE: &str = "Bangumi 镜像验证已失效或请求被拦截，请在设置中重新验证或关闭镜像回退官方；请确保 WebView 与应用使用相同网络/代理出口（UA/IP 改变会使验证失效）。";
+
+// Deliberately no Debug/Serialize: these are local challenge credentials, not OAuth.
+#[derive(Clone)]
+struct MirrorVerification {
+    generation: u64,
+    api_cookie: String,
+    image_cookie: String,
+    user_agent: String,
+    api_verified: bool,
+    image_verified: bool,
+}
+static MIRROR_VERIFICATION: Lazy<Mutex<Option<MirrorVerification>>> =
+    Lazy::new(|| Mutex::new(None));
+static MIRROR_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn validate_challenge_cookie(cookie: &str) -> Result<()> {
+    if cookie.len() > 16384 || cookie.contains(['\r', '\n']) {
+        anyhow::bail!("镜像验证 Cookie 无效，请重新验证。");
+    }
+    if cookie.is_empty() {
+        return Ok(());
+    }
+    for pair in cookie.split(';') {
+        let Some((name, value)) = pair.trim().split_once('=') else {
+            anyhow::bail!("镜像验证 Cookie 无效，请重新验证。");
+        };
+        if !matches!(
+            name,
+            "techaro.lol-anubis-auth" | "techaro.lol-anubis-cookie-verification"
+        ) || value.is_empty()
+            || !value
+                .bytes()
+                .all(|b| (0x21..=0x7e).contains(&b) && b != b';')
+        {
+            anyhow::bail!("镜像验证只允许 Anubis Cookie，不接受账户凭据。");
+        }
+    }
+    Ok(())
+}
+
+pub fn configure_mirror_verification(
+    api_cookie: String,
+    image_cookie: String,
+    user_agent: String,
+) -> Result<()> {
+    validate_challenge_cookie(&api_cookie)?;
+    validate_challenge_cookie(&image_cookie)?;
+    if user_agent.trim().is_empty()
+        || user_agent.len() > 2048
+        || reqwest::header::HeaderValue::from_str(&user_agent).is_err()
+    {
+        anyhow::bail!("无法读取有效 WebView User-Agent，请关闭镜像回退官方。");
+    }
+    let mut guard = MIRROR_VERIFICATION.lock().unwrap();
+    MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
+    let api_verified = guard.as_ref().is_some_and(|v| {
+        v.api_cookie == api_cookie && v.user_agent == user_agent && v.api_verified
+    });
+    *guard = Some(MirrorVerification {
+        generation: MIRROR_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        api_cookie,
+        image_cookie,
+        user_agent,
+        api_verified,
+        image_verified: false,
+    });
+    Ok(())
+}
+
+pub fn clear_mirror_verification() {
+    let mut guard = MIRROR_VERIFICATION.lock().unwrap();
+    MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
+    *guard = None;
+}
+
+fn proof_headers(
+    req: reqwest::RequestBuilder,
+    proof: &MirrorVerification,
+    image: bool,
+) -> reqwest::RequestBuilder {
+    let cookie = if image {
+        &proof.image_cookie
+    } else {
+        &proof.api_cookie
+    };
+    let req = req.header(reqwest::header::USER_AGENT, &proof.user_agent);
+    if cookie.is_empty() {
+        req
+    } else {
+        req.header(reqwest::header::COOKIE, cookie)
+    }
+}
+
+fn mirror_headers(req: reqwest::RequestBuilder, image: bool) -> reqwest::RequestBuilder {
+    let guard = MIRROR_VERIFICATION.lock().unwrap();
+    if let Some(v) = guard.as_ref() {
+        let cookie = if image {
+            &v.image_cookie
+        } else {
+            &v.api_cookie
+        };
+        let req = req.header(reqwest::header::USER_AGENT, &v.user_agent);
+        if cookie.is_empty() {
+            req
+        } else {
+            req.header(reqwest::header::COOKIE, cookie)
+        }
+    } else {
+        req
+    }
+}
+
+/// Force the mirror regardless of the preference, without OAuth credentials.
+/// Returns a validated image probe URL from this actual subject response.
+pub async fn probe_mirror() -> Result<String> {
+    let proof = MIRROR_VERIFICATION
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!(MIRROR_FAILURE))?;
+    let c = client()?;
+    let mut resp = send_with_backoff(
+        || proof_headers(c.get(format!("{BASE_MIRROR}/v0/subjects/1")), &proof, false),
+        "bangumi mirror probe",
+    )
+    .await?;
+    if !resp.status().is_success() {
+        anyhow::bail!(MIRROR_FAILURE);
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| anyhow::anyhow!(MIRROR_FAILURE))?
+    {
+        if body.len().saturating_add(chunk.len()) > 1024 * 1024 {
+            anyhow::bail!("镜像 API 响应超过验证大小限制，未开启镜像。");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| anyhow::anyhow!(MIRROR_FAILURE))?;
+    if value["id"].as_i64() != Some(1) {
+        anyhow::bail!(MIRROR_FAILURE);
+    }
+    let image = ["large", "common", "medium", "small"]
+        .iter()
+        .find_map(|key| value["images"][*key].as_str())
+        .ok_or_else(|| anyhow::anyhow!("镜像 API 返回有效条目但无可验证封面，未开启镜像。"))?;
+    let mut url = reqwest::Url::parse(image).context("镜像封面地址无效")?;
+    if !matches!(
+        url.host_str(),
+        Some("lain.bgm.tv" | "bgmimg.anibt.net" | "lain.bangumi.vip")
+    ) || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        anyhow::bail!("镜像返回未知封面域名，未开启镜像。");
+    }
+    url.set_scheme("https")
+        .map_err(|_| anyhow::anyhow!("镜像封面协议无效"))?;
+    url.set_host(Some(IMAGE_MIRROR_HOST))?;
+    let mut guard = MIRROR_VERIFICATION.lock().unwrap();
+    let v = guard
+        .as_mut()
+        .filter(|v| v.generation == proof.generation)
+        .ok_or_else(|| anyhow::anyhow!("镜像验证配置已改变，请重新开始验证。"))?;
+    v.api_verified = true;
+    Ok(url.to_string())
+}
+
+pub async fn probe_mirror_image(image_url: String) -> Result<()> {
+    let proof = MIRROR_VERIFICATION
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|v| v.api_verified)
+        .ok_or_else(|| anyhow::anyhow!(MIRROR_FAILURE))?;
+    let url = reqwest::Url::parse(&image_url).context("镜像封面地址无效")?;
+    if url.scheme() != "https"
+        || url.host_str() != Some(IMAGE_MIRROR_HOST)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        anyhow::bail!("镜像封面验证仅允许已确认的镜像域名。");
+    }
+    let c = client()?;
+    let mut resp = send_with_backoff(
+        || proof_headers(c.get(url.clone()), &proof, true),
+        "bangumi mirror image probe",
+    )
+    .await?;
+    let is_image = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("image/"));
+    if !resp.status().is_success() || !is_image {
+        anyhow::bail!(MIRROR_FAILURE);
+    }
+    // Limit the actual decompressed body, not only Content-Length.
+    let mut bytes = 0usize;
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| anyhow::anyhow!(MIRROR_FAILURE))?
+    {
+        bytes = bytes.saturating_add(chunk.len());
+        if bytes > 8 * 1024 * 1024 {
+            anyhow::bail!("镜像封面超过验证大小限制，未开启镜像。");
+        }
+    }
+    if bytes == 0 {
+        anyhow::bail!(MIRROR_FAILURE);
+    }
+    let mut guard = MIRROR_VERIFICATION.lock().unwrap();
+    let v = guard
+        .as_mut()
+        .filter(|v| v.generation == proof.generation && v.api_verified)
+        .ok_or_else(|| anyhow::anyhow!("镜像验证配置已改变，请重新开始验证。"))?;
+    v.image_verified = true;
+    Ok(())
+}
 
 // Bangumi OAuth application credentials. The real values live in the
 // git-ignored `secrets.rs` (copy `secrets.rs.example` → `secrets.rs`). A desktop
@@ -68,7 +299,7 @@ async fn current_username() -> Result<String> {
     }
     let client = client()?;
     let resp = send_with_backoff(
-        || auth(client.get(format!("{}/v0/me", api_base()))),
+        || auth(client.get(format!("{}/v0/me", BASE_OFFICIAL))),
         "bangumi me",
     )
     .await?;
@@ -107,6 +338,19 @@ fn client() -> Result<reqwest::Client> {
 
     let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
+        // Mirror challenge credentials never follow a Location. Preserve the
+        // existing bounded redirect behavior for official API/OAuth traffic.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let mirror = attempt
+                .previous()
+                .iter()
+                .any(|url| matches!(url.host_str(), Some("api.bangumi.vip" | "lain.bangumi.vip")));
+            if mirror || attempt.previous().len() >= 10 {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(30))
         // Keep idle connections warm across the burst of scan requests.
@@ -269,6 +513,18 @@ fn read_windows_proxy() -> Option<String> {
 }
 
 fn auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    // Inspect the actual URL, rather than the mutable preference, so concurrent
+    // toggles cannot leak a bearer to an already-created mirror request.
+    let host = req
+        .try_clone()
+        .and_then(|r| r.build().ok())
+        .and_then(|r| r.url().host_str().map(str::to_owned));
+    if host.as_deref() == Some("api.bangumi.vip") {
+        return mirror_headers(req, false);
+    }
+    if host.as_deref() != Some("api.bgm.tv") {
+        return req;
+    }
     let tok = TOKEN.lock().unwrap().clone();
     match tok {
         Some(t) => req.bearer_auth(t),
@@ -420,10 +676,34 @@ async fn send_with_backoff(
     what: &str,
 ) -> Result<reqwest::Response> {
     for attempt in 0..4 {
-        let resp = mk()
-            .send()
-            .await
-            .with_context(|| format!("{what} request"))?;
+        let builder = mk();
+        let mirror_request = builder
+            .try_clone()
+            .and_then(|r| r.build().ok())
+            .is_some_and(|r| {
+                r.url()
+                    .host_str()
+                    .is_some_and(|h| h == "api.bangumi.vip" || h == IMAGE_MIRROR_HOST)
+            });
+        let resp = builder.send().await.map_err(|e| {
+            if mirror_request {
+                anyhow::anyhow!(MIRROR_FAILURE)
+            } else {
+                anyhow::Error::new(e).context(format!("{what} request"))
+            }
+        })?;
+        let mirror = resp
+            .url()
+            .host_str()
+            .is_some_and(|host| host == "api.bangumi.vip" || host == IMAGE_MIRROR_HOST);
+        let html = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.to_ascii_lowercase().contains("text/html"));
+        if mirror && (resp.status().as_u16() == 403 || html) {
+            anyhow::bail!(MIRROR_FAILURE);
+        }
         if resp.status().as_u16() != 429 {
             return Ok(resp);
         }
@@ -1162,7 +1442,7 @@ pub async fn all_collections() -> Result<Vec<(i64, i64)>> {
     loop {
         let url = format!(
             "{}/v0/users/{username}/collections?subject_type=2&limit={limit}&offset={offset}",
-            api_base()
+            BASE_OFFICIAL
         );
         let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi all_collections").await?;
         if !resp.status().is_success() {
@@ -1196,7 +1476,7 @@ pub async fn collection_status(subject_id: i64) -> Result<Option<i64>> {
     let username = current_username().await?;
     let url = format!(
         "{}/v0/users/{username}/collections/{subject_id}",
-        api_base()
+        BASE_OFFICIAL
     );
     let client = client()?;
     let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi collection").await?;
@@ -1220,7 +1500,7 @@ pub async fn update_collection(subject_id: i64, collection_type: i64) -> Result<
     if !has_token() {
         anyhow::bail!("no token set");
     }
-    let url = format!("{}/v0/users/-/collections/{subject_id}", api_base());
+    let url = format!("{}/v0/users/-/collections/{subject_id}", BASE_OFFICIAL);
     let body = serde_json::json!({ "type": collection_type });
     let client = client()?;
     let resp = send_with_backoff(
@@ -1296,6 +1576,39 @@ pub async fn subject_episode_titles(subject_id: i64, limit: u32) -> Result<Vec<E
 #[cfg(test)]
 mod match_tests {
     use super::*;
+
+    #[test]
+    fn mirror_only_accepts_anubis_cookie_headers() {
+        assert!(validate_challenge_cookie("").is_ok());
+        assert!(validate_challenge_cookie(
+            "techaro.lol-anubis-auth=proof; techaro.lol-anubis-cookie-verification=ok"
+        )
+        .is_ok());
+        assert!(validate_challenge_cookie("session=account").is_err());
+        assert!(
+            validate_challenge_cookie("techaro.lol-anubis-auth=proof\r\nX-Injected: value")
+                .is_err()
+        );
+        assert!(validate_challenge_cookie("techaro.lol-anubis-auth=").is_err());
+    }
+
+    #[test]
+    fn mirror_and_unknown_requests_never_receive_bearer() {
+        let c = reqwest::Client::new();
+        let mirror = auth(c.get(format!("{BASE_MIRROR}/v0/subjects/1")))
+            .build()
+            .unwrap();
+        assert!(!mirror
+            .headers()
+            .contains_key(reqwest::header::AUTHORIZATION));
+        let unknown = auth(c.get("https://example.invalid/v0/me"))
+            .build()
+            .unwrap();
+        assert!(!unknown
+            .headers()
+            .contains_key(reqwest::header::AUTHORIZATION));
+        assert!(!unknown.headers().contains_key(reqwest::header::COOKIE));
+    }
 
     #[test]
     fn desktop_proxy_prefers_https_and_requires_manual_mode() {

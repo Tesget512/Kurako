@@ -11,7 +11,7 @@
 #define AppName "Kurako"
 #define AppNameEn "Kurako"
 #ifndef AppVersion
-#define AppVersion "1.0.2"
+#define AppVersion "1.1.0"
 #endif
 #define AppPublisher "Tesget512"
 #define AppExeName "kurako.exe"
@@ -44,7 +44,7 @@ VersionInfoDescription=Kurako Windows 安装程序
 VersionInfoCompany={#AppPublisher}
 VersionInfoProductName={#AppName}
 VersionInfoCopyright=Copyright (C) 2026 Tesget512 and Kurako contributors
-VersionInfoVersion=1.0.2.0
+VersionInfoVersion=1.1.0.0
 VersionInfoTextVersion={#AppVersion}
 
 [Languages]

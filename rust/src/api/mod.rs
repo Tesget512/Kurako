@@ -1,3 +1,6 @@
+pub mod mirror;
+pub mod update;
+
 use crate::frb_generated::StreamSink;
 use crate::models::{
     Anime, BangumiSubject, BlacklistEntry, DiscoveredServer, DownloadEntry, DownloadProgress,
@@ -343,21 +346,14 @@ pub fn enumerate_local_folder(folder_id: i64, incremental: bool) -> Result<ScanF
     if scan_control::is_cancelled() {
         return Err("扫描已取消".to_string());
     }
+    let _ = incremental; // Enumeration is always complete; diffing happens in Rust.
     let folder = db::list_folders()
         .map_err(|error| error.to_string())?
         .into_iter()
         .find(|folder| folder.id == folder_id && folder.source_type == "local")
         .ok_or_else(|| "本地番剧文件夹不存在".to_string())?;
-    let prefix = vec![folder.path.clone()];
-    let mtime = scan::folder_max_mtime(&folder.path);
-    if incremental && mtime > 0 && folder.last_scanned.is_some_and(|last| mtime <= last) {
-        reconcile_existing_folder(folder.id, "local", &prefix)?;
-        return Ok(ScanFileBatch {
-            files: Vec::new(),
-            skipped_unchanged: true,
-        });
-    }
     let files = scan::enumerate_library(&folder.path)
+        .map_err(|error| error.to_string())?
         .into_iter()
         .map(|file| crate::models::ScannedFile {
             uri: file.uri,
@@ -375,9 +371,8 @@ pub fn enumerate_local_folder(folder_id: i64, incremental: bool) -> Result<ScanF
 /// Scan all library folders, group files into anime, then auto-match each new
 /// anime against Bangumi. Emits ScanProgress events throughout.
 ///
-/// When `incremental` is true, folders whose newest file/dir mtime is older than
-/// their last recorded scan time are skipped entirely — dramatically faster on
-/// large libraries where only a few folders changed.
+/// Incremental scans still enumerate every directory; only changed recognition
+/// inputs are regrouped. Complete snapshots are required to detect removals.
 pub fn scan_and_match(sink: StreamSink<ScanProgress>, incremental: bool) -> Result<(), String> {
     scan_session_begin(incremental)?;
     let result = (|| {
@@ -437,7 +432,18 @@ fn process_scanned_folder(
             message: format!("按文件夹优先级跳过 {skipped_duplicates} 个同名文件"),
         });
     }
-    let scanned: Vec<scan::ScannedFile> = files
+    // Import persisted intent before automatic routing (upgrade/clear recovery).
+    import_scan_manual_matches(&files, &source_type)?;
+    if scan_control::is_cancelled() {
+        return Err("扫描已取消".to_string());
+    }
+    let changed = db::changed_scan_files(
+        folder_id,
+        &files,
+        scan_control::is_incremental() && had_scan_baseline,
+    )
+    .map_err(|error| error.to_string())?;
+    let scanned = changed
         .iter()
         .map(|f| scan::ScannedFile {
             uri: f.uri.clone(),
@@ -447,8 +453,6 @@ fn process_scanned_folder(
         })
         .collect();
     let groups = scan::group_files(scanned);
-    // Scope deletion-pruning to this folder's locator prefix so files removed
-    // from the SMB share / SAF tree are dropped from the library too.
     let prefixes = prune_prefixes_for(folder_id, &source_type);
     process_groups(
         groups,
@@ -456,9 +460,9 @@ fn process_scanned_folder(
         &source_type,
         prefixes,
         mark_new_files,
+        &files,
         sink,
-    )?;
-    db::set_folder_scanned(folder_id, now_secs()).map_err(|error| error.to_string())
+    )
 }
 
 pub fn finish_scan_and_match(sink: StreamSink<ScanProgress>) -> Result<(), String> {
@@ -978,85 +982,105 @@ fn process_groups(
     source_type: &str,
     prune_prefixes: Vec<String>,
     mark_new_files: bool,
+    files: &[crate::models::ScannedFile],
     sink: &StreamSink<ScanProgress>,
 ) -> Result<(), String> {
-    let emit = |stage: &str, current: i64, total: i64, message: &str| {
-        let _ = sink.add(ScanProgress {
-            stage: stage.to_string(),
-            current,
-            total,
-            message: message.to_string(),
-        });
-    };
-
-    // Drop blacklisted items before touching the DB: whole groups blocked by
-    // title, individual files blocked by path. Blocked entries thus never
-    // reappear on rescan.
+    if scan_control::is_cancelled() {
+        return Err("扫描已取消".to_string());
+    }
     let blocked_titles = db::blacklist_values("anime").map_err(|e| e.to_string())?;
     let blocked_files = db::blacklist_values("file").map_err(|e| e.to_string())?;
-    let groups: Vec<scan::AnimeGroup> = groups
+    let mut excluded = blocked_files;
+    let groups = groups
         .into_iter()
-        .filter(|g| !blocked_titles.contains(&g.title))
-        .map(|mut g| {
-            g.files.retain(|f| !blocked_files.contains(&f.path));
-            g
+        .filter_map(|mut group| {
+            if blocked_titles.contains(&group.title) {
+                excluded.extend(group.files.iter().map(|f| f.path.clone()));
+                return None;
+            }
+            group.files.retain(|f| !excluded.contains(&f.path));
+            (!group.files.is_empty()).then_some(group)
         })
-        .filter(|g| !g.files.is_empty())
-        .collect();
+        .collect::<Vec<_>>();
+    let kept = files
+        .iter()
+        .filter(|f| !excluded.contains(&f.uri))
+        .cloned()
+        .collect::<Vec<_>>();
+    let changed_count = groups.iter().map(|g| g.files.len()).sum::<usize>();
+    let removed = db::apply_scan_folder(
+        folder_id,
+        source_type,
+        &prune_prefixes,
+        &kept,
+        &groups,
+        mark_new_files,
+        now_secs(),
+    )
+    .map_err(|error| error.to_string())?;
+    let _ = sink.add(ScanProgress {
+        stage: "scanning".to_string(),
+        current: changed_count as i64,
+        total: changed_count as i64,
+        message: format!(
+            "检查 {} 个视频，处理 {changed_count} 个新增/变化文件，清理 {removed} 个失效文件",
+            files.len()
+        ),
+    });
+    Ok(())
+}
 
-    let total = groups.len() as i64;
-    for (i, g) in groups.iter().enumerate() {
+/// Configuration is consulted before upserts, so cancellation never leaves
+/// old manual rows temporarily moved by the automatic grouper.
+fn import_scan_manual_matches(
+    files: &[crate::models::ScannedFile],
+    source_type: &str,
+) -> Result<(), String> {
+    let present = files
+        .iter()
+        .map(|f| f.uri.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut parents = std::collections::BTreeSet::new();
+    for file in files {
+        if let Some((parent, _)) = sidecar::split_parent_name(&file.uri) {
+            parents.insert(parent);
+        }
+    }
+    for parent in parents {
         if scan_control::is_cancelled() {
             return Err("扫描已取消".to_string());
         }
-        let anime_id = db::upsert_anime(&g.group_key, &g.title).map_err(|e| e.to_string())?;
-        let mut inserted_episode = false;
-        for ff in &g.files {
-            if scan_control::is_cancelled() {
-                return Err("扫描已取消".to_string());
-            }
-            inserted_episode |= db::upsert_episode(
-                anime_id,
-                folder_id,
-                &ff.path,
-                &ff.file_name,
-                ff.file_size,
-                ff.parsed.episode_no,
-                ff.parsed.resolution.as_deref(),
-                ff.parsed.release_group.as_deref(),
-                source_type,
-                mark_new_files,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        if mark_new_files && inserted_episode {
-            db::mark_anime_has_new_files(anime_id).map_err(|e| e.to_string())?;
-        }
-        emit("scanning", i as i64 + 1, total, &g.title);
-    }
-
-    // 1b. Prune episodes that disappeared from the scanned scope: anything of
-    // this source under a walked prefix that we DIDN'T just find is gone from
-    // disk/share, so delete it (and any anime left with no episodes). Runs after
-    // the upserts so the kept set reflects everything currently present.
-    if !prune_prefixes.is_empty() {
-        let kept: std::collections::HashSet<String> = groups
-            .iter()
-            .flat_map(|g| g.files.iter().map(|f| f.path.clone()))
-            .collect();
-        if let Ok(removed) = db::prune_missing(folder_id, source_type, &prune_prefixes, &kept) {
-            if removed > 0 {
-                let _ = db::delete_empty_anime();
-                emit(
-                    "scanning",
-                    total,
-                    total,
-                    &format!("清理 {removed} 个失效文件"),
-                );
+        let map = match source_type {
+            "local" => sidecar::read_local(&parent),
+            "smb" => RT
+                .block_on(async {
+                    tokio::select! {
+                        result = smb::read_sidecar(&parent) => result,
+                        _ = scan_control::wait_cancelled() => Err(anyhow::anyhow!("扫描已取消")),
+                    }
+                })
+                .map_err(|error| error.to_string())?,
+            _ => continue,
+        };
+        for (name, subject) in map {
+            let path = match sidecar::source_of(&parent) {
+                sidecar::Source::Local => std::path::Path::new(&parent)
+                    .join(name)
+                    .to_string_lossy()
+                    .to_string(),
+                _ => format!("{parent}/{name}"),
+            };
+            if present.contains(path.as_str()) {
+                db::save_manual_scan_match(&path, subject).map_err(|e| e.to_string())?;
             }
         }
     }
-
+    // The fallback retains its historical precedence over folder sidecars.
+    for (path, subject) in sidecar::read_fallback() {
+        if present.contains(path.as_str()) {
+            db::save_manual_scan_match(&path, subject).map_err(|e| e.to_string())?;
+        }
+    }
     Ok(())
 }
 
@@ -1067,7 +1091,29 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
     if scan_control::is_cancelled() {
         return Err("扫描已取消".to_string());
     }
-    let unmatched = db::unmatched_anime().map_err(|e| e.to_string())?;
+    let mut manual_detail_failed = false;
+    let mirror_enabled = bangumi::mirror_is_enabled();
+    // Identity is already correct offline. Hydrate placeholder metadata on
+    // later successful scans without re-running automatic title matching.
+    for (anime_id, subject_id) in db::pending_manual_subjects().map_err(|e| e.to_string())? {
+        let detail = RT.block_on(async {
+            tokio::select! {
+                result = tokio::time::timeout(std::time::Duration::from_secs(20), bangumi::subject(subject_id)) => result.ok().and_then(|r| r.ok()),
+                _ = scan_control::wait_cancelled() => None,
+            }
+        });
+        if scan_control::is_cancelled() {
+            return Err("扫描已取消".to_string());
+        }
+        if let Some(subject) = detail {
+            store_subject_binding(anime_id, &subject, true)?;
+        } else {
+            manual_detail_failed = true;
+            break;
+        } // Offline: do not pay one timeout per manual subject.
+    }
+    let unmatched =
+        scan_control::matching_candidates(db::unmatched_anime().map_err(|e| e.to_string())?);
     let match_total = unmatched.len() as i64;
     let done = std::sync::atomic::AtomicI64::new(0);
     let consecutive_errors = std::sync::atomic::AtomicI64::new(0);
@@ -1197,24 +1243,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
 
     let api_unreachable = consecutive_errors.load(std::sync::atomic::Ordering::Relaxed) >= 3;
 
-    // 3b. Re-apply manual per-file matches from the per-folder sidecars: the
-    // scanner just re-grouped every file by filename, so any file the user
-    // hand-matched (or detached) needs to be pulled back onto its chosen
-    // subject. Runs last so it always wins, and reads the `.kurako-match.json`
-    // sidecars that live IN the media folders (durable across a full
-    // clear+rescan, which drops the whole episodes table).
-    for source_type in ["local", "saf", "smb", "webdav"] {
-        apply_sidecars(source_type, !api_unreachable);
-        if scan_control::is_cancelled() {
-            return Err("扫描已取消".to_string());
-        }
-    }
-    // Also re-apply the app-data fallback store (read-only SMB + SAF matches):
-    // keyed by full file path and source-agnostic, so one call covers all.
-    apply_fallback(!api_unreachable);
-    if scan_control::is_cancelled() {
-        return Err("扫描已取消".to_string());
-    }
+    // Manual intent was applied atomically with each folder, before auto-match.
 
     // 4. With an access token, mark which entries the user has collected on
     // Bangumi so the UI can pin them.
@@ -1228,7 +1257,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
     }
 
     let failed = total_errors.load(std::sync::atomic::Ordering::Relaxed);
-    if api_unreachable || failed > 0 || collection_error.is_some() {
+    if api_unreachable || failed > 0 || collection_error.is_some() || manual_detail_failed {
         let detail = if failed > 0 {
             format!("（已连续失败，累计 {failed} 次请求错误）")
         } else {
@@ -1239,11 +1268,18 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
         } else {
             "Bangumi API 请求失败"
         };
+        let mirror_help = if mirror_enabled {
+            "；请到设置重新验证 Bangumi 镜像，或关闭镜像回退官方"
+        } else {
+            ""
+        };
         let _ = sink.add(ScanProgress {
             stage: "warning".to_string(),
             current: done.load(std::sync::atomic::Ordering::Relaxed),
             total: match_total,
-            message: format!("媒体扫描已完成，但{reason}，部分自动匹配与收藏同步未完成{detail}"),
+            message: format!(
+                "媒体扫描已完成，但{reason}，部分自动匹配与收藏同步未完成{detail}{mirror_help}"
+            ),
         });
     } else {
         let _ = sink.add(ScanProgress {
@@ -1544,42 +1580,12 @@ pub fn bind_anime(anime_id: i64, bangumi_id: i64) -> Result<i64, String> {
     if let Ok(episodes) = db::list_episodes(survivor) {
         for ep in &episodes {
             persist_match(&ep.file_path, bangumi_id);
+            // Anchor every file of the hand-matched show so a rescan keeps them
+            // on this subject regardless of how the filename grouper regroups.
+            let _ = db::lock_episode_by_path(&ep.file_path);
         }
     }
     Ok(survivor)
-}
-
-/// Scan-only binding path. Every network wait races the shared scan cancel
-/// signal, while the interactive manual-match path above retains its existing
-/// behavior outside a scan session.
-fn bind_anime_during_scan(anime_id: i64, bangumi_id: i64) -> Result<i64, String> {
-    let subject = RT.block_on(async {
-        tokio::select! {
-            result = bangumi::subject(bangumi_id) => Some(result),
-            _ = scan_control::wait_cancelled() => None,
-        }
-    });
-    let Some(subject) = subject else {
-        return Err("扫描已取消".to_string());
-    };
-    let subject = subject.map_err(|e| e.to_string())?;
-    store_subject_binding(anime_id, &subject, true)?;
-
-    if bangumi::has_token() {
-        let status = RT.block_on(async {
-            tokio::select! {
-                result = bangumi::collection_status(bangumi_id) => Some(result),
-                _ = scan_control::wait_cancelled() => None,
-            }
-        });
-        let Some(status) = status else {
-            return Err("扫描已取消".to_string());
-        };
-        if let Ok(collection) = status {
-            let _ = db::set_collection(anime_id, collection.unwrap_or(0));
-        }
-    }
-    binding_survivor(anime_id, bangumi_id)
 }
 
 fn ensure_anime_for_subject(bangumi_id: i64, file_path: &str) -> Result<i64, String> {
@@ -1607,6 +1613,8 @@ pub fn match_episode(episode_id: i64, bangumi_id: i64) -> Result<i64, String> {
     persist_match(&file_path, bangumi_id);
     let anime_id = ensure_anime_for_subject(bangumi_id, &file_path)?;
     db::move_episode_to_anime(episode_id, anime_id).map_err(|e| e.to_string())?;
+    // Anchor it so a later rescan can't re-route this file by filename.
+    let _ = db::lock_episode(episode_id);
     // The file may have left an empty anime behind (its group's last episode);
     // clean it up so the library doesn't keep a ghost entry.
     let _ = db::delete_empty_anime();
@@ -1624,6 +1632,8 @@ pub fn detach_episode(episode_id: i64) -> Result<i64, String> {
     persist_match(&file_path, sidecar::DETACHED);
     let misc_id = db::upsert_anime("__misc__", "未分类").map_err(|e| e.to_string())?;
     db::move_episode_to_anime(episode_id, misc_id).map_err(|e| e.to_string())?;
+    // Anchor the detach so a rescan keeps it out of any auto-grouped show.
+    let _ = db::lock_episode(episode_id);
     let _ = db::delete_empty_anime();
     Ok(misc_id)
 }
@@ -1636,6 +1646,7 @@ pub fn detach_episode(episode_id: i64) -> Result<i64, String> {
 /// is always writable. Either way the match is preserved, so no warning is
 /// surfaced to the UI.
 fn persist_match(file_path: &str, bangumi_id: i64) {
+    let _ = db::save_manual_scan_match(file_path, bangumi_id);
     let Some((parent, name)) = sidecar::split_parent_name(file_path) else {
         // No resolvable folder — keep it in the always-writable fallback.
         let _ = sidecar::set_fallback(file_path, bangumi_id);
@@ -1669,128 +1680,6 @@ fn persist_match(file_path: &str, bangumi_id: i64) {
         sidecar::Source::Saf | sidecar::Source::Remote => {
             let _ = sidecar::set_fallback(file_path, bangumi_id);
         }
-    }
-}
-
-/// The anime entry a subject should live in: reuse an existing bound entry, else
-/// make a fresh per-file group (unique group_key from the file path so nothing
-/// else joins it) and bind it. Shared by the manual match and the post-scan
-/// sidecar re-apply.
-fn ensure_anime_for_subject_during_scan(
-    bangumi_id: i64,
-    file_path: &str,
-    allow_network_binding: bool,
-) -> Result<i64, String> {
-    match db::anime_id_for_bangumi(bangumi_id).map_err(|e| e.to_string())? {
-        Some(id) => Ok(id),
-        None if !allow_network_binding => Err("Bangumi API 当前不可用".to_string()),
-        None => {
-            let key = format!("pinned:{file_path}");
-            let new_id = db::upsert_anime(&key, file_path).map_err(|e| e.to_string())?;
-            match bind_anime_during_scan(new_id, bangumi_id) {
-                Ok(id) => Ok(id),
-                Err(error) => {
-                    let _ = db::delete_empty_anime();
-                    Err(error)
-                }
-            }
-        }
-    }
-}
-
-/// Route a single `file_path -> bangumi_id` decision to the right anime entry
-/// (existing subject / fresh pinned entry / 未分类 for DETACHED) if the file is
-/// currently in the library. Shared by both re-apply passes below.
-fn apply_one(file_path: &str, bangumi_id: i64, allow_network_binding: bool) {
-    match db::episode_exists(file_path) {
-        Ok(true) => {}
-        _ => return,
-    }
-    let target = if bangumi_id == sidecar::DETACHED {
-        db::upsert_anime("__misc__", "未分类").ok()
-    } else {
-        ensure_anime_for_subject_during_scan(bangumi_id, file_path, allow_network_binding).ok()
-    };
-    if let Some(anime_id) = target {
-        let _ = db::move_episode_by_path(file_path, anime_id);
-    }
-}
-
-/// Re-apply the app-data fallback store (read-only SMB / SAF matches) after a
-/// scan. Keyed by full file locator, source-agnostic, so it's read ONCE per scan
-/// regardless of source_type. Best-effort.
-fn apply_fallback(allow_network_binding: bool) {
-    let map = sidecar::read_fallback();
-    if map.is_empty() {
-        return;
-    }
-    for (file_path, bangumi_id) in map {
-        if scan_control::is_cancelled() {
-            return;
-        }
-        apply_one(&file_path, bangumi_id, allow_network_binding);
-    }
-    if !scan_control::is_cancelled() {
-        let _ = db::delete_empty_anime();
-    }
-}
-
-/// Re-apply every manual per-file match after a scan by reading the
-/// `.kurako-match.json` sidecar of each folder that currently has episodes. For
-/// each `file_name -> bangumi_id` entry whose file is present, move it under the
-/// right (existing or freshly bound) subject — or into 未分类 for a `DETACHED`
-/// entry — undoing whatever grouping the scanner just did for that file.
-/// Best-effort: a missing/corrupt sidecar or one bad entry never aborts the scan
-/// tail. `source_type` selects local vs SMB sidecar I/O (SAF is never written,
-/// so it has no sidecars to read).
-fn apply_sidecars(source_type: &str, allow_network_binding: bool) {
-    // Distinct folders currently holding episodes of this source; each may carry
-    // a sidecar. `episode_parents` returns the folder locator + a present file
-    // name so we can rebuild absolute file paths without re-deriving separators.
-    let folders = match db::episode_parents(source_type) {
-        Ok(f) => f,
-        Err(_) => return,
-    };
-    for parent in folders {
-        if scan_control::is_cancelled() {
-            return;
-        }
-        let map = match source_type {
-            "smb" => {
-                let result = RT.block_on(async {
-                    tokio::select! {
-                        result = smb::read_sidecar(&parent) => Some(result),
-                        _ = scan_control::wait_cancelled() => None,
-                    }
-                });
-                let Some(result) = result else {
-                    return;
-                };
-                result.unwrap_or_default()
-            }
-            "local" => sidecar::read_local(&parent),
-            // SAF sidecars are never written, so nothing to read.
-            _ => continue,
-        };
-        if map.is_empty() {
-            continue;
-        }
-        for (name, bangumi_id) in map {
-            if scan_control::is_cancelled() {
-                return;
-            }
-            let file_path = match sidecar::source_of(&parent) {
-                sidecar::Source::Local => std::path::Path::new(&parent)
-                    .join(&name)
-                    .to_string_lossy()
-                    .to_string(),
-                _ => format!("{parent}/{name}"),
-            };
-            apply_one(&file_path, bangumi_id, allow_network_binding);
-        }
-    }
-    if !scan_control::is_cancelled() {
-        let _ = db::delete_empty_anime();
     }
 }
 
@@ -1837,6 +1726,7 @@ pub fn clear_match_config() -> Result<u32, String> {
     {
         removed += 1;
     }
+    db::clear_manual_scan_matches().map_err(|error| format!("清空手动匹配意图失败：{error}"))?;
     db::clear_all().map_err(|error| format!("清空当前识别结果失败：{error}"))?;
     Ok(removed)
 }

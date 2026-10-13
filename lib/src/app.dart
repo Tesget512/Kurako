@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:dynamic_color/dynamic_color.dart';
@@ -6,10 +7,48 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'pages/home_page.dart';
 import 'state/providers.dart';
+import 'state/update_provider.dart';
+import 'widgets/update_banner.dart';
 import 'ui/transitions.dart';
 
-class AnimeBdApp extends ConsumerWidget {
+class AnimeBdApp extends ConsumerStatefulWidget {
   const AnimeBdApp({super.key});
+
+  @override
+  ConsumerState<AnimeBdApp> createState() => _AnimeBdAppState();
+}
+
+class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // Reading the notifier constructs SettingsNotifier (its _load restores the
+    // token and starts the renewal timer) and drives one renewal check right at
+    // startup, instead of waiting for some widget to happen to read settings.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(bangumiMirrorProvider);
+      unawaited(ref.read(settingsProvider.notifier).ensureFreshBangumiToken());
+      unawaited(ref.read(updateCheckProvider.notifier).checkAtStartup());
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Coming back to the foreground is a natural, frequent moment to top up a
+    // token that may have crossed its expiry window while backgrounded.
+    if (state == AppLifecycleState.resumed) {
+      ref.read(settingsProvider.notifier).ensureFreshBangumiToken();
+    }
+  }
 
   ThemeData _theme(ColorScheme scheme, {required bool systemFont}) {
     final base = ThemeData(
@@ -73,7 +112,7 @@ class AnimeBdApp extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final theme = ref.watch(themeProvider);
     final scalePercent = ref.watch(uiScaleProvider);
     final systemFont = ref.watch(useSystemFontProvider);
@@ -109,7 +148,10 @@ class AnimeBdApp extends ConsumerWidget {
           themeMode: theme.mode.flutterThemeMode,
           home: const HomePage(),
           builder: (context, child) {
-            if (scalePercent == 100 || child == null) return child!;
+            final content = UpdateBannerHost(
+              child: child ?? const SizedBox.shrink(),
+            );
+            if (scalePercent == 100) return content;
             // UI scale: render at logical size / f then scale up — vector
             // rendering keeps text crisp at any percentage.
             final f = scalePercent / 100.0;
@@ -124,7 +166,7 @@ class AnimeBdApp extends ConsumerWidget {
                     size: mq.size / f,
                     devicePixelRatio: mq.devicePixelRatio * f,
                   ),
-                  child: child,
+                  child: content,
                 ),
               ),
             );

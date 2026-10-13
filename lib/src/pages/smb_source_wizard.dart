@@ -8,6 +8,7 @@ import '../rust/models.dart';
 import '../services/network_discovery.dart';
 import '../services/remote_path_selection.dart';
 import '../state/providers.dart';
+import '../services/scan_coordinator.dart';
 import '../widgets/remote_folder_selection_header.dart';
 
 /// Remove nested selections when an ancestor folder is already selected. This
@@ -217,6 +218,12 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
       return;
     }
 
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
+    if (ref.read(scanCoordinatorProvider).running || mutationLock.state) {
+      setState(() => _error = '扫描或维护正在进行，请完成后再添加来源');
+      return;
+    }
+    mutationLock.state = true;
     _setBusy(true);
     try {
       final folders = await rust.listLibraryFolders();
@@ -257,6 +264,7 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
     } catch (e) {
       if (mounted) setState(() => _error = '添加 SMB 文件夹失败：$e');
     } finally {
+      mutationLock.state = false;
       _setBusy(false);
     }
   }

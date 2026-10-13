@@ -11,4 +11,5 @@ pub mod scan_control;
 pub mod sidecar;
 pub mod smb;
 pub mod subtitle;
+pub mod update;
 pub mod webdav;

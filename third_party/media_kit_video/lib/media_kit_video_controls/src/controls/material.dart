@@ -106,6 +106,22 @@ const kDefaultMaterialVideoControlsThemeDataFullscreen =
   shiftSubtitlesOnControlsVisibilityChange: false,
 );
 
+enum MaterialVerticalGestureKind { brightness, volume }
+
+class MaterialVerticalGestureIndicatorData {
+  final MaterialVerticalGestureKind kind;
+  final double value;
+
+  /// Position in the complete controls root, not the inset gesture detector.
+  final Offset? position;
+  final bool isDragging;
+  const MaterialVerticalGestureIndicatorData(
+      {required this.kind,
+      required this.value,
+      required this.position,
+      required this.isDragging});
+}
+
 /// {@template material_video_controls_theme_data}
 ///
 /// Theming related data for [MaterialVideoControls]. These values are used to theme the descendant [MaterialVideoControls].
@@ -213,6 +229,13 @@ class MaterialVideoControlsThemeData {
   /// The gradients are painted directly by the root controls stack, therefore
   /// they always share its visibility animation and physical viewport.
   final Color? edgeShadeColor;
+
+  /// Host overlay sharing the built-in controls visibility and fade.
+  final WidgetBuilder? controlsOverlayBuilder;
+
+  /// Full-size, non-interactive overlay with root-relative gesture coordinates.
+  final Widget Function(BuildContext, MaterialVerticalGestureIndicatorData)?
+      verticalGestureIndicatorBuilder;
 
   // GENERIC
 
@@ -336,6 +359,8 @@ class MaterialVideoControlsThemeData {
     this.padding,
     this.controlsHoverDuration = const Duration(seconds: 3),
     this.controlsTransitionDuration = const Duration(milliseconds: 300),
+    this.controlsOverlayBuilder,
+    this.verticalGestureIndicatorBuilder,
     this.bufferingIndicatorBuilder,
     this.volumeIndicatorBuilder,
     this.brightnessIndicatorBuilder,
@@ -403,6 +428,9 @@ class MaterialVideoControlsThemeData {
     Color? edgeShadeColor,
     Duration? controlsHoverDuration,
     Duration? controlsTransitionDuration,
+    WidgetBuilder? controlsOverlayBuilder,
+    Widget Function(BuildContext, MaterialVerticalGestureIndicatorData)?
+        verticalGestureIndicatorBuilder,
     Widget Function(BuildContext)? bufferingIndicatorBuilder,
     Widget Function(BuildContext, double)? volumeIndicatorBuilder,
     Widget Function(BuildContext, double)? brightnessIndicatorBuilder,
@@ -473,6 +501,10 @@ class MaterialVideoControlsThemeData {
           controlsHoverDuration ?? this.controlsHoverDuration,
       controlsTransitionDuration:
           controlsTransitionDuration ?? this.controlsTransitionDuration,
+      controlsOverlayBuilder:
+          controlsOverlayBuilder ?? this.controlsOverlayBuilder,
+      verticalGestureIndicatorBuilder: verticalGestureIndicatorBuilder ??
+          this.verticalGestureIndicatorBuilder,
       bufferingIndicatorBuilder:
           bufferingIndicatorBuilder ?? this.bufferingIndicatorBuilder,
       volumeIndicatorBuilder:
@@ -556,6 +588,39 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   late bool mount = _theme(context).visibleOnMount;
   late bool visible = _theme(context).visibleOnMount;
   Timer? _timer;
+
+  final GlobalKey _controlsRootKey = GlobalKey();
+  MaterialVerticalGestureKind? _verticalKind;
+  Offset? _verticalPosition;
+  bool _verticalDragging = false;
+
+  Offset? _rootPosition(Offset global) {
+    final box = _controlsRootKey.currentContext?.findRenderObject();
+    return box is RenderBox ? box.globalToLocal(global) : null;
+  }
+
+  void _endVerticalGesture() {
+    if (!_verticalDragging) return;
+    setState(() {
+      _verticalDragging = false;
+      if (_verticalKind == MaterialVerticalGestureKind.volume) {
+        _volumeIndicator = true;
+      } else {
+        _brightnessIndicator = true;
+      }
+    });
+    if (_verticalKind == MaterialVerticalGestureKind.volume) {
+      _volumeTimer?.cancel();
+      _volumeTimer = Timer(const Duration(milliseconds: 800), () {
+        setState(() => _volumeIndicator = false);
+      });
+    } else {
+      _brightnessTimer?.cancel();
+      _brightnessTimer = Timer(const Duration(milliseconds: 800), () {
+        setState(() => _brightnessIndicator = false);
+      });
+    }
+  }
 
   double _brightnessValue = 0.0;
   bool _brightnessIndicator = false;
@@ -678,6 +743,12 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (_theme(context).controlsLocked) {
+      _verticalDragging = false;
+      _verticalPosition = null;
+      _brightnessIndicator = false;
+      _volumeIndicator = false;
+    }
     if (subscriptions.isEmpty) {
       subscriptions.addAll(
         [
@@ -836,7 +907,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     final milliseconds = -(diff *
             duration.inMilliseconds /
             _theme(context).horizontalGestureSensitivity)
-            .round();
+        .round();
     final target = (start + Duration(milliseconds: milliseconds)).clamp(
       Duration.zero,
       duration,
@@ -973,6 +1044,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
           if (mounted && !_volumeInterceptEventStream) {
             setState(() {
               _volumeValue = value;
+              _verticalPosition = null;
               _volumeIndicator = true;
             });
             _volumeTimer?.cancel();
@@ -1017,8 +1089,8 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     });
     _volumeInterceptTimer?.cancel();
     _volumeInterceptTimer = Timer(const Duration(milliseconds: 120), () {
-          _volumeInterceptEventStream = false;
-        });
+      _volumeInterceptEventStream = false;
+    });
     _volumeTimer?.cancel();
     _volumeTimer = Timer(const Duration(milliseconds: 800), () {
       if (mounted) {
@@ -1122,193 +1194,194 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
               autofocus: true,
               onKeyEvent: controlsLocked ? null : _handleKeyEvent,
               child: Material(
-            elevation: 0.0,
-            borderOnForeground: false,
-            animationDuration: Duration.zero,
-            color: const Color(0x00000000),
-            shadowColor: const Color(0x00000000),
-            surfaceTintColor: const Color(0x00000000),
-            child: Stack(
-              clipBehavior: Clip.none,
-              alignment: Alignment.center,
-              children: [
-                // Controls:
-                AnimatedOpacity(
-                  curve: Curves.easeInOut,
-                  opacity: visible && !controlsLocked ? 1.0 : 0.0,
-                  duration: controlsLocked
-                      ? Duration.zero
-                      : _theme(context).controlsTransitionDuration,
-                  onEnd: () {
-                    setState(() {
-                      if (!visible) {
-                        mount = false;
-                      }
-                    });
-                  },
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    alignment: Alignment.center,
-                    children: [
-                      Positioned.fill(
-                        child: Container(
-                          color: _theme(context).backdropColor,
-                        ),
-                      ),
-                      // These two gradients intentionally live in the same
-                      // root stack as AnimatedOpacity.  A bar-local gradient
-                      // is clipped by its layout width and may not meet the
-                      // physical top/bottom screen boundaries.
-                      if (_theme(context).edgeShadeColor != null)
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: Stack(
-                              fit: StackFit.expand,
-                              children: [
-                                Align(
-                                  alignment: Alignment.topCenter,
-                                  child: FractionallySizedBox(
-                                    widthFactor: 1.0,
-                                    heightFactor: 0.22,
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            _theme(context).edgeShadeColor!,
-                                            Color.lerp(
-                                                  _theme(context)
-                                                      .edgeShadeColor!,
-                                              Colors.transparent,
-                                              0.62,
-                                            )!,
-                                            Colors.transparent,
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                Align(
-                                  alignment: Alignment.bottomCenter,
-                                  child: FractionallySizedBox(
-                                    widthFactor: 1.0,
-                                    heightFactor: 0.26,
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.bottomCenter,
-                                          end: Alignment.topCenter,
-                                          colors: [
-                                            _theme(context).edgeShadeColor!,
-                                            Color.lerp(
-                                                  _theme(context)
-                                                      .edgeShadeColor!,
-                                              Colors.transparent,
-                                              0.62,
-                                            )!,
-                                            Colors.transparent,
-                                          ],
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
+                elevation: 0.0,
+                borderOnForeground: false,
+                animationDuration: Duration.zero,
+                color: const Color(0x00000000),
+                shadowColor: const Color(0x00000000),
+                surfaceTintColor: const Color(0x00000000),
+                child: Stack(
+                  key: _controlsRootKey,
+                  clipBehavior: Clip.none,
+                  alignment: Alignment.center,
+                  children: [
+                    // Controls:
+                    AnimatedOpacity(
+                      curve: Curves.easeInOut,
+                      opacity: visible && !controlsLocked ? 1.0 : 0.0,
+                      duration: controlsLocked
+                          ? Duration.zero
+                          : _theme(context).controlsTransitionDuration,
+                      onEnd: () {
+                        setState(() {
+                          if (!visible) {
+                            mount = false;
+                          }
+                        });
+                      },
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        alignment: Alignment.center,
+                        children: [
+                          Positioned.fill(
+                            child: Container(
+                              color: _theme(context).backdropColor,
                             ),
                           ),
-                        ),
-                      // We are adding 16.0 boundary around the actual controls (which contain the vertical drag gesture detectors).
-                      // This will make the hit-test on edges (e.g. swiping to: show status-bar, show navigation-bar, go back in navigation) not activate the swipe gesture annoyingly.
-                      Positioned.fill(
-                        left: 16.0,
-                        top: 16.0,
-                        right: 16.0,
-                        bottom: 16.0 + subtitleVerticalShiftOffset,
-                        child: Listener(
-                          onPointerDown: controlsLocked
-                              ? null
-                              : (event) => _activePointerKind = event.kind,
-                          onPointerUp: (_) => _activePointerKind = null,
-                          onPointerCancel: (_) => _activePointerKind = null,
-                          child: GestureDetector(
-                            // Let Flutter disambiguate a single tap from a
-                            // double tap. The old PointerDown listener showed
-                            // controls before the second tap arrived, making
-                            // every quick-seek non-immersive.
-                            onTap: controlsLocked ? null : onTap,
+                          // These two gradients intentionally live in the same
+                          // root stack as AnimatedOpacity.  A bar-local gradient
+                          // is clipped by its layout width and may not meet the
+                          // physical top/bottom screen boundaries.
+                          if (_theme(context).edgeShadeColor != null)
+                            Positioned.fill(
+                              child: IgnorePointer(
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    Align(
+                                      alignment: Alignment.topCenter,
+                                      child: FractionallySizedBox(
+                                        widthFactor: 1.0,
+                                        heightFactor: 0.22,
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: [
+                                                _theme(context).edgeShadeColor!,
+                                                Color.lerp(
+                                                  _theme(context)
+                                                      .edgeShadeColor!,
+                                                  Colors.transparent,
+                                                  0.62,
+                                                )!,
+                                                Colors.transparent,
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    Align(
+                                      alignment: Alignment.bottomCenter,
+                                      child: FractionallySizedBox(
+                                        widthFactor: 1.0,
+                                        heightFactor: 0.26,
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.bottomCenter,
+                                              end: Alignment.topCenter,
+                                              colors: [
+                                                _theme(context).edgeShadeColor!,
+                                                Color.lerp(
+                                                  _theme(context)
+                                                      .edgeShadeColor!,
+                                                  Colors.transparent,
+                                                  0.62,
+                                                )!,
+                                                Colors.transparent,
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          // We are adding 16.0 boundary around the actual controls (which contain the vertical drag gesture detectors).
+                          // This will make the hit-test on edges (e.g. swiping to: show status-bar, show navigation-bar, go back in navigation) not activate the swipe gesture annoyingly.
+                          Positioned.fill(
+                            left: 16.0,
+                            top: 16.0,
+                            right: 16.0,
+                            bottom: 16.0 + subtitleVerticalShiftOffset,
+                            child: Listener(
+                              onPointerDown: controlsLocked
+                                  ? null
+                                  : (event) => _activePointerKind = event.kind,
+                              onPointerUp: (_) => _activePointerKind = null,
+                              onPointerCancel: (_) => _activePointerKind = null,
+                              child: GestureDetector(
+                                // Let Flutter disambiguate a single tap from a
+                                // double tap. The old PointerDown listener showed
+                                // controls before the second tap arrived, making
+                                // every quick-seek non-immersive.
+                                onTap: controlsLocked ? null : onTap,
                                 onSecondaryTap: controlsLocked
                                     ? null
                                     : _theme(context).onSecondaryTap,
                                 onDoubleTapDown: controlsLocked
                                     ? null
                                     : _handleDoubleTapDown,
-                            onLongPress: !controlsLocked &&
-                                    _theme(context).speedUpOnLongPress
-                                ? _handleLongPress
-                                : null,
-                            onLongPressEnd: !controlsLocked &&
-                                    _theme(context).speedUpOnLongPress
-                                ? _handleLongPressEnd
-                                : null,
-                            onDoubleTap: controlsLocked
-                                ? null
-                                : () {
-                                    if (_tapPosition == null) {
-                                      return;
-                                    }
-                                    if (_doubleTapWasMouse) {
+                                onLongPress: !controlsLocked &&
+                                        _theme(context).speedUpOnLongPress
+                                    ? _handleLongPress
+                                    : null,
+                                onLongPressEnd: !controlsLocked &&
+                                        _theme(context).speedUpOnLongPress
+                                    ? _handleLongPressEnd
+                                    : null,
+                                onDoubleTap: controlsLocked
+                                    ? null
+                                    : () {
+                                        if (_tapPosition == null) {
+                                          return;
+                                        }
+                                        if (_doubleTapWasMouse) {
                                           _theme(context)
                                               .onMouseDoubleTap
                                               ?.call();
-                                      return;
-                                    }
+                                          return;
+                                        }
                                         // Touch uses outer quarters for seek and the
                                         // central half for play/pause.
                                         if (_isInRightSegment(
                                             _tapPosition!.dx)) {
-                                      if ((!mount &&
-                                              _theme(context)
-                                                  .seekOnDoubleTap) ||
-                                          seekOnDoubleTapEnabledWhileControlsAreVisible) {
-                                        onDoubleTapSeekForward();
-                                      }
-                                    } else if (_isInLeftSegment(
-                                        _tapPosition!.dx)) {
-                                      if ((!mount &&
-                                              _theme(context)
-                                                  .seekOnDoubleTap) ||
-                                          seekOnDoubleTapEnabledWhileControlsAreVisible) {
-                                        onDoubleTapSeekBackward();
-                                      }
-                                    } else {
+                                          if ((!mount &&
+                                                  _theme(context)
+                                                      .seekOnDoubleTap) ||
+                                              seekOnDoubleTapEnabledWhileControlsAreVisible) {
+                                            onDoubleTapSeekForward();
+                                          }
+                                        } else if (_isInLeftSegment(
+                                            _tapPosition!.dx)) {
+                                          if ((!mount &&
+                                                  _theme(context)
+                                                      .seekOnDoubleTap) ||
+                                              seekOnDoubleTapEnabledWhileControlsAreVisible) {
+                                            onDoubleTapSeekBackward();
+                                          }
+                                        } else {
                                           controller(context)
                                               .player
                                               .playOrPause();
-                                    }
-                                  },
-                            onHorizontalDragUpdate: controlsLocked
-                                ? null
-                                : (details) {
-                                    if (details.kind ==
-                                        PointerDeviceKind.mouse) {
-                                      return;
-                                    }
-                                    if ((!mount &&
-                                            _theme(context).seekGesture) ||
-                                        (_theme(context).seekGesture &&
-                                            _theme(context)
-                                                .gesturesEnabledWhileControlsVisible)) {
-                                      onHorizontalDragUpdate(details);
-                                    }
-                                  },
-                            onHorizontalDragStart: controlsLocked
-                                ? null
-                                : (details) {
+                                        }
+                                      },
+                                onHorizontalDragUpdate: controlsLocked
+                                    ? null
+                                    : (details) {
+                                        if (details.kind ==
+                                            PointerDeviceKind.mouse) {
+                                          return;
+                                        }
+                                        if ((!mount &&
+                                                _theme(context).seekGesture) ||
+                                            (_theme(context).seekGesture &&
+                                                _theme(context)
+                                                    .gesturesEnabledWhileControlsVisible)) {
+                                          onHorizontalDragUpdate(details);
+                                        }
+                                      },
+                                onHorizontalDragStart: controlsLocked
+                                    ? null
+                                    : (details) {
                                         _horizontalDragWasMouse =
                                             details.kind ==
-                                        PointerDeviceKind.mouse;
+                                                PointerDeviceKind.mouse;
                                         _horizontalDragControlsWereVisible =
                                             !_horizontalDragWasMouse && visible;
                                         if (!_horizontalDragWasMouse) {
@@ -1321,23 +1394,23 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                         if (_horizontalDragControlsWereVisible) {
                                           _timer?.cancel();
                                         }
-                                  },
-                            onHorizontalDragEnd: controlsLocked
-                                ? null
-                                : (_) {
-                                    final ignored = _horizontalDragWasMouse;
-                                    _horizontalDragWasMouse = false;
-                                    if (ignored) return;
-                                    unawaited(onHorizontalDragEnd());
+                                      },
+                                onHorizontalDragEnd: controlsLocked
+                                    ? null
+                                    : (_) {
+                                        final ignored = _horizontalDragWasMouse;
+                                        _horizontalDragWasMouse = false;
+                                        if (ignored) return;
+                                        unawaited(onHorizontalDragEnd());
                                         if (_horizontalDragControlsWereVisible &&
                                             visible) {
                                           _scheduleControlsHide();
                                         }
                                         _horizontalDragControlsWereVisible =
                                             false;
-                                  },
-                            onHorizontalDragCancel: controlsLocked
-                                ? null
+                                      },
+                                onHorizontalDragCancel: controlsLocked
+                                    ? null
                                     : () {
                                         onHorizontalDragCancel();
                                         if (_horizontalDragControlsWereVisible &&
@@ -1347,482 +1420,566 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                         _horizontalDragControlsWereVisible =
                                             false;
                                       },
-                            onVerticalDragUpdate: controlsLocked
-                                ? null
-                                : (e) async {
-                                    if (e.kind == PointerDeviceKind.mouse) {
-                                      return;
-                                    }
-                                    final delta = e.delta.dy;
-                                    final Offset position = e.localPosition;
-
-                                    if (position.dx <=
-                                        widgetWidth(context) / 2) {
-                                      // Left side of screen swiped
-                                      if ((!mount &&
-                                              _theme(context)
-                                                  .brightnessGesture) ||
+                                onVerticalDragStart: controlsLocked
+                                    ? null
+                                    : (details) {
+                                        if (details.kind ==
+                                            PointerDeviceKind.mouse) {
+                                          return;
+                                        }
+                                        final position = _rootPosition(
+                                            details.globalPosition);
+                                        final root = _controlsRootKey
+                                            .currentContext
+                                            ?.findRenderObject();
+                                        final left = root is RenderBox &&
+                                            position != null &&
+                                            position.dx <= root.size.width / 2;
+                                        final enabled = left
+                                            ? _theme(context).brightnessGesture
+                                            : _theme(context).volumeGesture;
+                                        if (!enabled ||
+                                            (mount &&
+                                                !_theme(context)
+                                                    .gesturesEnabledWhileControlsVisible)) {
+                                          return;
+                                        }
+                                        setState(() {
+                                          _verticalKind = left
+                                              ? MaterialVerticalGestureKind
+                                                  .brightness
+                                              : MaterialVerticalGestureKind
+                                                  .volume;
+                                          _verticalPosition = position;
+                                          _verticalDragging = true;
+                                          if (left) {
+                                            _volumeIndicator = false;
+                                            _volumeTimer?.cancel();
+                                          } else {
+                                            _brightnessIndicator = false;
+                                            _brightnessTimer?.cancel();
+                                          }
+                                        });
+                                      },
+                                onVerticalDragEnd: (_) => _endVerticalGesture(),
+                                onVerticalDragCancel: _endVerticalGesture,
+                                onVerticalDragUpdate: controlsLocked
+                                    ? null
+                                    : (e) async {
+                                        if (e.kind == PointerDeviceKind.mouse) {
+                                          return;
+                                        }
+                                        final delta = e.delta.dy;
+                                        if (!_verticalDragging) return;
+                                        setState(() => _verticalPosition =
+                                            _rootPosition(e.globalPosition));
+                                        if (_verticalKind ==
+                                            MaterialVerticalGestureKind
+                                                .brightness) {
+                                          // Left side of screen swiped
+                                          if ((!mount &&
+                                                  _theme(context)
+                                                      .brightnessGesture) ||
                                               (_theme(context)
                                                       .brightnessGesture &&
-                                              _theme(context)
-                                                  .gesturesEnabledWhileControlsVisible)) {
-                                        final brightness = _brightnessValue -
-                                            delta /
-                                                _theme(context)
-                                                    .verticalGestureSensitivity;
-                                        final result =
-                                            brightness.clamp(0.0, 1.0);
-                                        setBrightness(result);
-                                      }
-                                    } else {
-                                      // Right side of screen swiped
+                                                  _theme(context)
+                                                      .gesturesEnabledWhileControlsVisible)) {
+                                            final brightness = _brightnessValue -
+                                                delta /
+                                                    _theme(context)
+                                                        .verticalGestureSensitivity;
+                                            final result =
+                                                brightness.clamp(0.0, 1.0);
+                                            setBrightness(result);
+                                          }
+                                        } else {
+                                          // Right side of screen swiped
 
-                                      if ((!mount &&
+                                          if ((!mount &&
                                                   _theme(context)
                                                       .volumeGesture) ||
-                                          (_theme(context).volumeGesture &&
-                                              _theme(context)
-                                                  .gesturesEnabledWhileControlsVisible)) {
-                                        final volume = _volumeValue -
-                                            delta /
-                                                _theme(context)
-                                                    .verticalGestureSensitivity;
+                                              (_theme(context).volumeGesture &&
+                                                  _theme(context)
+                                                      .gesturesEnabledWhileControlsVisible)) {
+                                            final volume = _volumeValue -
+                                                delta /
+                                                    _theme(context)
+                                                        .verticalGestureSensitivity;
                                             final result =
                                                 volume.clamp(0.0, 1.0);
-                                        setVolume(result);
-                                      }
-                                    }
-                                  },
-                            child: Container(
-                              color: const Color(0x00000000),
+                                            setVolume(result);
+                                          }
+                                        }
+                                      },
+                                child: Container(
+                                  color: const Color(0x00000000),
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                      if (mount && !controlsLocked)
-                        Padding(
-                          padding: _theme(context).padding ??
-                              (
-                                  // Add padding in fullscreen!
-                                  isFullscreen(context)
-                                      ? MediaQuery.of(context).padding
-                                      : EdgeInsets.zero),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.start,
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Container(
-                                height: _theme(context).buttonBarHeight,
-                                margin: _theme(context).topButtonBarMargin,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.max,
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.start,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                  children: _theme(context).topButtonBar,
-                                ),
-                              ),
-                              // Only display [primaryButtonBar] if [buffering] is false.
-                              Expanded(
-                                child: AnimatedOpacity(
-                                  curve: Curves.easeInOut,
-                                  opacity: buffering ? 0.0 : 1.0,
-                                  duration: _theme(context)
-                                      .controlsTransitionDuration,
-                                  child: Center(
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children:
-                                          _theme(context).primaryButtonBar,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              Stack(
-                                alignment: Alignment.bottomCenter,
+                          if (mount && !controlsLocked)
+                            Padding(
+                              padding: _theme(context).padding ??
+                                  (
+                                      // Add padding in fullscreen!
+                                      isFullscreen(context)
+                                          ? MediaQuery.of(context).padding
+                                          : EdgeInsets.zero),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                mainAxisAlignment: MainAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
-                                  if (_theme(context).displaySeekBar)
-                                    MaterialSeekBar(
-                                          delta: _seekBarDeltaValueNotifier,
-                                          previewPosition:
-                                              _seekBarPositionPreviewValueNotifier,
-                                      onSeekStart: () {
-                                        _timer?.cancel();
-                                      },
-                                      onSeekEnd: () {
-                                        _timer = Timer(
-                                              _theme(context)
-                                                  .controlsHoverDuration,
-                                          () {
-                                            if (mounted) {
-                                              setState(() {
-                                                visible = false;
-                                              });
-                                              unshiftSubtitle();
-                                            }
-                                          },
-                                        );
-                                      },
-                                    ),
                                   Container(
                                     height: _theme(context).buttonBarHeight,
-                                        margin: _theme(context)
-                                            .bottomButtonBarMargin,
+                                    margin: _theme(context).topButtonBarMargin,
                                     child: Row(
                                       mainAxisSize: MainAxisSize.max,
                                       mainAxisAlignment:
                                           MainAxisAlignment.start,
                                       crossAxisAlignment:
                                           CrossAxisAlignment.center,
+                                      children: _theme(context).topButtonBar,
+                                    ),
+                                  ),
+                                  // Only display [primaryButtonBar] if [buffering] is false.
+                                  Expanded(
+                                    child: AnimatedOpacity(
+                                      curve: Curves.easeInOut,
+                                      opacity: buffering ? 0.0 : 1.0,
+                                      duration: _theme(context)
+                                          .controlsTransitionDuration,
+                                      child: Center(
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children:
+                                              _theme(context).primaryButtonBar,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  Stack(
+                                    alignment: Alignment.bottomCenter,
+                                    children: [
+                                      if (_theme(context).displaySeekBar)
+                                        MaterialSeekBar(
+                                          delta: _seekBarDeltaValueNotifier,
+                                          previewPosition:
+                                              _seekBarPositionPreviewValueNotifier,
+                                          onSeekStart: () {
+                                            _timer?.cancel();
+                                          },
+                                          onSeekEnd: () {
+                                            _timer = Timer(
+                                              _theme(context)
+                                                  .controlsHoverDuration,
+                                              () {
+                                                if (mounted) {
+                                                  setState(() {
+                                                    visible = false;
+                                                  });
+                                                  unshiftSubtitle();
+                                                }
+                                              },
+                                            );
+                                          },
+                                        ),
+                                      Container(
+                                        height: _theme(context).buttonBarHeight,
+                                        margin: _theme(context)
+                                            .bottomButtonBarMargin,
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.max,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
                                           children:
                                               _theme(context).bottomButtonBar,
-                                    ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                // Double-Tap Seek Seek-Bar:
-                if (!mount && !controlsLocked)
-                  if (_mountSeekBackwardButton ||
-                      _mountSeekForwardButton ||
-                      showSwipeDuration)
-                    Column(
-                      children: [
-                        const Spacer(),
-                        Stack(
-                          alignment: Alignment.bottomCenter,
+                            ),
+                          if (mount &&
+                              !controlsLocked &&
+                              _theme(context).controlsOverlayBuilder != null)
+                            Positioned.fill(
+                                child: IgnorePointer(
+                                    ignoring: !visible,
+                                    child: _theme(context)
+                                        .controlsOverlayBuilder!(context))),
+                        ],
+                      ),
+                    ),
+                    // Double-Tap Seek Seek-Bar:
+                    if (!mount && !controlsLocked)
+                      if (_mountSeekBackwardButton ||
+                          _mountSeekForwardButton ||
+                          showSwipeDuration)
+                        Column(
                           children: [
-                            if (_theme(context).displaySeekBar)
-                              MaterialSeekBar(
-                                delta: _seekBarDeltaValueNotifier,
-                                previewPosition:
-                                    _seekBarPositionPreviewValueNotifier,
+                            const Spacer(),
+                            Stack(
+                              alignment: Alignment.bottomCenter,
+                              children: [
+                                if (_theme(context).displaySeekBar)
+                                  MaterialSeekBar(
+                                    delta: _seekBarDeltaValueNotifier,
+                                    previewPosition:
+                                        _seekBarPositionPreviewValueNotifier,
+                                  ),
+                                Container(
+                                  height: _theme(context).buttonBarHeight,
+                                  margin: _theme(context).bottomButtonBarMargin,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                    // Buffering Indicator.
+                    IgnorePointer(
+                      child: Padding(
+                        padding: _theme(context).padding ??
+                            (
+                                // Add padding in fullscreen!
+                                isFullscreen(context)
+                                    ? MediaQuery.of(context).padding
+                                    : EdgeInsets.zero),
+                        child: Column(
+                          children: [
+                            Container(
+                              height: _theme(context).buttonBarHeight,
+                              margin: _theme(context).topButtonBarMargin,
+                            ),
+                            Expanded(
+                              child: Center(
+                                child: TweenAnimationBuilder<double>(
+                                  tween: Tween<double>(
+                                    begin: 0.0,
+                                    end: buffering ? 1.0 : 0.0,
+                                  ),
+                                  duration: _theme(context)
+                                      .controlsTransitionDuration,
+                                  builder: (context, value, child) {
+                                    // Only mount the buffering indicator if the opacity is greater than 0.0.
+                                    // This has been done to prevent redundant resource usage in [CircularProgressIndicator].
+                                    if (value > 0.0) {
+                                      return Opacity(
+                                        opacity: value,
+                                        child: _theme(context)
+                                                .bufferingIndicatorBuilder
+                                                ?.call(context) ??
+                                            child!,
+                                      );
+                                    }
+                                    return const SizedBox.shrink();
+                                  },
+                                  child: const CircularProgressIndicator(
+                                    color: Color(0xFFFFFFFF),
+                                  ),
+                                ),
                               ),
+                            ),
                             Container(
                               height: _theme(context).buttonBarHeight,
                               margin: _theme(context).bottomButtonBarMargin,
                             ),
                           ],
                         ),
-                      ],
+                      ),
                     ),
-                // Buffering Indicator.
-                IgnorePointer(
-                  child: Padding(
-                    padding: _theme(context).padding ??
-                        (
-                            // Add padding in fullscreen!
-                            isFullscreen(context)
-                                ? MediaQuery.of(context).padding
-                                : EdgeInsets.zero),
-                    child: Column(
-                      children: [
-                        Container(
-                          height: _theme(context).buttonBarHeight,
-                          margin: _theme(context).topButtonBarMargin,
+                    if (_theme(context).verticalGestureIndicatorBuilder != null)
+                      Positioned.fill(
+                          child: IgnorePointer(
+                              child: AnimatedOpacity(
+                        opacity: !controlsLocked &&
+                                (_verticalDragging ||
+                                    _brightnessIndicator ||
+                                    _volumeIndicator)
+                            ? 1
+                            : 0,
+                        duration: _theme(context).controlsTransitionDuration,
+                        child: _theme(context).verticalGestureIndicatorBuilder!(
+                            context,
+                            MaterialVerticalGestureIndicatorData(
+                                kind: _verticalDragging
+                                    ? _verticalKind!
+                                    : _volumeIndicator
+                                        ? MaterialVerticalGestureKind.volume
+                                        : MaterialVerticalGestureKind
+                                            .brightness,
+                                value: (_verticalDragging
+                                        ? _verticalKind ==
+                                            MaterialVerticalGestureKind.volume
+                                        : _volumeIndicator)
+                                    ? _volumeValue
+                                    : _brightnessValue,
+                                position: _verticalPosition,
+                                isDragging: _verticalDragging)),
+                      ))),
+                    // Volume Indicator.
+                    if (_theme(context).verticalGestureIndicatorBuilder == null)
+                      IgnorePointer(
+                        child: AnimatedOpacity(
+                          curve: Curves.easeInOut,
+                          opacity: (!mount ||
+                                      _theme(context)
+                                          .gesturesEnabledWhileControlsVisible) &&
+                                  _volumeIndicator
+                              ? 1.0
+                              : 0.0,
+                          duration: _theme(context).controlsTransitionDuration,
+                          child: _theme(context)
+                                  .volumeIndicatorBuilder
+                                  ?.call(context, _volumeValue) ??
+                              Container(
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: const Color(0x88000000),
+                                  borderRadius: BorderRadius.circular(64.0),
+                                ),
+                                height: 52.0,
+                                width: 108.0,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      height: 52.0,
+                                      width: 42.0,
+                                      alignment: Alignment.centerRight,
+                                      child: Icon(
+                                        _volumeValue == 0.0
+                                            ? Icons.volume_off
+                                            : _volumeValue < 0.5
+                                                ? Icons.volume_down
+                                                : Icons.volume_up,
+                                        color: const Color(0xFFFFFFFF),
+                                        size: 24.0,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8.0),
+                                    Expanded(
+                                      child: Text(
+                                        '${(_volumeValue * 100.0).round()}%',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 14.0,
+                                          color: Color(0xFFFFFFFF),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16.0),
+                                  ],
+                                ),
+                              ),
                         ),
-                        Expanded(
-                          child: Center(
-                            child: TweenAnimationBuilder<double>(
-                              tween: Tween<double>(
-                                begin: 0.0,
-                                end: buffering ? 1.0 : 0.0,
+                      ),
+                    // Brightness Indicator.
+                    if (_theme(context).verticalGestureIndicatorBuilder == null)
+                      IgnorePointer(
+                        child: AnimatedOpacity(
+                          curve: Curves.easeInOut,
+                          opacity: (!mount ||
+                                      _theme(context)
+                                          .gesturesEnabledWhileControlsVisible) &&
+                                  _brightnessIndicator
+                              ? 1.0
+                              : 0.0,
+                          duration: _theme(context).controlsTransitionDuration,
+                          child: _theme(context)
+                                  .brightnessIndicatorBuilder
+                                  ?.call(context, _brightnessValue) ??
+                              Container(
+                                alignment: Alignment.center,
+                                decoration: BoxDecoration(
+                                  color: const Color(0x88000000),
+                                  borderRadius: BorderRadius.circular(64.0),
+                                ),
+                                height: 52.0,
+                                width: 108.0,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  crossAxisAlignment: CrossAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      height: 52.0,
+                                      width: 42.0,
+                                      alignment: Alignment.centerRight,
+                                      child: Icon(
+                                        _brightnessValue < 1.0 / 3.0
+                                            ? Icons.brightness_low
+                                            : _brightnessValue < 2.0 / 3.0
+                                                ? Icons.brightness_medium
+                                                : Icons.brightness_high,
+                                        color: const Color(0xFFFFFFFF),
+                                        size: 24.0,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8.0),
+                                    Expanded(
+                                      child: Text(
+                                        '${(_brightnessValue * 100.0).round()}%',
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 14.0,
+                                          color: Color(0xFFFFFFFF),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 16.0),
+                                  ],
+                                ),
                               ),
-                                  duration: _theme(context)
-                                      .controlsTransitionDuration,
-                              builder: (context, value, child) {
-                                // Only mount the buffering indicator if the opacity is greater than 0.0.
-                                // This has been done to prevent redundant resource usage in [CircularProgressIndicator].
-                                if (value > 0.0) {
-                                  return Opacity(
-                                    opacity: value,
-                                    child: _theme(context)
-                                            .bufferingIndicatorBuilder
-                                            ?.call(context) ??
-                                        child!,
-                                  );
-                                }
-                                return const SizedBox.shrink();
-                              },
-                              child: const CircularProgressIndicator(
-                                color: Color(0xFFFFFFFF),
-                              ),
+                        ),
+                      ),
+                    // Speedup Indicator.
+                    IgnorePointer(
+                      child: Padding(
+                        padding: _theme(context).padding ??
+                            (
+                                // Add padding in fullscreen!
+                                isFullscreen(context)
+                                    ? MediaQuery.of(context).padding
+                                    : EdgeInsets.zero),
+                        child: Column(
+                          children: [
+                            Container(
+                              height: _theme(context).buttonBarHeight,
+                              margin: _theme(context).topButtonBarMargin,
                             ),
-                          ),
-                        ),
-                        Container(
-                          height: _theme(context).buttonBarHeight,
-                          margin: _theme(context).bottomButtonBarMargin,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                // Volume Indicator.
-                IgnorePointer(
-                  child: AnimatedOpacity(
-                    curve: Curves.easeInOut,
-                    opacity: (!mount ||
-                                _theme(context)
-                                    .gesturesEnabledWhileControlsVisible) &&
-                            _volumeIndicator
-                        ? 1.0
-                        : 0.0,
-                    duration: _theme(context).controlsTransitionDuration,
-                    child: _theme(context)
-                            .volumeIndicatorBuilder
-                            ?.call(context, _volumeValue) ??
-                        Container(
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: const Color(0x88000000),
-                            borderRadius: BorderRadius.circular(64.0),
-                          ),
-                          height: 52.0,
-                          width: 108.0,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Container(
-                                height: 52.0,
-                                width: 42.0,
-                                alignment: Alignment.centerRight,
-                                child: Icon(
-                                  _volumeValue == 0.0
-                                      ? Icons.volume_off
-                                      : _volumeValue < 0.5
-                                          ? Icons.volume_down
-                                          : Icons.volume_up,
-                                  color: const Color(0xFFFFFFFF),
-                                  size: 24.0,
-                                ),
-                              ),
-                              const SizedBox(width: 8.0),
-                              Expanded(
-                                child: Text(
-                                  '${(_volumeValue * 100.0).round()}%',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 14.0,
-                                    color: Color(0xFFFFFFFF),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 16.0),
-                            ],
-                          ),
-                        ),
-                  ),
-                ),
-                // Brightness Indicator.
-                IgnorePointer(
-                  child: AnimatedOpacity(
-                    curve: Curves.easeInOut,
-                    opacity: (!mount ||
-                                _theme(context)
-                                    .gesturesEnabledWhileControlsVisible) &&
-                            _brightnessIndicator
-                        ? 1.0
-                        : 0.0,
-                    duration: _theme(context).controlsTransitionDuration,
-                    child: _theme(context)
-                            .brightnessIndicatorBuilder
-                            ?.call(context, _brightnessValue) ??
-                        Container(
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: const Color(0x88000000),
-                            borderRadius: BorderRadius.circular(64.0),
-                          ),
-                          height: 52.0,
-                          width: 108.0,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Container(
-                                height: 52.0,
-                                width: 42.0,
-                                alignment: Alignment.centerRight,
-                                child: Icon(
-                                  _brightnessValue < 1.0 / 3.0
-                                      ? Icons.brightness_low
-                                      : _brightnessValue < 2.0 / 3.0
-                                          ? Icons.brightness_medium
-                                          : Icons.brightness_high,
-                                  color: const Color(0xFFFFFFFF),
-                                  size: 24.0,
-                                ),
-                              ),
-                              const SizedBox(width: 8.0),
-                              Expanded(
-                                child: Text(
-                                  '${(_brightnessValue * 100.0).round()}%',
-                                  textAlign: TextAlign.center,
-                                  style: const TextStyle(
-                                    fontSize: 14.0,
-                                    color: Color(0xFFFFFFFF),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 16.0),
-                            ],
-                          ),
-                        ),
-                  ),
-                ),
-                // Speedup Indicator.
-                IgnorePointer(
-                  child: Padding(
-                    padding: _theme(context).padding ??
-                        (
-                            // Add padding in fullscreen!
-                            isFullscreen(context)
-                                ? MediaQuery.of(context).padding
-                                : EdgeInsets.zero),
-                    child: Column(
-                      children: [
-                        Container(
-                          height: _theme(context).buttonBarHeight,
-                          margin: _theme(context).topButtonBarMargin,
-                        ),
-                        Expanded(
-                          child: AnimatedOpacity(
-                            duration:
-                                _theme(context).controlsTransitionDuration,
-                            opacity: _speedUpIndicator ? 1 : 0,
-                            child: _theme(context)
-                                    .speedUpIndicatorBuilder
-                                    ?.call(context,
-                                        _theme(context).speedUpFactor) ??
-                                Container(
-                                  alignment: Alignment.topCenter,
-                                  child: Container(
-                                    margin: const EdgeInsets.all(16.0),
-                                    alignment: Alignment.center,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0x88000000),
+                            Expanded(
+                              child: AnimatedOpacity(
+                                duration:
+                                    _theme(context).controlsTransitionDuration,
+                                opacity: _speedUpIndicator ? 1 : 0,
+                                child: _theme(context)
+                                        .speedUpIndicatorBuilder
+                                        ?.call(context,
+                                            _theme(context).speedUpFactor) ??
+                                    Container(
+                                      alignment: Alignment.topCenter,
+                                      child: Container(
+                                        margin: const EdgeInsets.all(16.0),
+                                        alignment: Alignment.center,
+                                        decoration: BoxDecoration(
+                                          color: const Color(0x88000000),
                                           borderRadius:
                                               BorderRadius.circular(64.0),
-                                    ),
-                                    height: 48.0,
-                                    width: 108.0,
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.center,
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.center,
-                                      children: [
-                                        const SizedBox(width: 16.0),
-                                        Expanded(
-                                          child: Text(
-                                            '${_theme(context).speedUpFactor.toStringAsFixed(1)}x',
-                                            textAlign: TextAlign.center,
-                                            style: const TextStyle(
-                                              fontSize: 14.0,
-                                              color: Color(0xFFFFFFFF),
+                                        ),
+                                        height: 48.0,
+                                        width: 108.0,
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.center,
+                                          children: [
+                                            const SizedBox(width: 16.0),
+                                            Expanded(
+                                              child: Text(
+                                                '${_theme(context).speedUpFactor.toStringAsFixed(1)}x',
+                                                textAlign: TextAlign.center,
+                                                style: const TextStyle(
+                                                  fontSize: 14.0,
+                                                  color: Color(0xFFFFFFFF),
+                                                ),
+                                              ),
                                             ),
-                                          ),
+                                            Container(
+                                              height: 48.0,
+                                              width: 48.0 - 16.0,
+                                              alignment: Alignment.centerRight,
+                                              child: const Icon(
+                                                Icons.fast_forward,
+                                                color: Color(0xFFFFFFFF),
+                                                size: 24.0,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 16.0),
+                                          ],
                                         ),
-                                        Container(
-                                          height: 48.0,
-                                          width: 48.0 - 16.0,
-                                          alignment: Alignment.centerRight,
-                                          child: const Icon(
-                                            Icons.fast_forward,
-                                            color: Color(0xFFFFFFFF),
-                                            size: 24.0,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 16.0),
-                                      ],
+                                      ),
                                     ),
-                                  ),
-                                ),
-                          ),
+                              ),
+                            ),
+                            Container(
+                              height: _theme(context).buttonBarHeight,
+                              margin: _theme(context).bottomButtonBarMargin,
+                            ),
+                          ],
                         ),
-                        Container(
-                          height: _theme(context).buttonBarHeight,
-                          margin: _theme(context).bottomButtonBarMargin,
-                        ),
-                      ],
+                      ),
                     ),
-                  ),
-                ),
-                // Seek Indicator.
-                IgnorePointer(
-                  child: AnimatedOpacity(
-                    duration: _theme(context).controlsTransitionDuration,
-                    opacity: showSwipeDuration ? 1 : 0,
+                    // Seek Indicator.
+                    IgnorePointer(
+                      child: AnimatedOpacity(
+                        duration: _theme(context).controlsTransitionDuration,
+                        opacity: showSwipeDuration ? 1 : 0,
                         child: _theme(context).seekIndicatorBuilder?.call(
                                 context, Duration(seconds: swipeDuration)) ??
-                        Container(
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: const Color(0x88000000),
-                            borderRadius: BorderRadius.circular(64.0),
-                          ),
-                          height: 52.0,
-                          width: 108.0,
-                          child: Text(
-                            swipeDuration > 0
-                                ? "+ ${Duration(seconds: swipeDuration).label()}"
-                                : "- ${Duration(seconds: swipeDuration).label()}",
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 14.0,
-                              color: Color(0xFFFFFFFF),
+                            Container(
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                color: const Color(0x88000000),
+                                borderRadius: BorderRadius.circular(64.0),
+                              ),
+                              height: 52.0,
+                              width: 108.0,
+                              child: Text(
+                                swipeDuration > 0
+                                    ? "+ ${Duration(seconds: swipeDuration).label()}"
+                                    : "- ${Duration(seconds: swipeDuration).label()}",
+                                textAlign: TextAlign.center,
+                                style: const TextStyle(
+                                  fontSize: 14.0,
+                                  color: Color(0xFFFFFFFF),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                  ),
-                ),
+                      ),
+                    ),
 
-                // Double-Tap Seek Button(s):
-                if (!mount || seekOnDoubleTapEnabledWhileControlsAreVisible)
-                  if (_mountSeekBackwardButton || _mountSeekForwardButton)
-                    Positioned.fill(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            flex: _theme(context)
-                                .seekOnDoubleTapLayoutWidgetRatios[0],
-                            child: _mountSeekBackwardButton
-                                ? AnimatedOpacity(
+                    // Double-Tap Seek Button(s):
+                    if (!mount || seekOnDoubleTapEnabledWhileControlsAreVisible)
+                      if (_mountSeekBackwardButton || _mountSeekForwardButton)
+                        Positioned.fill(
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: _theme(context)
+                                    .seekOnDoubleTapLayoutWidgetRatios[0],
+                                child: _mountSeekBackwardButton
+                                    ? AnimatedOpacity(
                                         opacity:
                                             _hideSeekBackwardButton ? 0 : 1.0,
                                         duration:
                                             const Duration(milliseconds: 200),
-                                    child: _BackwardSeekIndicator(
-                                      duration: _theme(context)
-                                          .seekOnDoubleTapBackwardDuration,
-                                      onChanged: (value) {
-                                        _seekBarDeltaValueNotifier.value =
-                                            -value;
-                                      },
-                                      onSubmitted: (value) {
-                                        _timerSeekBackwardButton?.cancel();
+                                        child: _BackwardSeekIndicator(
+                                          duration: _theme(context)
+                                              .seekOnDoubleTapBackwardDuration,
+                                          onChanged: (value) {
+                                            _seekBarDeltaValueNotifier.value =
+                                                -value;
+                                          },
+                                          onSubmitted: (value) {
+                                            _timerSeekBackwardButton?.cancel();
                                             final previewGeneration =
                                                 ++_seekPreviewGeneration;
-                                        _timerSeekBackwardButton = Timer(
-                                          const Duration(milliseconds: 200),
-                                          () {
-                                            setState(() {
+                                            _timerSeekBackwardButton = Timer(
+                                              const Duration(milliseconds: 200),
+                                              () {
+                                                setState(() {
                                                   _hideSeekBackwardButton =
                                                       false;
                                                   _mountSeekBackwardButton =
@@ -1832,66 +1989,66 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                                     _seekBarDeltaValueNotifier
                                                         .value = Duration.zero;
                                                   }
-                                            });
-                                          },
-                                        );
+                                                });
+                                              },
+                                            );
 
-                                        setState(() {
-                                          _hideSeekBackwardButton = true;
-                                        });
-                                        var result = controller(context)
-                                                .player
-                                                .state
-                                                .position -
-                                            value;
-                                        result = result.clamp(
-                                          Duration.zero,
-                                          controller(context)
-                                              .player
-                                              .state
-                                              .duration,
-                                        );
+                                            setState(() {
+                                              _hideSeekBackwardButton = true;
+                                            });
+                                            var result = controller(context)
+                                                    .player
+                                                    .state
+                                                    .position -
+                                                value;
+                                            result = result.clamp(
+                                              Duration.zero,
+                                              controller(context)
+                                                  .player
+                                                  .state
+                                                  .duration,
+                                            );
                                             controller(context)
                                                 .player
                                                 .seek(result);
-                                      },
-                                    ),
-                                  )
-                                : const SizedBox(),
-                          ),
-                          //Area in the middle where the double-tap seek buttons are ignored in
-                          if (_theme(context)
-                                  .seekOnDoubleTapLayoutWidgetRatios[1] >
-                              0)
-                            Spacer(
-                              flex: _theme(context)
-                                  .seekOnDoubleTapLayoutWidgetRatios[1],
-                            ),
-                          Expanded(
-                            flex: _theme(context)
-                                .seekOnDoubleTapLayoutWidgetRatios[2],
-                            child: _mountSeekForwardButton
-                                ? AnimatedOpacity(
+                                          },
+                                        ),
+                                      )
+                                    : const SizedBox(),
+                              ),
+                              //Area in the middle where the double-tap seek buttons are ignored in
+                              if (_theme(context)
+                                      .seekOnDoubleTapLayoutWidgetRatios[1] >
+                                  0)
+                                Spacer(
+                                  flex: _theme(context)
+                                      .seekOnDoubleTapLayoutWidgetRatios[1],
+                                ),
+                              Expanded(
+                                flex: _theme(context)
+                                    .seekOnDoubleTapLayoutWidgetRatios[2],
+                                child: _mountSeekForwardButton
+                                    ? AnimatedOpacity(
                                         opacity:
                                             _hideSeekForwardButton ? 0 : 1.0,
                                         duration:
                                             const Duration(milliseconds: 200),
-                                    child: _ForwardSeekIndicator(
-                                      duration: _theme(context)
-                                          .seekOnDoubleTapForwardDuration,
-                                      onChanged: (value) {
-                                        _seekBarDeltaValueNotifier.value =
-                                            value;
-                                      },
-                                      onSubmitted: (value) {
-                                        _timerSeekForwardButton?.cancel();
+                                        child: _ForwardSeekIndicator(
+                                          duration: _theme(context)
+                                              .seekOnDoubleTapForwardDuration,
+                                          onChanged: (value) {
+                                            _seekBarDeltaValueNotifier.value =
+                                                value;
+                                          },
+                                          onSubmitted: (value) {
+                                            _timerSeekForwardButton?.cancel();
                                             final previewGeneration =
                                                 ++_seekPreviewGeneration;
-                                        _timerSeekForwardButton = Timer(
+                                            _timerSeekForwardButton = Timer(
                                                 const Duration(
                                                     milliseconds: 200), () {
-                                          if (_hideSeekForwardButton) {
-                                            setState(() {
+                                              if (_hideSeekForwardButton) {
+                                                setState(() {
                                                   _hideSeekForwardButton =
                                                       false;
                                                   _mountSeekForwardButton =
@@ -1901,38 +2058,38 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                                     _seekBarDeltaValueNotifier
                                                         .value = Duration.zero;
                                                   }
+                                                });
+                                              }
                                             });
-                                          }
-                                        });
-                                        setState(() {
-                                          _hideSeekForwardButton = true;
-                                        });
+                                            setState(() {
+                                              _hideSeekForwardButton = true;
+                                            });
 
-                                        var result = controller(context)
-                                                .player
-                                                .state
-                                                .position +
-                                            value;
-                                        result = result.clamp(
-                                          Duration.zero,
-                                          controller(context)
-                                              .player
-                                              .state
-                                              .duration,
-                                        );
+                                            var result = controller(context)
+                                                    .player
+                                                    .state
+                                                    .position +
+                                                value;
+                                            result = result.clamp(
+                                              Duration.zero,
+                                              controller(context)
+                                                  .player
+                                                  .state
+                                                  .duration,
+                                            );
                                             controller(context)
                                                 .player
                                                 .seek(result);
-                                      },
-                                    ),
-                                  )
-                                : const SizedBox(),
+                                          },
+                                        ),
+                                      )
+                                    : const SizedBox(),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
-              ],
-            ),
+                        ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -2111,6 +2268,7 @@ class MaterialSeekBarState extends State<MaterialSeekBar> {
         applied.complete();
       }
     }
+
     final subscription = player.stream.position.listen(accept);
     try {
       await player.seek(target);
@@ -2465,6 +2623,7 @@ class MaterialCustomButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return IconButton(
       onPressed: onPressed,
+      style: IconButton.styleFrom(shape: const StadiumBorder()),
       icon: icon ?? const Icon(Icons.settings),
       padding: EdgeInsets.zero,
       iconSize: iconSize ?? _theme(context).buttonBarButtonSize,

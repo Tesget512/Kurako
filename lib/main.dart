@@ -12,6 +12,8 @@ import 'package:window_manager/window_manager.dart';
 
 import 'src/rust/frb_generated.dart';
 import 'src/rust/api.dart' as rust;
+import 'src/rust/api/mirror.dart' as mirror;
+import 'src/services/bangumi_mirror.dart';
 import 'src/app.dart';
 import 'src/state/providers.dart';
 import 'src/services/proxy.dart';
@@ -81,9 +83,23 @@ Future<void> main() async {
   // synchronously (the configuration is fixed at construction time).
   decodeModeStartupValue = prefs.getString('decode_mode') ?? 'auto';
 
-  // Route Bangumi API through the China mirror by default (the official domain
-  // is frequently blocked in mainland China). Pushed before any request runs.
-  rust.setBangumiMirror(enabled: prefs.getBool('bangumi_mirror') ?? true);
+  rust.setBangumiMirror(enabled: false);
+  BangumiMirrorService.instance.bindBackend(
+    BangumiMirrorBackend(
+      configure:
+          ({required apiCookie, required imageCookie, required userAgent}) =>
+              mirror.configureBangumiMirrorVerification(
+                apiCookie: apiCookie,
+                imageCookie: imageCookie,
+                userAgent: userAgent,
+              ),
+      probeApi: mirror.probeBangumiMirror,
+      probeImage: (imageUrl) =>
+          mirror.probeBangumiMirrorImage(imageUrl: imageUrl),
+      setEnabled: (enabled) async => rust.setBangumiMirror(enabled: enabled),
+      clear: () async => mirror.clearBangumiMirrorVerification(),
+    ),
+  );
 
   // Restore SMB credentials so network-share folders work without re-entering
   // the password (connection is opened lazily per operation).

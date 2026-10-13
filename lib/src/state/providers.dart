@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart' show Color, ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/bangumi_mirror.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 
@@ -497,33 +499,71 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
   return creds.isConfigured;
 });
 
-// ---- Bangumi API mirror (default on; routes API through the China mirror) ----
+// ---- Bangumi API mirror ----
 
-/// When on, Bangumi API calls go through the mainland-China mirror
-/// (bgmapi.anibt.net) and cover images through bgmimg.anibt.net. Persisted;
-/// pushed into the Rust core on change. Thanks to Soyorin (github.com/
-/// Yuri-NagaSaki/bangumi-proxy) for the public proxy.
 final bangumiMirrorProvider = StateNotifierProvider<_MirrorNotifier, bool>((
   ref,
 ) {
   return _MirrorNotifier();
 });
 
-class _MirrorNotifier extends StateNotifier<bool> {
-  _MirrorNotifier() : super(true) {
-    _load();
+final bangumiMirrorStatusProvider =
+    StateNotifierProvider<_MirrorStatusNotifier, BangumiMirrorService>(
+      (ref) => _MirrorStatusNotifier(BangumiMirrorService.instance),
+    );
+
+class _MirrorStatusNotifier extends StateNotifier<BangumiMirrorService> {
+  _MirrorStatusNotifier(super.state) {
+    state.addListener(_changed);
   }
+
+  void _changed() {
+    if (mounted) state = state;
+  }
+
+  @override
+  bool updateShouldNotify(
+    BangumiMirrorService old,
+    BangumiMirrorService current,
+  ) => true;
+
+  @override
+  void dispose() {
+    state.removeListener(_changed);
+    super.dispose();
+  }
+}
+
+class _MirrorNotifier extends StateNotifier<bool> {
+  _MirrorNotifier() : super(false) {
+    BangumiMirrorService.instance.addListener(_sync);
+    unawaited(_load());
+  }
+
+  void _sync() {
+    if (mounted) state = BangumiMirrorService.instance.enabled;
+  }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool('bangumi_mirror') ?? true;
-    rust.setBangumiMirror(enabled: state);
+    await BangumiMirrorService.instance.restore(
+      requestedEnabled: prefs.getBool('bangumi_mirror') ?? false,
+    );
+    _sync();
   }
 
   Future<void> set(bool value) async {
+    if (!value) await BangumiMirrorService.instance.disable();
+    final enabled = value && BangumiMirrorService.instance.enabled;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('bangumi_mirror', value);
-    rust.setBangumiMirror(enabled: value);
-    state = value;
+    await prefs.setBool('bangumi_mirror', enabled);
+    if (mounted) state = enabled;
+  }
+
+  @override
+  void dispose() {
+    BangumiMirrorService.instance.removeListener(_sync);
+    super.dispose();
   }
 }
 
@@ -825,9 +865,98 @@ class Settings {
   }
 }
 
+enum BangumiRefreshStatus {
+  ready,
+  refreshing,
+  success,
+  networkFailure,
+  reloginRequired,
+}
+
+/// Display-safe metadata only: never tokens or backend errors.
+class BangumiRefreshState {
+  final BangumiRefreshStatus status;
+  final DateTime? lastSuccess;
+  final int expiresAt;
+
+  const BangumiRefreshState({
+    this.status = BangumiRefreshStatus.ready,
+    this.lastSuccess,
+    this.expiresAt = 0,
+  });
+}
+
+class BangumiRefreshStateNotifier extends StateNotifier<BangumiRefreshState> {
+  BangumiRefreshStateNotifier() : super(const BangumiRefreshState());
+
+  void update(BangumiRefreshState value) {
+    if (mounted) state = value;
+  }
+}
+
+final bangumiRefreshStateProvider =
+    StateNotifierProvider<BangumiRefreshStateNotifier, BangumiRefreshState>(
+      (ref) => BangumiRefreshStateNotifier(),
+    );
+
+/// Tests replace this boundary without initializing Rust or using real OAuth.
+abstract class BangumiRefreshBackend {
+  Future<rust.OAuthResult> refresh(String refreshToken);
+  Future<void> setAccessToken(String? token);
+}
+
+class RustBangumiRefreshBackend implements BangumiRefreshBackend {
+  const RustBangumiRefreshBackend();
+
+  @override
+  Future<rust.OAuthResult> refresh(String refreshToken) =>
+      rust.oauthRefresh(refreshToken: refreshToken);
+
+  @override
+  Future<void> setAccessToken(String? token) =>
+      rust.setBangumiToken(token: token);
+}
+
+final bangumiRefreshBackendProvider = Provider<BangumiRefreshBackend>(
+  (ref) => const RustBangumiRefreshBackend(),
+);
+
 class SettingsNotifier extends StateNotifier<Settings> {
-  SettingsNotifier() : super(const Settings()) {
+  SettingsNotifier({
+    BangumiRefreshBackend? refreshBackend,
+    this.onRefreshStateChanged,
+    DateTime Function()? now,
+    Future<void> Function(Duration)? wait,
+  }) : _refreshBackend = refreshBackend ?? const RustBangumiRefreshBackend(),
+       _now = now ?? DateTime.now,
+       _wait = wait ?? Future<void>.delayed,
+       super(const Settings()) {
     ready = _load();
+    // Renewal waits for ready, so _load must never await renewal.
+    unawaited(ready.then((_) => ensureFreshBangumiToken()));
+  }
+
+  final BangumiRefreshBackend _refreshBackend;
+  final void Function(BangumiRefreshState)? onRefreshStateChanged;
+  final DateTime Function() _now;
+  final Future<void> Function(Duration) _wait;
+  BangumiRefreshState refreshState = const BangumiRefreshState();
+  int _sessionGeneration = 0;
+  bool _disposed = false;
+  bool _loginInProgress = false;
+  Future<void> _sessionWrites = Future<void>.value();
+
+  bool _isCurrent(int generation) =>
+      !_disposed && generation == _sessionGeneration;
+
+  void _publishRefresh(BangumiRefreshStatus status, {DateTime? lastSuccess}) {
+    if (_disposed) return;
+    refreshState = BangumiRefreshState(
+      status: status,
+      lastSuccess: lastSuccess ?? refreshState.lastSuccess,
+      expiresAt: state.bangumiTokenExpiresAt,
+    );
+    onRefreshStateChanged?.call(refreshState);
   }
 
   /// Completes when the persisted settings have been read from disk. Await this
@@ -844,6 +973,7 @@ class SettingsNotifier extends StateNotifier<Settings> {
     if (backgroundPlayback) {
       await prefs.setBool('media_session_enabled', true);
     }
+    if (_disposed) return;
     state = Settings(
       useExternalPlayer: prefs.getBool('use_external_player') ?? false,
       externalPlayerPath: prefs.getString('external_player_path') ?? '',
@@ -861,11 +991,49 @@ class SettingsNotifier extends StateNotifier<Settings> {
       gestureSeekDurationSec: (prefs.getInt('gesture_seek_duration_sec') ?? 10)
           .clamp(5, 90),
     );
-    // Push any existing access token into Rust and refresh if near expiry.
+    final lastSuccess = prefs.getInt('bangumi_refresh_last_success');
+    _publishRefresh(
+      BangumiRefreshStatus.ready,
+      lastSuccess: lastSuccess == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(lastSuccess),
+    );
     if (state.bangumiToken.isNotEmpty) {
-      rust.setBangumiToken(token: state.bangumiToken);
-      await _refreshIfNeeded();
+      try {
+        await _refreshBackend.setAccessToken(state.bangumiToken);
+      } catch (_) {
+        // Runtime setup errors are not safe to display or log verbatim.
+      }
     }
+    if (!_disposed) _startRefreshTimer();
+  }
+
+  /// Reuse an in-flight refresh so overlapping triggers (startup, app-resume,
+  /// periodic timer) never fire duplicate network requests.
+  Future<void>? _refreshing;
+  Timer? _refreshTimer;
+
+  /// How long before expiry we start trying to renew. Wide (3 days of a ~7-day
+  /// token) so there are many chances to succeed even when the official OAuth
+  /// domain is only intermittently reachable.
+  static const int _refreshWindowSecs = 3 * 24 * 3600;
+
+  void _startRefreshTimer() {
+    _refreshTimer?.cancel();
+    // Long-running instances (desktop especially) can cross the expiry point
+    // without ever backgrounding, so poll periodically rather than relying on
+    // an app restart to trigger renewal.
+    _refreshTimer = Timer.periodic(const Duration(hours: 6), (_) {
+      unawaited(ensureFreshBangumiToken());
+    });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _sessionGeneration++;
+    _refreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> setUseExternalPlayer(bool value) async {
@@ -974,57 +1142,221 @@ class SettingsNotifier extends StateNotifier<Settings> {
     _ => 'off',
   };
 
-  /// Persist a freshly obtained OAuth session (access + refresh + expiry).
+  /// Call before opening authorization so an old refresh cannot finish during it.
+  void beginBangumiLogin() {
+    if (_disposed) return;
+    _sessionGeneration++;
+    _loginInProgress = true;
+    _refreshing = null;
+    _publishRefresh(BangumiRefreshStatus.ready);
+  }
+
+  void endBangumiLogin() {
+    if (!_disposed) _loginInProgress = false;
+  }
+
+  /// New authorization invalidates all results from the previous session.
   Future<void> setOAuthSession({
     required String accessToken,
     required String refreshToken,
     required int expiresAt,
+  }) {
+    final generation = ++_sessionGeneration;
+    _loginInProgress = false;
+    _refreshing = null;
+    return _queueSessionWrite(() async {
+      await ready;
+      if (!_isCurrent(generation)) return;
+      refreshState = const BangumiRefreshState();
+      await _saveSession(
+        generation: generation,
+        accessToken: accessToken,
+        refreshToken: refreshToken,
+        expiresAt: expiresAt,
+      );
+    });
+  }
+
+  Future<void> _queueSessionWrite(Future<void> Function() action) {
+    final operation = _sessionWrites.then((_) => action());
+    // A failed persistence attempt must not block later logout/login writes.
+    _sessionWrites = operation.then<void>((_) {}, onError: (Object _) {});
+    return operation;
+  }
+
+  Future<void> _saveSession({
+    required int generation,
+    required String accessToken,
+    required String refreshToken,
+    required int expiresAt,
+    DateTime? lastSuccess,
   }) async {
     final prefs = await SharedPreferences.getInstance();
+    if (!_isCurrent(generation)) return;
     await prefs.setString('bangumi_token', accessToken);
+    if (!_isCurrent(generation)) return;
     await prefs.setString('bangumi_refresh_token', refreshToken);
+    if (!_isCurrent(generation)) return;
     await prefs.setInt('bangumi_token_expires_at', expiresAt);
-    rust.setBangumiToken(token: accessToken.isEmpty ? null : accessToken);
+    if (!_isCurrent(generation)) return;
+    if (lastSuccess == null) {
+      await prefs.remove('bangumi_refresh_last_success');
+    } else {
+      await prefs.setInt(
+        'bangumi_refresh_last_success',
+        lastSuccess.millisecondsSinceEpoch,
+      );
+    }
+    if (!_isCurrent(generation)) return;
+    await _refreshBackend.setAccessToken(
+      accessToken.isEmpty ? null : accessToken,
+    );
+    if (!_isCurrent(generation)) return;
     state = state.copyWith(
       bangumiToken: accessToken,
       bangumiRefreshToken: refreshToken,
       bangumiTokenExpiresAt: expiresAt,
     );
-  }
-
-  /// Clear the OAuth session (logout).
-  Future<void> logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('bangumi_token');
-    await prefs.remove('bangumi_refresh_token');
-    await prefs.remove('bangumi_token_expires_at');
-    rust.setBangumiToken(token: null);
-    state = state.copyWith(
-      bangumiToken: '',
-      bangumiRefreshToken: '',
-      bangumiTokenExpiresAt: 0,
+    _publishRefresh(
+      lastSuccess == null
+          ? BangumiRefreshStatus.ready
+          : BangumiRefreshStatus.success,
+      lastSuccess: lastSuccess,
     );
   }
 
-  /// Refresh the access token if it expires within a day. Credentials are baked
-  /// into the Rust core. Best-effort; failures are ignored (user can re-login).
-  Future<void> _refreshIfNeeded() async {
-    final s = state;
-    if (s.bangumiRefreshToken.isEmpty) return;
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    // Refresh proactively within 24h of expiry (tokens live ~7 days).
-    if (s.bangumiTokenExpiresAt - now > 86400) return;
-    try {
-      final result = await rust.oauthRefresh(
-        refreshToken: s.bangumiRefreshToken,
+  /// Invalidate in-flight requests immediately, then serialize the disk clear.
+  Future<void> logout() {
+    final generation = ++_sessionGeneration;
+    _loginInProgress = false;
+    _refreshing = null;
+    return _queueSessionWrite(() async {
+      await ready;
+      if (!_isCurrent(generation)) return;
+      final prefs = await SharedPreferences.getInstance();
+      if (!_isCurrent(generation)) return;
+      for (final key in const [
+        'bangumi_token',
+        'bangumi_refresh_token',
+        'bangumi_token_expires_at',
+        'bangumi_refresh_last_success',
+      ]) {
+        await prefs.remove(key);
+        if (!_isCurrent(generation)) return;
+      }
+      await _refreshBackend.setAccessToken(null);
+      if (!_isCurrent(generation)) return;
+      state = state.copyWith(
+        bangumiToken: '',
+        bangumiRefreshToken: '',
+        bangumiTokenExpiresAt: 0,
       );
-      await setOAuthSession(
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresAt: result.expiresAt,
-      );
-    } catch (_) {
-      // Leave the stale token in place; user can re-login.
+      refreshState = const BangumiRefreshState();
+      _publishRefresh(BangumiRefreshStatus.ready);
+    });
+  }
+
+  /// Startup/resume/timer/manual triggers await disk loading and share a request.
+  Future<void> ensureFreshBangumiToken({bool force = false}) async {
+    final generation = _sessionGeneration;
+    await ready;
+    await _sessionWrites;
+    if (!_isCurrent(generation) || _loginInProgress) return;
+    final inflight = _refreshing;
+    if (inflight != null) return inflight;
+    late final Future<void> future;
+    future = _doRefresh(force: force, generation: generation).whenComplete(() {
+      if (identical(_refreshing, future)) _refreshing = null;
+    });
+    _refreshing = future;
+    return future;
+  }
+
+  /// Interpret only known protocol/transport markers. Raw errors never leave
+  /// this boundary; unknown failures are visible but are not blindly retried.
+  static ({BangumiRefreshStatus status, bool retryable}) _refreshFailure(
+    Object error,
+  ) {
+    final text = error.toString().toLowerCase();
+    if (RegExp(
+          r'oauth error:\s*(invalid_grant|invalid_token|access_denied|unauthorized_client)\b',
+        ).hasMatch(text) ||
+        RegExp(r'http 40[13]\b').hasMatch(text)) {
+      return (status: BangumiRefreshStatus.reloginRequired, retryable: false);
+    }
+    final retryable =
+        text.contains('oauth token request') ||
+        text.contains('socketexception') ||
+        text.contains('timeoutexception') ||
+        text.contains('connection reset') ||
+        RegExp(r'http (408|429|5\d\d)\b').hasMatch(text) ||
+        RegExp(
+          r'oauth error:\s*(server_error|temporarily_unavailable)\b',
+        ).hasMatch(text);
+    return (status: BangumiRefreshStatus.networkFailure, retryable: retryable);
+  }
+
+  Future<void> _doRefresh({
+    required bool force,
+    required int generation,
+  }) async {
+    if (!_isCurrent(generation) || !state.isLoggedIn) return;
+    final refreshToken = state.bangumiRefreshToken;
+    final expiresAt = state.bangumiTokenExpiresAt;
+    final now = _now().millisecondsSinceEpoch ~/ 1000;
+    if (refreshToken.isEmpty) {
+      if (force || (expiresAt > 0 && expiresAt <= now)) {
+        _publishRefresh(BangumiRefreshStatus.reloginRequired);
+      }
+      return;
+    }
+    // Definitively rejected credentials need authorization, not resume retries.
+    if (refreshState.status == BangumiRefreshStatus.reloginRequired) return;
+    if (!force && expiresAt > 0 && expiresAt - now > _refreshWindowSecs) return;
+    _publishRefresh(BangumiRefreshStatus.refreshing);
+    for (var attempt = 0; attempt < 3; attempt++) {
+      if (!_isCurrent(generation)) return;
+      rust.OAuthResult result;
+      try {
+        result = await _refreshBackend.refresh(refreshToken);
+      } catch (error) {
+        if (!_isCurrent(generation)) return;
+        final failure = _refreshFailure(error);
+        if (kDebugMode) {
+          debugPrint('Bangumi renewal: ${failure.status.name}');
+        }
+        if (!failure.retryable || attempt == 2) {
+          _publishRefresh(failure.status);
+          return;
+        }
+        await _wait(Duration(seconds: 2 << attempt));
+        continue;
+      }
+      if (!_isCurrent(generation)) return;
+      if (result.accessToken.isEmpty) {
+        _publishRefresh(BangumiRefreshStatus.reloginRequired);
+        return;
+      }
+      try {
+        await _queueSessionWrite(() async {
+          if (!_isCurrent(generation)) return;
+          await _saveSession(
+            generation: generation,
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken.isEmpty
+                ? refreshToken
+                : result.refreshToken,
+            expiresAt: result.expiresAt,
+            lastSuccess: _now(),
+          );
+        });
+      } catch (_) {
+        // Do not repeat token rotation when only the local save/runtime failed.
+        if (_isCurrent(generation)) {
+          _publishRefresh(BangumiRefreshStatus.networkFailure);
+        }
+      }
+      return;
     }
   }
 }
@@ -1032,7 +1364,12 @@ class SettingsNotifier extends StateNotifier<Settings> {
 final settingsProvider = StateNotifierProvider<SettingsNotifier, Settings>((
   ref,
 ) {
-  return SettingsNotifier();
+  return SettingsNotifier(
+    refreshBackend: ref.read(bangumiRefreshBackendProvider),
+    onRefreshStateChanged: ref
+        .read(bangumiRefreshStateProvider.notifier)
+        .update,
+  );
 });
 
 /// Restore every SharedPreferences-backed option to its default and clear the
@@ -1040,6 +1377,7 @@ final settingsProvider = StateNotifierProvider<SettingsNotifier, Settings>((
 /// by the caller so downloaded media can be preserved independently.
 Future<void> resetPersistedAppSettings() async {
   final prefs = await SharedPreferences.getInstance();
+  await BangumiMirrorService.instance.disable();
   final cleared = await prefs.clear();
   if (!cleared) {
     throw StateError('无法清空软件配置');
@@ -1047,7 +1385,7 @@ Future<void> resetPersistedAppSettings() async {
 
   decodeModeStartupValue = 'auto';
   await rust.setBangumiToken(token: null);
-  await rust.setBangumiMirror(enabled: true);
+  await rust.setBangumiMirror(enabled: false);
   await rust.smbSetCredentials(host: '', share: '', user: '', password: '');
   await rust.webdavSetCredentials(
     baseUrl: '',

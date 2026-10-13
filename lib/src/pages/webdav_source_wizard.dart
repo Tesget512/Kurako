@@ -7,6 +7,7 @@ import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/remote_path_selection.dart';
 import '../state/providers.dart';
+import '../services/scan_coordinator.dart';
 import '../widgets/remote_folder_selection_header.dart';
 
 class WebDavSourceWizardPage extends ConsumerStatefulWidget {
@@ -183,10 +184,17 @@ class _WebDavSourceWizardPageState
       setState(() => _error = '请至少选择一个需要扫描的文件夹（也可选择 WebDAV 根目录）');
       return;
     }
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
+    if (ref.read(scanCoordinatorProvider).running || mutationLock.state) {
+      setState(() => _error = '扫描或维护正在进行，请完成后再添加来源');
+      return;
+    }
+    mutationLock.state = true;
     _setBusy(true);
-    final oldCredentials = await WebDavCredentials.load();
+    WebDavCredentials? oldCredentials;
     final addedFolders = <LibraryFolder>[];
     try {
+      oldCredentials = await WebDavCredentials.load();
       await rust.webdavSetupCommit(token: token);
       _setupToken = null;
       final credentials = WebDavCredentials(
@@ -221,11 +229,14 @@ class _WebDavSourceWizardPageState
         } catch (_) {}
       }
       try {
-        await oldCredentials.save(rememberInHistory: false);
-        await oldCredentials.pushToRust();
+        if (oldCredentials != null) {
+          await oldCredentials.save(rememberInHistory: false);
+          await oldCredentials.pushToRust();
+        }
       } catch (_) {}
       if (mounted) setState(() => _error = '添加 WebDAV 文件夹失败：$error');
     } finally {
+      mutationLock.state = false;
       _setBusy(false);
     }
   }

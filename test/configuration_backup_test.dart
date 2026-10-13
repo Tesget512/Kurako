@@ -257,6 +257,8 @@ void _removeVersion4PlayerSettings(Map<String, dynamic> root) {
     'media_session_enabled',
     'gesture_seek_duration_sec',
     'theme_mode',
+    'player_brightness_color',
+    'player_volume_color',
   ]) {
     settings.remove(key);
   }

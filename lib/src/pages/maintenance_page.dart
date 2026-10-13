@@ -7,7 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
+import '../services/scan_coordinator.dart';
 import '../services/configuration_backup.dart';
+import '../services/bangumi_mirror.dart';
+import '../state/player_appearance.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
 import 'blacklist_page.dart';
@@ -30,6 +33,8 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   bool _transferringConfiguration = false;
 
   bool get _maintenanceBusy =>
+      ref.read(scanCoordinatorProvider).running ||
+      ref.read(libraryMutationBusyProvider) ||
       _clearingLibrary ||
       _clearingDownloads ||
       _clearingMatchConfig ||
@@ -37,111 +42,117 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       _transferringConfiguration;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: const SysAppBar(title: Text('维护')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        _section(context, '下载'),
-        _buildDownloadDirRow(),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.delete_forever_outlined),
-          title: const Text('清空所有已下载番剧'),
-          subtitle: const Text('删除下载管理中的全部本地视频、绑定字幕和下载记录'),
-          onTap: _maintenanceBusy ? null : _clearAllDownloads,
-        ),
-        const Divider(height: 32),
-        _section(context, '内容管理'),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.content_copy_outlined),
-          title: const Text('疑似重复检查'),
-          subtitle: const Text('独立检查已扫描视频，不改变扫描、匹配或文件'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _maintenanceBusy
-              ? null
-              : () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const DuplicateCheckPage()),
-                ),
-        ),
-        ListTile(
-          key: const ValueKey('maintenance-blacklist'),
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.block_outlined),
-          title: const Text('屏蔽管理'),
-          subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: _maintenanceBusy
-              ? null
-              : () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const BlacklistPage()),
-                ),
-        ),
-        const Divider(height: 32),
-        _section(context, '备份与恢复'),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: _transferringConfiguration
-              ? const SizedBox.square(
-                  dimension: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.upload_file_outlined),
-          title: const Text('导出配置'),
-          subtitle: const Text(
-            '导出设置、Bangumi 账号、SMB 与 WebDAV 凭证；不包含下载、媒体来源和本机路径',
+  Widget build(BuildContext context) {
+    ref.watch(scanCoordinatorProvider);
+    ref.watch(libraryMutationBusyProvider);
+    return Scaffold(
+      appBar: const SysAppBar(title: Text('维护')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _section(context, '下载'),
+          _buildDownloadDirRow(),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_forever_outlined),
+            title: const Text('清空所有已下载番剧'),
+            subtitle: const Text('删除下载管理中的全部本地视频、绑定字幕和下载记录'),
+            onTap: _maintenanceBusy ? null : _clearAllDownloads,
           ),
-          onTap: _maintenanceBusy ? null : _exportConfiguration,
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.file_download_outlined),
-          title: const Text('导入配置'),
-          subtitle: const Text('从 Kurako JSON 配置文件恢复可跨设备设置'),
-          onTap: _maintenanceBusy ? null : _importConfiguration,
-        ),
-        const Divider(height: 32),
-        _section(context, '重置'),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.delete_sweep_outlined),
-          title: const Text('清空番剧与匹配'),
-          subtitle: const Text('清空当前番剧、剧集和匹配结果；保留媒体来源、下载与设置'),
-          onTap: _maintenanceBusy ? null : _clearLibrary,
-        ),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.link_off_outlined),
-          title: const Text('删除手动匹配配置'),
-          subtitle: const Text(
-            '清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
-            '下次扫描将恢复为自动分组',
+          const Divider(height: 32),
+          _section(context, '内容管理'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.content_copy_outlined),
+            title: const Text('疑似重复检查'),
+            subtitle: const Text('独立检查已扫描视频，不改变扫描、匹配或文件'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _maintenanceBusy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const DuplicateCheckPage(),
+                    ),
+                  ),
           ),
-          onTap: _maintenanceBusy ? null : _clearMatchConfig,
-        ),
-        ListTile(
-          key: const ValueKey('maintenance-reset-all'),
-          contentPadding: EdgeInsets.zero,
-          leading: _resettingConfiguration
-              ? const SizedBox.square(
-                  dimension: 24,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : Icon(
-                  Icons.restart_alt,
-                  color: Theme.of(context).colorScheme.error,
-                ),
-          title: Text(
-            '清空所有配置',
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ListTile(
+            key: const ValueKey('maintenance-blacklist'),
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.block_outlined),
+            title: const Text('屏蔽管理'),
+            subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _maintenanceBusy
+                ? null
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const BlacklistPage()),
+                  ),
           ),
-          subtitle: const Text('恢复软件选项并清除账号、凭证、媒体来源、屏蔽与匹配配置；保留下载'),
-          onTap: _maintenanceBusy ? null : _clearAllConfiguration,
-        ),
-      ],
-    ),
-  );
+          const Divider(height: 32),
+          _section(context, '备份与恢复'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: _transferringConfiguration
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.upload_file_outlined),
+            title: const Text('导出配置'),
+            subtitle: const Text(
+              '导出设置、Bangumi 账号、SMB 与 WebDAV 凭证；不包含下载、媒体来源和本机路径',
+            ),
+            onTap: _maintenanceBusy ? null : _exportConfiguration,
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.file_download_outlined),
+            title: const Text('导入配置'),
+            subtitle: const Text('从 Kurako JSON 配置文件恢复可跨设备设置'),
+            onTap: _maintenanceBusy ? null : _importConfiguration,
+          ),
+          const Divider(height: 32),
+          _section(context, '重置'),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.delete_sweep_outlined),
+            title: const Text('清空番剧与匹配'),
+            subtitle: const Text('清空当前番剧、剧集和匹配结果；保留媒体来源、下载与设置'),
+            onTap: _maintenanceBusy ? null : _clearLibrary,
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.link_off_outlined),
+            title: const Text('删除手动匹配配置'),
+            subtitle: const Text(
+              '清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
+              '下次扫描将恢复为自动分组',
+            ),
+            onTap: _maintenanceBusy ? null : _clearMatchConfig,
+          ),
+          ListTile(
+            key: const ValueKey('maintenance-reset-all'),
+            contentPadding: EdgeInsets.zero,
+            leading: _resettingConfiguration
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    Icons.restart_alt,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+            title: Text(
+              '清空所有配置',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+            subtitle: const Text('恢复软件选项并清除账号、凭证、媒体来源、屏蔽与匹配配置；保留下载'),
+            onTap: _maintenanceBusy ? null : _clearAllConfiguration,
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _section(BuildContext context, String title) => Padding(
     padding: const EdgeInsets.only(bottom: 8),
@@ -174,7 +185,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
                   : () async {
                       final picked = await FilePicker.platform
                           .getDirectoryPath();
-                      if (picked != null) {
+                      if (picked != null && mounted && !_maintenanceBusy) {
                         await ref
                             .read(downloadDirProvider.notifier)
                             .set(picked);
@@ -208,7 +219,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
         ],
       ),
     );
-    if (confirmed != true || !mounted) return;
+    if (confirmed != true || !mounted || _maintenanceBusy) return;
     setState(() => _transferringConfiguration = true);
     try {
       final json = await ConfigurationBackupDocument.exportJson();
@@ -238,6 +249,8 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   }
 
   Future<void> _importConfiguration() async {
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
+    var reserved = false;
     setState(() => _transferringConfiguration = true);
     try {
       final result = await FilePicker.platform.pickFiles(
@@ -259,6 +272,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             '将替换 ${document.settingCount} 项外观、播放器与使用偏好。\n\n'
             '${document.includesAccountAndSmb ? '文件中的 Bangumi 账号与 SMB 凭证也会覆盖当前值。' : '这是 v1 配置文件，当前账号与 SMB 凭证会保留。'}\n'
             '${document.includesWebDav ? '文件中的 WebDAV 凭证也会覆盖当前值。' : '当前 WebDAV 凭证会保留。'}\n\n'
+            '镜像验证仅在本机有效，导入后需要重新验证。\n\n'
             '下载内容、媒体来源和本机路径都会保留。确定继续吗？',
           ),
           actions: [
@@ -274,13 +288,24 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
         ),
       );
       if (confirmed != true || !mounted) return;
+      if (ref.read(scanCoordinatorProvider).running) {
+        _snack('请先停止扫描，再导入配置');
+        return;
+      }
+      if (ref.read(libraryMutationBusyProvider)) {
+        _snack('其他维护操作正在进行，请稍后重试');
+        return;
+      }
+      mutationLock.state = true;
+      reserved = true;
+      if (document.includesAccountAndSmb) {
+        await ref.read(settingsProvider.notifier).logout();
+      }
       await document.apply();
       decodeModeStartupValue = document.settings['decode_mode']! as String;
       final runtimeSyncErrors = <Object>[];
       try {
-        await rust.setBangumiMirror(
-          enabled: document.settings['bangumi_mirror']! as bool,
-        );
+        await BangumiMirrorService.instance.disable();
       } catch (error) {
         runtimeSyncErrors.add(error);
       }
@@ -325,6 +350,9 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('导入配置失败：$error');
     } finally {
+      if (reserved) {
+        mutationLock.state = false;
+      }
       if (mounted) setState(() => _transferringConfiguration = false);
     }
   }
@@ -351,6 +379,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   }
 
   Future<void> _clearMatchConfig() async {
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
     final ok = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -373,6 +402,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       ),
     );
     if (ok != true || !mounted || _maintenanceBusy) return;
+    mutationLock.state = true;
     setState(() => _clearingMatchConfig = true);
     try {
       final count = await rust.clearMatchConfig();
@@ -381,11 +411,13 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('删除失败：$error');
     } finally {
+      mutationLock.state = false;
       if (mounted) setState(() => _clearingMatchConfig = false);
     }
   }
 
   Future<void> _clearLibrary() async {
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -407,6 +439,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       ),
     );
     if (confirmed != true || !mounted || _maintenanceBusy) return;
+    mutationLock.state = true;
     setState(() => _clearingLibrary = true);
     try {
       await rust.clearLibrary();
@@ -417,11 +450,13 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('清空失败：$error');
     } finally {
+      mutationLock.state = false;
       if (mounted) setState(() => _clearingLibrary = false);
     }
   }
 
   Future<void> _clearAllDownloads() async {
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
     if (ref.read(downloadManagerProvider).any((task) => task.active)) {
       _snack('请先在下载管理中取消正在进行的下载');
       return;
@@ -452,6 +487,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       return;
     }
 
+    mutationLock.state = true;
     setState(() => _clearingDownloads = true);
     var removed = 0;
     final failures = <Object>[];
@@ -474,11 +510,13 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('清空下载失败：$error');
     } finally {
+      mutationLock.state = false;
       if (mounted) setState(() => _clearingDownloads = false);
     }
   }
 
   Future<void> _clearAllConfiguration() async {
+    final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
     if (ref.read(downloadManagerProvider).any((task) => task.active)) {
       _snack('请先在下载管理中取消正在进行的下载');
       return;
@@ -513,6 +551,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       return;
     }
 
+    mutationLock.state = true;
     setState(() => _resettingConfiguration = true);
     try {
       await rust.clearMatchConfig();
@@ -525,12 +564,14 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       for (final entry in blacklist) {
         await rust.removeBlacklist(id: entry.id);
       }
+      await ref.read(settingsProvider.notifier).logout();
       await resetPersistedAppSettings();
       _invalidateConfigurationProviders();
       _snack('已清空所有配置，下载的视频仍可在下载管理中使用');
     } catch (error) {
       _snack('清空配置失败：$error');
     } finally {
+      mutationLock.state = false;
       if (mounted) setState(() => _resettingConfiguration = false);
     }
   }
@@ -544,6 +585,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     ref.invalidate(pinCollectedProvider);
     ref.invalidate(groupingEnabledProvider);
     ref.invalidate(themeProvider);
+    ref.invalidate(playerAppearanceProvider);
     ref.invalidate(seekDurationProvider);
     ref.invalidate(uiScaleProvider);
     ref.invalidate(touchModePlayerProvider);

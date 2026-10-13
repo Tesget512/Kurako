@@ -69,7 +69,20 @@ pub fn init(db_path: &str) -> Result<()> {
             watched          INTEGER NOT NULL DEFAULT 0,
             last_position_ms INTEGER NOT NULL DEFAULT 0,
             duration_ms      INTEGER NOT NULL DEFAULT 0,
+            locked           INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY(anime_id) REFERENCES anime(id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS scan_file_cache (
+            folder_id INTEGER NOT NULL,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            relative_parent TEXT NOT NULL,
+            PRIMARY KEY(folder_id, file_path)
+        );
+        CREATE TABLE IF NOT EXISTS manual_scan_matches (
+            file_path TEXT PRIMARY KEY,
+            bangumi_id INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS blacklist (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -117,9 +130,17 @@ pub fn init(db_path: &str) -> Result<()> {
         "ALTER TABLE downloads ADD COLUMN episode_no INTEGER",
         "ALTER TABLE downloads ADD COLUMN episode_title TEXT",
         "ALTER TABLE downloads ADD COLUMN file_name TEXT",
+        "ALTER TABLE episodes ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(ddl, []);
     }
+    // Existing explicit manual bindings are trusted before any scanner upsert.
+    conn.execute_batch(
+        "INSERT OR IGNORE INTO manual_scan_matches(file_path, bangumi_id)
+         SELECT e.file_path, a.bangumi_id FROM episodes e JOIN anime a ON a.id=e.anime_id
+         WHERE a.bangumi_id IS NOT NULL AND (a.corrected=1 OR e.locked=1);
+         UPDATE episodes SET locked=1 WHERE file_path IN (SELECT file_path FROM manual_scan_matches);",
+    )?;
     migrate_source_priority_schema(&conn)?;
     migrate_download_identity_schema(&conn)?;
     let _ = DB.set(Mutex::new(conn));
@@ -455,6 +476,307 @@ pub fn set_folder_scanned(id: i64, when: i64) -> Result<()> {
     })
 }
 
+/// Durable manual intent is independent of the recognition index.
+pub fn save_manual_scan_match(path: &str, subject: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute("INSERT INTO manual_scan_matches VALUES (?1, ?2) ON CONFLICT(file_path) DO UPDATE SET bangumi_id=excluded.bangumi_id", params![path, subject])?;
+        Ok(())
+    })
+}
+
+pub fn clear_manual_scan_matches() -> Result<()> {
+    with_conn(|c| {
+        c.execute("DELETE FROM manual_scan_matches", [])?;
+        Ok(())
+    })
+}
+
+pub fn pending_manual_subjects() -> Result<Vec<(i64, i64)>> {
+    with_conn(|c| {
+        let mut stmt = c.prepare("SELECT id,bangumi_id FROM anime WHERE bangumi_id IS NOT NULL AND group_key LIKE 'manual-subject:%' AND name IS NULL")?;
+        let result = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(result)
+    })
+}
+
+/// Cache only recognition inputs. Every scan still enumerates the complete tree.
+pub fn changed_scan_files(
+    folder_id: i64,
+    files: &[crate::models::ScannedFile],
+    incremental: bool,
+) -> Result<Vec<crate::models::ScannedFile>> {
+    with_conn(|c| changed_scan_files_on(c, folder_id, files, incremental))
+}
+
+fn changed_scan_files_on(
+    c: &Connection,
+    folder_id: i64,
+    files: &[crate::models::ScannedFile],
+    incremental: bool,
+) -> Result<Vec<crate::models::ScannedFile>> {
+    let mut stmt = c.prepare("SELECT s.file_path, s.file_name, s.file_size, s.relative_parent FROM scan_file_cache s JOIN episodes e ON e.file_path=s.file_path AND e.folder_id=s.folder_id WHERE s.folder_id=?1")?;
+    let cache = stmt
+        .query_map(params![folder_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                (
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                ),
+            ))
+        })?
+        .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+    Ok(files
+        .iter()
+        .filter(|f| {
+            !incremental
+                || cache.get(&f.uri)
+                    != Some(&(f.file_name.clone(), f.file_size, f.relative_parent.clone()))
+        })
+        .cloned()
+        .collect())
+}
+
+pub fn apply_scan_folder(
+    folder_id: i64,
+    source_type: &str,
+    prefixes: &[String],
+    files: &[crate::models::ScannedFile],
+    groups: &[crate::scan::AnimeGroup],
+    mark_new: bool,
+    when: i64,
+) -> Result<usize> {
+    with_conn(|c| {
+        let removed = apply_scan_folder_on(
+            c,
+            folder_id,
+            source_type,
+            prefixes,
+            files,
+            groups,
+            mark_new,
+            when,
+        )?;
+        // Use the real post-lock target rather than the automatic group ID.
+        let mut stmt = c.prepare("SELECT anime_id FROM episodes WHERE file_path=?1")?;
+        let mut targets = HashSet::new();
+        for file in groups.iter().flat_map(|g| &g.files) {
+            if let Some(id) = stmt
+                .query_row(params![file.path], |r| r.get::<_, i64>(0))
+                .optional()?
+            {
+                targets.insert(id);
+            }
+        }
+        crate::scan_control::record_changed_anime(targets);
+        Ok(removed)
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_scan_folder_on(
+    c: &Connection,
+    folder_id: i64,
+    source_type: &str,
+    prefixes: &[String],
+    files: &[crate::models::ScannedFile],
+    groups: &[crate::scan::AnimeGroup],
+    mark_new: bool,
+    when: i64,
+) -> Result<usize> {
+    apply_scan_folder_with_cancel(
+        c,
+        folder_id,
+        source_type,
+        prefixes,
+        files,
+        groups,
+        mark_new,
+        when,
+        || {
+            if crate::scan_control::is_cancelled() {
+                anyhow::bail!("扫描已取消");
+            }
+            Ok(())
+        },
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_scan_folder_with_cancel(
+    c: &Connection,
+    folder_id: i64,
+    source_type: &str,
+    prefixes: &[String],
+    files: &[crate::models::ScannedFile],
+    groups: &[crate::scan::AnimeGroup],
+    mark_new: bool,
+    when: i64,
+    check_cancel: impl Fn() -> Result<()>,
+) -> Result<usize> {
+    let tx = c.unchecked_transaction()?;
+    check_cancel()?;
+    // Manual routing precedes automatic writes, also for rows being restored
+    // after clear. A subject placeholder carries identity without network I/O.
+    let manual = {
+        let mut stmt = tx.prepare("SELECT file_path,bangumi_id FROM manual_scan_matches")?;
+        let result = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<std::result::Result<HashMap<_, _>, _>>()?;
+        result
+    };
+    for file in files {
+        check_cancel()?;
+        if let Some(&subject) = manual.get(&file.uri) {
+            let target = if subject == crate::sidecar::DETACHED {
+                tx.execute(
+                    "INSERT OR IGNORE INTO anime(group_key,title_raw) VALUES ('__misc__','未分类')",
+                    [],
+                )?;
+                tx.query_row("SELECT id FROM anime WHERE group_key='__misc__'", [], |r| {
+                    r.get::<_, i64>(0)
+                })?
+            } else {
+                let existing = tx
+                    .query_row(
+                        "SELECT id FROM anime WHERE bangumi_id=?1 LIMIT 1",
+                        params![subject],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .optional()?;
+                match existing {
+                    Some(id) => id,
+                    None => {
+                        let key = format!("manual-subject:{subject}");
+                        tx.execute("INSERT INTO anime(group_key,title_raw,bangumi_id,corrected,match_confidence) VALUES (?1,?2,?3,1,'high')", params![key, format!("Bangumi #{subject}"), subject])?;
+                        tx.last_insert_rowid()
+                    }
+                }
+            };
+            let exists = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM episodes WHERE file_path=?1)",
+                params![file.uri],
+                |r| r.get::<_, bool>(0),
+            )?;
+            let inserted = if exists {
+                false
+            } else {
+                upsert_episode_on(
+                    &tx,
+                    target,
+                    folder_id,
+                    &file.uri,
+                    &file.file_name,
+                    file.file_size,
+                    None,
+                    None,
+                    None,
+                    source_type,
+                    mark_new,
+                )?
+            };
+            tx.execute(
+                "UPDATE episodes SET anime_id=?2, locked=1 WHERE file_path=?1 AND (anime_id<>?2 OR locked=0)",
+                params![file.uri, target],
+            )?;
+            if mark_new && inserted {
+                tx.execute(
+                    "UPDATE anime SET has_new_files=1 WHERE id=?1",
+                    params![target],
+                )?;
+            }
+        }
+    }
+    for group in groups {
+        check_cancel()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO anime(group_key,title_raw) VALUES (?1,?2)",
+            params![group.group_key, group.title],
+        )?;
+        let anime_id = tx.query_row(
+            "SELECT id FROM anime WHERE group_key=?1",
+            params![group.group_key],
+            |r| r.get::<_, i64>(0),
+        )?;
+        for file in &group.files {
+            check_cancel()?;
+            let inserted = upsert_episode_on(
+                &tx,
+                anime_id,
+                folder_id,
+                &file.path,
+                &file.file_name,
+                file.file_size,
+                file.parsed.episode_no,
+                file.parsed.resolution.as_deref(),
+                file.parsed.release_group.as_deref(),
+                source_type,
+                mark_new,
+            )?;
+            if mark_new && inserted {
+                tx.execute("UPDATE anime SET has_new_files=1 WHERE id=(SELECT anime_id FROM episodes WHERE file_path=?1)", params![file.path])?;
+            }
+        }
+    }
+    let kept = files.iter().map(|f| f.uri.as_str()).collect::<HashSet<_>>();
+    let paths = {
+        let mut stmt = tx.prepare("SELECT file_path FROM episodes WHERE folder_id=?1 OR (folder_id IS NULL AND source_type=?2)")?;
+        let result = stmt
+            .query_map(params![folder_id, source_type], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        result
+    };
+    let mut removed = 0;
+    for path in paths {
+        check_cancel()?;
+        if prefixes
+            .iter()
+            .any(|prefix| path_is_within_prefix(&path, prefix))
+            && !kept.contains(path.as_str())
+        {
+            removed += tx.execute("DELETE FROM episodes WHERE file_path=?1", params![path])?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM anime WHERE id NOT IN (SELECT DISTINCT anime_id FROM episodes)",
+        [],
+    )?;
+    let cached_paths = {
+        let mut stmt = tx.prepare("SELECT file_path FROM scan_file_cache WHERE folder_id=?1")?;
+        let result = stmt
+            .query_map(params![folder_id], |r| r.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        result
+    };
+    for path in cached_paths {
+        if !kept.contains(path.as_str()) {
+            tx.execute(
+                "DELETE FROM scan_file_cache WHERE folder_id=?1 AND file_path=?2",
+                params![folder_id, path],
+            )?;
+        }
+    }
+    for file in files {
+        check_cancel()?;
+        tx.execute(
+            "INSERT INTO scan_file_cache VALUES (?1,?2,?3,?4,?5)
+             ON CONFLICT(folder_id,file_path) DO UPDATE SET file_name=excluded.file_name,file_size=excluded.file_size,relative_parent=excluded.relative_parent
+             WHERE file_name<>excluded.file_name OR file_size<>excluded.file_size OR relative_parent<>excluded.relative_parent",
+            params![folder_id,file.uri,file.file_name,file.file_size,file.relative_parent],
+        )?;
+    }
+    tx.execute(
+        "UPDATE library_folders SET last_scanned=?2 WHERE id=?1",
+        params![folder_id, when],
+    )?;
+    check_cancel()?;
+    tx.commit()?;
+    Ok(removed)
+}
+
 /// Upsert an anime by its group key, returning its id. Preserves existing
 /// Bangumi binding unless this is a fresh row.
 pub fn upsert_anime(group_key: &str, title_raw: &str) -> Result<i64> {
@@ -472,6 +794,7 @@ pub fn upsert_anime(group_key: &str, title_raw: &str) -> Result<i64> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn upsert_episode(
     anime_id: i64,
     folder_id: i64,
@@ -484,30 +807,96 @@ pub fn upsert_episode(
     source_type: &str,
     mark_new_file: bool,
 ) -> Result<bool> {
-    let file_name_key = crate::scan_control::normalized_file_name(file_name);
     with_conn(|c| {
-        let existed = c.query_row(
-            "SELECT EXISTS(SELECT 1 FROM episodes WHERE file_path = ?1)",
-            params![file_path],
-            |row| row.get::<_, bool>(0),
-        )?;
-        c.execute(
-            "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type, is_new_file)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-             ON CONFLICT(file_path) DO UPDATE SET
-                anime_id=excluded.anime_id,
-                folder_id=excluded.folder_id,
-                file_name=excluded.file_name,
-                file_name_key=excluded.file_name_key,
-                file_size=excluded.file_size,
-                episode_no=excluded.episode_no,
-                resolution=excluded.resolution,
-                release_group=excluded.release_group,
-                source_type=excluded.source_type",
-            params![anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type, mark_new_file as i64],
-        )?;
-        Ok(!existed)
+        upsert_episode_on(
+            c,
+            anime_id,
+            folder_id,
+            file_path,
+            file_name,
+            file_size,
+            episode_no,
+            resolution,
+            release_group,
+            source_type,
+            mark_new_file,
+        )
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn upsert_episode_on(
+    c: &Connection,
+    anime_id: i64,
+    folder_id: i64,
+    file_path: &str,
+    file_name: &str,
+    file_size: i64,
+    episode_no: Option<i64>,
+    resolution: Option<&str>,
+    release_group: Option<&str>,
+    source_type: &str,
+    mark_new_file: bool,
+) -> Result<bool> {
+    let file_name_key = crate::scan_control::normalized_file_name(file_name);
+    {
+        // Existing row + whether the user has hand-anchored it. A locked row was
+        // manually matched/detached, so a rescan must NOT re-route it to whatever
+        // the filename grouper computed this time — keep its anime_id. Metadata
+        // (name/size/resolution/…) still refreshes since it's the same file.
+        let prior: Option<bool> = c
+            .query_row(
+                "SELECT locked FROM episodes WHERE file_path = ?1",
+                params![file_path],
+                |row| row.get::<_, i64>(0).map(|v| v != 0),
+            )
+            .optional()?;
+        let existed = prior.is_some();
+        let locked = prior.unwrap_or(false);
+        if locked {
+            // Preserve anime_id (the manual match); refresh everything else.
+            c.execute(
+                "UPDATE episodes SET
+                    folder_id=?2,
+                    file_name=?3,
+                    file_name_key=?4,
+                    file_size=?5,
+                    episode_no=?6,
+                    resolution=?7,
+                    release_group=?8,
+                    source_type=?9
+                 WHERE file_path=?1",
+                params![
+                    file_path,
+                    folder_id,
+                    file_name,
+                    file_name_key,
+                    file_size,
+                    episode_no,
+                    resolution,
+                    release_group,
+                    source_type
+                ],
+            )?;
+        } else {
+            c.execute(
+                "INSERT INTO episodes(anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type, is_new_file)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                 ON CONFLICT(file_path) DO UPDATE SET
+                    anime_id=excluded.anime_id,
+                    folder_id=excluded.folder_id,
+                    file_name=excluded.file_name,
+                    file_name_key=excluded.file_name_key,
+                    file_size=excluded.file_size,
+                    episode_no=excluded.episode_no,
+                    resolution=excluded.resolution,
+                    release_group=excluded.release_group,
+                    source_type=excluded.source_type",
+                params![anime_id, folder_id, file_path, file_name, file_name_key, file_size, episode_no, resolution, release_group, source_type, mark_new_file as i64],
+            )?;
+        }
+        Ok(!existed)
+    }
 }
 
 fn map_anime(r: &rusqlite::Row) -> rusqlite::Result<Anime> {
@@ -793,7 +1182,7 @@ pub fn unmatched_anime() -> Result<Vec<(i64, String)>> {
     with_conn(|c| {
         // Skip the "__misc__" catch-all bucket — it must never be auto-matched.
         let mut stmt = c.prepare(
-            "SELECT id, title_raw FROM anime WHERE bangumi_id IS NULL AND group_key <> '__misc__'",
+            "SELECT id, title_raw FROM anime WHERE bangumi_id IS NULL AND group_key <> '__misc__' AND EXISTS (SELECT 1 FROM episodes e WHERE e.anime_id=anime.id)",
         )?;
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
@@ -913,6 +1302,33 @@ pub fn move_episode_by_path(file_path: &str, anime_id: i64) -> Result<bool> {
     })
 }
 
+/// Mark an episode (by id) as hand-anchored so a later rescan keeps its
+/// manual anime_id instead of re-routing it by filename. Set when the user
+/// manually matches or detaches a single file.
+pub fn lock_episode(episode_id: i64) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "UPDATE episodes SET locked=1 WHERE id=?1",
+            params![episode_id],
+        )?;
+        Ok(())
+    })
+}
+
+/// Mark an episode (by file_path) as hand-anchored. Used by the post-scan
+/// sidecar/fallback re-apply so a match restored after "清空并重新扫描"
+/// (which drops the episodes table, losing the flag) is re-locked and thus
+/// protected on every subsequent rescan.
+pub fn lock_episode_by_path(file_path: &str) -> Result<()> {
+    with_conn(|c| {
+        c.execute(
+            "UPDATE episodes SET locked=1 WHERE file_path=?1",
+            params![file_path],
+        )?;
+        Ok(())
+    })
+}
+
 /// Distinct parent folders of every episode of `source_type` currently in the
 /// library — where its `.kurako-match.json` sidecar would live. Derived by
 /// stripping the last path segment (either separator) off each file_path. Used
@@ -1029,9 +1445,11 @@ pub fn clear_all() -> Result<()> {
 fn clear_all_on(c: &Connection) -> Result<()> {
     // Also reset last_scanned so a clear + rescan reprocesses every folder even
     // in incremental mode. Downloads, sources and blacklist are independent.
-    c.execute_batch(
-        "DELETE FROM episodes; DELETE FROM anime; UPDATE library_folders SET last_scanned = NULL;",
+    let tx = c.unchecked_transaction()?;
+    tx.execute_batch(
+        "DELETE FROM episodes; DELETE FROM anime; DELETE FROM scan_file_cache; UPDATE library_folders SET last_scanned = NULL;",
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -2062,6 +2480,7 @@ mod download_tests {
              );
              CREATE TABLE anime (id INTEGER PRIMARY KEY);
              CREATE TABLE episodes (id INTEGER PRIMARY KEY, anime_id INTEGER);
+             CREATE TABLE scan_file_cache (folder_id INTEGER);
              CREATE TABLE downloads (id INTEGER PRIMARY KEY, smb_uri TEXT NOT NULL);
              CREATE TABLE blacklist (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
              INSERT INTO library_folders VALUES (1, 'smb://server/Anime', 99);
@@ -2656,5 +3075,305 @@ mod download_tests {
                 "smb://server/01.mkv".to_string(),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod locked_match_tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE episodes (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 anime_id INTEGER NOT NULL,
+                 file_path TEXT NOT NULL UNIQUE,
+                 file_name TEXT NOT NULL,
+                 file_name_key TEXT NOT NULL DEFAULT '',
+                 file_size INTEGER NOT NULL DEFAULT 0,
+                 episode_no INTEGER,
+                 title TEXT,
+                 resolution TEXT,
+                 release_group TEXT,
+                 source_type TEXT NOT NULL DEFAULT 'local',
+                 folder_id INTEGER,
+                 is_new_file INTEGER NOT NULL DEFAULT 0,
+                 watched INTEGER NOT NULL DEFAULT 0,
+                 last_position_ms INTEGER NOT NULL DEFAULT 0,
+                 duration_ms INTEGER NOT NULL DEFAULT 0,
+                 locked INTEGER NOT NULL DEFAULT 0
+             );",
+        )
+        .unwrap();
+        c
+    }
+
+    fn anime_of(c: &Connection, file_path: &str) -> i64 {
+        c.query_row(
+            "SELECT anime_id FROM episodes WHERE file_path=?1",
+            params![file_path],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    fn insert(c: &Connection, anime_id: i64, path: &str) -> bool {
+        upsert_episode_on(
+            c,
+            anime_id,
+            1,
+            path,
+            "01.mkv",
+            10,
+            Some(1),
+            None,
+            None,
+            "local",
+            false,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn rescan_keeps_a_locked_episodes_manual_anime() {
+        let c = connection();
+        // Scanner first groups the file under anime 1.
+        assert!(insert(&c, 1, "/media/01.mkv"));
+        // User manually matches it to anime 2 and it gets anchored.
+        c.execute(
+            "UPDATE episodes SET anime_id=2, locked=1 WHERE file_path='/media/01.mkv'",
+            [],
+        )
+        .unwrap();
+        // A later rescan regroups it under anime 1 again — must be ignored.
+        assert!(!insert(&c, 1, "/media/01.mkv"));
+        assert_eq!(anime_of(&c, "/media/01.mkv"), 2);
+    }
+
+    #[test]
+    fn rescan_refreshes_metadata_but_not_anime_when_locked() {
+        let c = connection();
+        assert!(insert(&c, 5, "/media/01.mkv"));
+        c.execute(
+            "UPDATE episodes SET anime_id=9, locked=1 WHERE file_path='/media/01.mkv'",
+            [],
+        )
+        .unwrap();
+        // Rescan reports the file at a new size / release group.
+        upsert_episode_on(
+            &c,
+            5,
+            1,
+            "/media/01.mkv",
+            "01.mkv",
+            4242,
+            Some(1),
+            Some("1080p"),
+            Some("SubGroup"),
+            "local",
+            false,
+        )
+        .unwrap();
+        assert_eq!(anime_of(&c, "/media/01.mkv"), 9); // manual anime preserved
+        let (size, group): (i64, Option<String>) = c
+            .query_row(
+                "SELECT file_size, release_group FROM episodes WHERE file_path='/media/01.mkv'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(size, 4242); // metadata still refreshed
+        assert_eq!(group.as_deref(), Some("SubGroup"));
+    }
+
+    #[test]
+    fn rescan_regroups_an_unlocked_episode() {
+        let c = connection();
+        assert!(insert(&c, 1, "/media/01.mkv"));
+        // No manual match: a rescan that groups it under anime 3 should win.
+        assert!(!insert(&c, 3, "/media/01.mkv"));
+        assert_eq!(anime_of(&c, "/media/01.mkv"), 3);
+    }
+}
+
+#[cfg(test)]
+mod scan_snapshot_tests {
+    use super::*;
+
+    fn connection() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch("CREATE TABLE library_folders(id INTEGER PRIMARY KEY,last_scanned INTEGER);
+          INSERT INTO library_folders VALUES(1,NULL);
+          CREATE TABLE anime(id INTEGER PRIMARY KEY,group_key TEXT UNIQUE,title_raw TEXT,bangumi_id INTEGER,corrected INTEGER DEFAULT 0,match_confidence TEXT,has_new_files INTEGER DEFAULT 0);
+          CREATE TABLE episodes(id INTEGER PRIMARY KEY,anime_id INTEGER,file_path TEXT UNIQUE,file_name TEXT,file_name_key TEXT,file_size INTEGER,episode_no INTEGER,resolution TEXT,release_group TEXT,source_type TEXT,folder_id INTEGER,is_new_file INTEGER,locked INTEGER DEFAULT 0);
+          CREATE TABLE scan_file_cache(folder_id INTEGER,file_path TEXT,file_name TEXT,file_size INTEGER,relative_parent TEXT,PRIMARY KEY(folder_id,file_path));
+          CREATE TABLE manual_scan_matches(file_path TEXT PRIMARY KEY,bangumi_id INTEGER);").unwrap();
+        c
+    }
+    fn file(path: &str, size: i64) -> crate::models::ScannedFile {
+        crate::models::ScannedFile {
+            uri: path.into(),
+            file_name: path.rsplit('/').next().unwrap().into(),
+            file_size: size,
+            relative_parent: "Show/Season 1".into(),
+        }
+    }
+    fn groups(files: &[crate::models::ScannedFile]) -> Vec<crate::scan::AnimeGroup> {
+        crate::scan::group_files(
+            files
+                .iter()
+                .map(|f| crate::scan::ScannedFile {
+                    uri: f.uri.clone(),
+                    file_name: f.file_name.clone(),
+                    file_size: f.file_size,
+                    relative_parent: f.relative_parent.clone(),
+                })
+                .collect(),
+        )
+    }
+    fn apply(
+        c: &Connection,
+        files: &[crate::models::ScannedFile],
+        changed: &[crate::models::ScannedFile],
+    ) -> Result<usize> {
+        apply_scan_folder_on(
+            c,
+            1,
+            "local",
+            &["/media".into()],
+            files,
+            &groups(changed),
+            true,
+            123,
+        )
+    }
+    #[test]
+    fn unchanged_files_survive_delta_and_deleted_files_are_pruned() {
+        let c = connection();
+        let first = vec![
+            file("/media/Show 01.mkv", 100),
+            file("/media/Show 02.mkv", 200),
+        ];
+        apply(&c, &first, &first).unwrap();
+        assert!(changed_scan_files_on(&c, 1, &first, true)
+            .unwrap()
+            .is_empty());
+        let next = vec![first[0].clone(), file("/media/Show 03.mkv", 300)];
+        let changed = changed_scan_files_on(&c, 1, &next, true).unwrap();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(apply(&c, &next, &changed).unwrap(), 1);
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM episodes", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        let mut modified = next;
+        modified[0].file_size = 101;
+        assert_eq!(
+            changed_scan_files_on(&c, 1, &modified, true).unwrap().len(),
+            1
+        );
+        modified[1].relative_parent = "Other".into();
+        assert_eq!(
+            changed_scan_files_on(&c, 1, &modified, true).unwrap().len(),
+            2
+        );
+    }
+    #[test]
+    fn offline_manual_subject_and_detach_restore_before_grouping_after_clear() {
+        let c = connection();
+        let files = vec![
+            file("/media/Show 01.mkv", 100),
+            file("/media/Show 02.mkv", 200),
+        ];
+        c.execute(
+            "INSERT INTO manual_scan_matches VALUES (?1,42)",
+            params![files[0].uri],
+        )
+        .unwrap();
+        c.execute(
+            "INSERT INTO manual_scan_matches VALUES (?1,0)",
+            params![files[1].uri],
+        )
+        .unwrap();
+        apply(&c, &files, &files).unwrap();
+        let subject: i64=c.query_row("SELECT a.bangumi_id FROM anime a JOIN episodes e ON e.anime_id=a.id WHERE e.file_path=?1",params![files[0].uri],|r|r.get(0)).unwrap();
+        assert_eq!(subject, 42);
+        let key: String=c.query_row("SELECT a.group_key FROM anime a JOIN episodes e ON e.anime_id=a.id WHERE e.file_path=?1",params![files[1].uri],|r|r.get(0)).unwrap();
+        assert_eq!(key, "__misc__");
+        clear_all_on(&c).unwrap();
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM scan_file_cache", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        apply(&c, &files, &files).unwrap();
+        assert_eq!(
+            c.query_row("SELECT COUNT(*) FROM episodes WHERE locked=1", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+    #[test]
+    fn failed_folder_rolls_back_upserts_deletes_cache_and_baseline() {
+        let c = connection();
+        let first = vec![file("/media/Show 01.mkv", 100)];
+        apply(&c, &first, &first).unwrap();
+        c.execute_batch("CREATE TRIGGER fail_cache BEFORE INSERT ON scan_file_cache BEGIN SELECT RAISE(ABORT,'fail'); END;").unwrap();
+        let next = vec![file("/media/Show 02.mkv", 200)];
+        assert!(apply(&c, &next, &next).is_err());
+        assert_eq!(
+            c.query_row("SELECT file_path FROM episodes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            first[0].uri
+        );
+        assert!(changed_scan_files_on(&c, 1, &first, true)
+            .unwrap()
+            .is_empty());
+    }
+    #[test]
+    fn cancellation_after_upserts_rolls_back_entire_folder() {
+        let c = connection();
+        let first = vec![file("/media/Show 01.mkv", 100)];
+        apply(&c, &first, &first).unwrap();
+        let next = vec![file("/media/Show 02.mkv", 200)];
+        let calls = std::cell::Cell::new(0);
+        let result = apply_scan_folder_with_cancel(
+            &c,
+            1,
+            "local",
+            &["/media".into()],
+            &next,
+            &groups(&next),
+            true,
+            999,
+            || {
+                calls.set(calls.get() + 1);
+                if calls.get() >= 5 {
+                    anyhow::bail!("扫描已取消");
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            c.query_row("SELECT file_path FROM episodes", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            first[0].uri
+        );
+        assert_eq!(
+            c.query_row("SELECT last_scanned FROM library_folders", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            123
+        );
+        assert!(changed_scan_files_on(&c, 1, &first, true)
+            .unwrap()
+            .is_empty());
     }
 }

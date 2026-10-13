@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import '../state/player_appearance.dart';
 import '../widgets/window_caption.dart';
 
 class AppearanceSettingsPage extends ConsumerWidget {
@@ -73,6 +74,8 @@ class AppearanceSettingsPage extends ConsumerWidget {
               ),
             ),
           ),
+          const Divider(height: 32),
+          const _PlayerGestureColors(),
           const Divider(height: 32),
           const _UiScaleControl(),
           Consumer(
@@ -158,6 +161,115 @@ class _SeedSwatch extends ConsumerWidget {
           child: selected ? Icon(Icons.check, color: onColor, size: 22) : null,
         ),
       ),
+    );
+  }
+}
+
+class _PlayerGestureColors extends ConsumerWidget {
+  const _PlayerGestureColors();
+
+  Future<void> _choose(
+    BuildContext context,
+    WidgetRef ref,
+    bool brightness,
+    Color current,
+  ) async {
+    var input = current.toARGB32().toRadixString(16).substring(2).toUpperCase();
+    String? error;
+    final selected = await showDialog<Color>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Text(brightness ? '亮度条颜色' : '音量条颜色'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final choice in kSeedPalette)
+                    IconButton(
+                      onPressed: () => Navigator.pop(context, choice.color),
+                      icon: Icon(Icons.circle, color: choice.color),
+                    ),
+                ],
+              ),
+              TextFormField(
+                initialValue: input,
+                onChanged: (value) => input = value,
+                maxLength: 6,
+                decoration: InputDecoration(
+                  labelText: '自定义 RGB（六位十六进制）',
+                  prefixText: '#',
+                  errorText: error,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final raw = input.trim();
+                if (!RegExp(r'^[0-9a-fA-F]{6}$').hasMatch(raw)) {
+                  setState(() => error = '请输入六位颜色值');
+                  return;
+                }
+                Navigator.pop(
+                  context,
+                  Color(0xFF000000 | int.parse(raw, radix: 16)),
+                );
+              },
+              child: const Text('应用'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null && context.mounted) {
+      await ref
+          .read(playerAppearanceProvider.notifier)
+          .setColor(brightness: brightness, color: selected);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final appearance = ref.watch(playerAppearanceProvider);
+    Widget tile(bool brightness, Color color) => ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(Icons.circle, color: color),
+      title: Text(brightness ? '播放器亮度条颜色' : '播放器音量条颜色'),
+      subtitle: Text(
+        '#${color.toARGB32().toRadixString(16).substring(2).toUpperCase()}',
+      ),
+      trailing: const Icon(Icons.edit_outlined),
+      onTap: () => _choose(context, ref, brightness, color),
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('播放器手势外观'),
+        tile(true, appearance.brightness),
+        tile(false, appearance.volume),
+        TextButton(
+          onPressed: () async {
+            final notifier = ref.read(playerAppearanceProvider.notifier);
+            await notifier.setColor(
+              brightness: true,
+              color: const Color(defaultPlayerBrightnessColor),
+            );
+            await notifier.setColor(
+              brightness: false,
+              color: const Color(defaultPlayerVolumeColor),
+            );
+          },
+          child: const Text('恢复默认颜色'),
+        ),
+      ],
     );
   }
 }

@@ -156,7 +156,10 @@ try {
 
     # Embedded into the Dart AOT bundle and shown in Settings so each
     # distributable can be distinguished even when the semantic version stays unchanged.
-    $buildTime = Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'
+    $buildTime = $env:KURAKO_BUILD_TIME
+    if (-not $buildTime) {
+        $buildTime = Get-Date -Format 'yyyy-MM-dd HH:mm:ss K'
+    }
     $env:PUB_HOSTED_URL = 'https://pub.flutter-io.cn'
     $env:FLUTTER_STORAGE_BASE_URL = 'https://storage.flutter-io.cn'
     Write-Host ''

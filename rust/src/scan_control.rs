@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use unicode_normalization::UnicodeNormalization;
 
+static CHANGED_ANIME_IDS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 static INCREMENTAL: AtomicBool = AtomicBool::new(false);
@@ -18,6 +20,7 @@ pub fn begin(incremental: bool) -> bool {
         return false;
     }
     CLAIMED_FILE_NAMES.lock().unwrap().clear();
+    CHANGED_ANIME_IDS.lock().unwrap().clear();
     CANCELLED.store(false, Ordering::Release);
     INCREMENTAL.store(incremental, Ordering::Release);
     true
@@ -33,6 +36,7 @@ pub fn finish() {
     ACTIVE.store(false, Ordering::Release);
     INCREMENTAL.store(false, Ordering::Release);
     CLAIMED_FILE_NAMES.lock().unwrap().clear();
+    CHANGED_ANIME_IDS.lock().unwrap().clear();
 }
 
 pub fn is_active() -> bool {
@@ -45,6 +49,21 @@ pub fn is_cancelled() -> bool {
 
 pub fn is_incremental() -> bool {
     ACTIVE.load(Ordering::Acquire) && INCREMENTAL.load(Ordering::Acquire)
+}
+
+pub(crate) fn record_changed_anime(ids: impl IntoIterator<Item = i64>) {
+    CHANGED_ANIME_IDS.lock().unwrap().extend(ids);
+}
+
+pub(crate) fn matching_candidates(candidates: Vec<(i64, String)>) -> Vec<(i64, String)> {
+    if !is_incremental() {
+        return candidates;
+    }
+    let changed = CHANGED_ANIME_IDS.lock().unwrap();
+    candidates
+        .into_iter()
+        .filter(|(id, _)| changed.contains(id))
+        .collect()
 }
 
 pub fn normalized_file_name(file_name: &str) -> String {
@@ -121,6 +140,25 @@ mod tests {
             file_size: 100,
             relative_parent: String::new(),
         }
+    }
+
+    #[test]
+    fn incremental_matching_only_retries_changed_actual_targets() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        assert!(begin(true));
+        record_changed_anime([2]);
+        let candidates = vec![(1, "unchanged".into()), (2, "changed".into())];
+        assert_eq!(
+            matching_candidates(candidates.clone()),
+            vec![(2, "changed".into())]
+        );
+        finish();
+        assert!(begin(true));
+        assert!(matching_candidates(candidates.clone()).is_empty());
+        finish();
+        assert!(begin(false));
+        assert_eq!(matching_candidates(candidates.clone()), candidates);
+        finish();
     }
 
     #[test]

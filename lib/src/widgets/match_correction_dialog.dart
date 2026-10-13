@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../services/bangumi_mirror.dart';
+import '../services/scan_coordinator.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import 'cover_image.dart';
 
-class MatchCorrectionDialog extends StatefulWidget {
+class MatchCorrectionDialog extends ConsumerStatefulWidget {
   /// Re-match a whole anime entry: pass its id. Mutually exclusive with
   /// [episodeId].
   final int? animeId;
@@ -26,10 +30,11 @@ class MatchCorrectionDialog extends StatefulWidget {
        );
 
   @override
-  State<MatchCorrectionDialog> createState() => _MatchCorrectionDialogState();
+  ConsumerState<MatchCorrectionDialog> createState() =>
+      _MatchCorrectionDialogState();
 }
 
-class _MatchCorrectionDialogState extends State<MatchCorrectionDialog> {
+class _MatchCorrectionDialogState extends ConsumerState<MatchCorrectionDialog> {
   late final TextEditingController _controller;
   List<BangumiSubject> _results = [];
   bool _loading = false;
@@ -58,6 +63,7 @@ class _MatchCorrectionDialogState extends State<MatchCorrectionDialog> {
       final res = await rust.searchBangumi(keyword: _controller.text.trim());
       if (mounted) setState(() => _results = res);
     } catch (e) {
+      BangumiMirrorService.instance.reportApiFailure(e);
       if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -65,6 +71,16 @@ class _MatchCorrectionDialogState extends State<MatchCorrectionDialog> {
   }
 
   Future<void> _bind(BangumiSubject subject) async {
+    if (_binding) return;
+    if (ref.read(scanCoordinatorProvider).running ||
+        ref.read(libraryMutationBusyProvider)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('扫描或维护正在进行，请完成后再修改匹配')));
+      return;
+    }
+    final reservation = ref.read(libraryMutationBusyProvider.notifier);
+    reservation.state = true;
     setState(() => _binding = true);
     try {
       // Both paths resolve to the id of the anime the file/entry now belongs to
@@ -86,12 +102,15 @@ class _MatchCorrectionDialogState extends State<MatchCorrectionDialog> {
       }
       if (mounted) Navigator.of(context).pop(resultId);
     } catch (e) {
+      BangumiMirrorService.instance.reportApiFailure(e);
       if (mounted) {
         setState(() => _binding = false);
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('绑定失败: $e')));
       }
+    } finally {
+      reservation.state = false;
     }
   }
 

@@ -46,16 +46,13 @@ pub struct ScannedFile {
 }
 
 /// Recursively collect every video file under `root`.
-pub fn scan_folder(root: &str) -> Vec<(String, String, String, i64)> {
+pub fn scan_folder(root: &str) -> anyhow::Result<Vec<(String, String, String, i64)>> {
     // returns (full_path, file_name, parent_dir, file_size)
     let mut out = Vec::new();
-    for entry in WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
+    for entry in WalkDir::new(root).follow_links(false).into_iter() {
+        let entry = entry?;
         if crate::scan_control::is_cancelled() {
-            break;
+            anyhow::bail!("扫描已取消");
         }
         if !entry.file_type().is_file() {
             continue;
@@ -69,10 +66,7 @@ pub fn scan_folder(root: &str) -> Vec<(String, String, String, i64)> {
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let file_size = entry
-            .metadata()
-            .map(|metadata| metadata.len() as i64)
-            .unwrap_or(0);
+        let file_size = entry.metadata()?.len() as i64;
         out.push((
             entry.path().to_string_lossy().to_string(),
             file_name,
@@ -80,34 +74,7 @@ pub fn scan_folder(root: &str) -> Vec<(String, String, String, i64)> {
             file_size,
         ));
     }
-    out
-}
-
-/// The most recent modification time (Unix seconds) of any file or directory
-/// under `root`, used to decide whether an incremental scan can skip it.
-/// Returns 0 if the tree can't be read.
-pub fn folder_max_mtime(root: &str) -> i64 {
-    let mut max = 0i64;
-    for entry in WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        if crate::scan_control::is_cancelled() {
-            break;
-        }
-        if let Ok(meta) = entry.metadata() {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    let secs = dur.as_secs() as i64;
-                    if secs > max {
-                        max = secs;
-                    }
-                }
-            }
-        }
-    }
-    max
+    Ok(out)
 }
 
 /// Whether a directory name looks like a season/quality sub-bucket rather than
@@ -238,19 +205,19 @@ fn strip_special_suffix(name: &str) -> Option<String> {
 /// Strategy: files sharing a parent directory are the same show; the show's
 /// title is derived from the (non-generic) folder name. Only when the folder
 /// name yields nothing usable do we fall back to per-file parsing.
-pub fn group_library(library_root: &str) -> Vec<AnimeGroup> {
-    group_files(enumerate_library(library_root))
+pub fn group_library(library_root: &str) -> anyhow::Result<Vec<AnimeGroup>> {
+    Ok(group_files(enumerate_library(library_root)?))
 }
 
 /// Enumerate one local root into the same portable shape used by SAF, SMB and
 /// WebDAV. Keeping this separate lets Flutter process every source in one
 /// explicit priority order before recognition and matching.
-pub fn enumerate_library(library_root: &str) -> Vec<ScannedFile> {
-    let files = scan_folder(library_root);
+pub fn enumerate_library(library_root: &str) -> anyhow::Result<Vec<ScannedFile>> {
+    let files = scan_folder(library_root)?;
     // Convert absolute paths into ScannedFile with a relative parent path, so
     // the grouping logic is shared with the SAF (Android) path.
     let root = Path::new(library_root);
-    files
+    Ok(files
         .into_iter()
         .map(|(path, name, parent, file_size)| {
             let rel = Path::new(&parent)
@@ -264,7 +231,7 @@ pub fn enumerate_library(library_root: &str) -> Vec<ScannedFile> {
                 relative_parent: rel,
             }
         })
-        .collect()
+        .collect())
 }
 
 /// Group a list of already-discovered files into anime. Shared by the desktop

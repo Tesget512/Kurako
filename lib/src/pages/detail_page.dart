@@ -10,6 +10,8 @@ import '../rust/models.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../services/external_player.dart';
+import '../services/scan_coordinator.dart';
+import '../services/bangumi_mirror.dart';
 import '../widgets/cover_header.dart';
 import '../widgets/match_correction_dialog.dart';
 import '../widgets/window_caption.dart';
@@ -347,6 +349,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         ).showSnackBar(const SnackBar(content: Text('元数据已刷新')));
       }
     } catch (e) {
+      BangumiMirrorService.instance.reportApiFailure(e);
       if (context.mounted) {
         ScaffoldMessenger.of(
           context,
@@ -1177,7 +1180,7 @@ class _EpisodeTile extends ConsumerWidget {
       case 'match':
         await _matchEpisode(context);
       case 'detach':
-        await _detachEpisode(context);
+        await _detachEpisode(context, ref);
       case 'delete_copy':
         await _deleteLocalCopy(context, ref);
       case 'block':
@@ -1196,7 +1199,15 @@ class _EpisodeTile extends ConsumerWidget {
     if (newAnimeId != null) onRematched(newAnimeId);
   }
 
-  Future<void> _detachEpisode(BuildContext context) async {
+  Future<void> _detachEpisode(BuildContext context, WidgetRef ref) async {
+    final lock = ref.read(libraryMutationBusyProvider.notifier);
+    if (ref.read(scanCoordinatorProvider).running || lock.state) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再调整匹配')));
+      return;
+    }
+    lock.state = true;
     try {
       // The move is persisted (sidecar next to the media, or the app fallback
       // config) inside detachEpisode, so it survives a rescan.
@@ -1216,6 +1227,8 @@ class _EpisodeTile extends ConsumerWidget {
           context,
         ).showSnackBar(SnackBar(content: Text('移出失败: $e')));
       }
+    } finally {
+      lock.state = false;
     }
   }
 

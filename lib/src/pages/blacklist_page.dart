@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/providers.dart';
+import '../services/scan_coordinator.dart';
 import '../widgets/window_caption.dart';
 
 /// Settings sub-page listing blocked anime/files, with unblock actions.
@@ -26,7 +27,14 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
   }
 
   Future<void> _unblock(BlacklistEntry e) async {
-    await rust.removeBlacklist(id: e.id);
+    final lock = ref.read(libraryMutationBusyProvider.notifier);
+    if (ref.read(scanCoordinatorProvider).running || lock.state) return;
+    lock.state = true;
+    try {
+      await rust.removeBlacklist(id: e.id);
+    } finally {
+      lock.state = false;
+    }
     if (!mounted) return;
     _reload();
     ScaffoldMessenger.of(
@@ -36,6 +44,9 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
 
   @override
   Widget build(BuildContext context) {
+    final busy =
+        ref.watch(scanCoordinatorProvider).running ||
+        ref.watch(libraryMutationBusyProvider);
     return Scaffold(
       appBar: const SysAppBar(title: Text('屏蔽管理')),
       body: FutureBuilder<List<BlacklistEntry>>(
@@ -89,7 +100,7 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
                 trailing: IconButton(
                   tooltip: '解除屏蔽',
                   icon: const Icon(Icons.remove_circle_outline),
-                  onPressed: () => _unblock(e),
+                  onPressed: busy ? null : () => _unblock(e),
                 ),
               );
             },
@@ -130,8 +141,24 @@ Future<bool> confirmAndBlacklist(
       ],
     ),
   );
-  if (ok != true) return false;
-  await rust.addBlacklist(kind: kind, value: value);
-  ref.invalidate(animeListProvider);
+  if (ok != true || !context.mounted) return false;
+  final lock = ref.read(libraryMutationBusyProvider.notifier);
+  if (ref.read(scanCoordinatorProvider).running || lock.state) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再修改屏蔽记录')));
+    return false;
+  }
+  lock.state = true;
+  try {
+    await rust.addBlacklist(kind: kind, value: value);
+    if (context.mounted) {
+      ref.invalidate(animeListProvider);
+      ref.invalidate(animeDetailProvider);
+      ref.invalidate(episodesProvider);
+    }
+  } finally {
+    lock.state = false;
+  }
   return true;
 }

@@ -44,6 +44,10 @@ script/Build-KurakoLinuxDeb.sh
 
 Windows 的便携版与 Inno Setup 安装包可在安装了 Inno Setup 6 的环境中运行 `script/Build-Kurako.cmd` 生成。
 
+镜像验证使用 `flutter_inappwebview`。Windows 构建机还需要在 `PATH` 中提供 NuGet CLI；插件通过 NuGet 获取 WebView2 SDK、Windows Implementation Library 与 nlohmann.json。Windows 用户使用镜像验证时需要 Microsoft Edge WebView2 Runtime；缺少该运行时应保留官方源并按应用提示安装运行时后再验证。它不改变视频播放器的渲染或安装包签名策略。Android 使用系统 WebView，iOS/iPadOS 与 macOS 使用 WKWebView，最低系统版本仍为 iOS 13.0 / macOS 12.0。
+
+Android 平台实现固定使用本地 `third_party/flutter_inappwebview_android` 1.1.3，并通过 `dependency_overrides` 引用。该副本仅将两处默认 ProGuard 配置改为 `proguard-android-optimize.txt`，以兼容项目的 Android Gradle Plugin 9；上游许可证随副本保留。请勿改写 Pub 缓存或降级项目工具链来绕过此问题。补丁详情见 [KURAKO_PATCH.md](../third_party/flutter_inappwebview_android/KURAKO_PATCH.md)。
+
 ### Linux（实验性，仅 DEB）
 
 Linux 版本当前处于实验阶段，只提供 x86_64 Debian `.deb` 测试包；不提供 AppImage、Arch 包或 Linux arm64。Linux 构建必须在 x86_64 Linux 主机上运行，不能在 macOS/Windows 上交叉打包。Debian/Ubuntu 的基础构建依赖包括 Flutter 官方要求的 CMake、Ninja、Clang、`pkg-config` 与 GTK3，以及 Kurako 当前 Linux 插件图所需的 libmpv、libepoxy、WebKitGTK 4.1、libsoup 3 和 ALSA 开发包。在 Linux Mint 22.3 / Ubuntu 24.04 上对应的首轮安装候选为：
