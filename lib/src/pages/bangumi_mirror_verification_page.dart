@@ -1,9 +1,26 @@
+import 'dart:convert';
 import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../services/bangumi_mirror.dart';
+
+/// True when the API probe page is showing the actual subject JSON rather than
+/// the Anubis challenge.
+///
+/// The probe deliberately requests subject `1`; the challenge page is HTML, so
+/// a decoded object with `id == 1` and a string `name` means verification
+/// really finished. This only inspects text already rendered in the WebView —
+/// no credentials are read or injected.
+bool isBangumiMirrorSubjectResponse(String text) {
+  try {
+    final value = jsonDecode(text);
+    return value is Map && value['id'] == 1 && value['name'] is String;
+  } on FormatException {
+    return false;
+  }
+}
 
 /// Builds only a root-path header for the exact CookieManager query host.
 /// Native APIs on older Android omit metadata; their URL query still enforces
@@ -14,7 +31,10 @@ BangumiMirrorHostProof collectBangumiMirrorProof({
   required List<Cookie> cookies,
   int? nowMilliseconds,
 }) {
-  if (!{'api.bangumi.vip', bangumiMirrorImageHost}.contains(queriedUri.host) ||
+  if (!{
+        bangumiMirrorApiHost,
+        bangumiMirrorImageHost,
+      }.contains(queriedUri.host) ||
       queriedUri.scheme != 'https' ||
       queriedUri.userInfo.isNotEmpty ||
       queriedUri.hasPort) {
@@ -97,6 +117,25 @@ class _BangumiMirrorVerificationPageState
   bool _imageStage = false;
   bool _checking = false;
   bool _loading = true;
+  bool _apiPageReady = false;
+
+  /// The API probe answers with a raw subject JSON document, which reads like
+  /// garbage in the WebView. Once that document is confirmed, cover the native
+  /// view with a readable "verified" state; the WebView stays alive underneath
+  /// so CookieManager and the real request probes still work.
+  Future<void> _inspectApiPage(
+    InAppWebViewController controller,
+    WebUri? url,
+  ) async {
+    if (_imageStage || url?.host != bangumiMirrorApiHost) return;
+    final text = await controller.evaluateJavascript(
+      source: 'document.body ? document.body.innerText.slice(0, 1048576) : ""',
+    );
+    if (!mounted || _imageStage || text is! String) return;
+    if (isBangumiMirrorSubjectResponse(text)) {
+      setState(() => _apiPageReady = true);
+    }
+  }
 
   @override
   void initState() {
@@ -244,55 +283,98 @@ class _BangumiMirrorVerificationPageState
                   if (snapshot.connectionState != ConnectionState.done) {
                     return const Center(child: CircularProgressIndicator());
                   }
-                  return InAppWebView(
-                    webViewEnvironment: _environment,
-                    initialUrlRequest: URLRequest(url: WebUri(_url)),
-                    initialSettings: InAppWebViewSettings(
-                      javaScriptEnabled: true,
-                      useShouldOverrideUrlLoading: true,
-                      javaScriptCanOpenWindowsAutomatically: false,
-                      supportMultipleWindows: false,
-                      // Use platform CookieManager, including native HttpOnly access.
-                      sharedCookiesEnabled: true,
-                    ),
-                    onWebViewCreated: (controller) {
-                      _controller = controller;
-                      if (mounted) setState(() {});
-                    },
-                    shouldOverrideUrlLoading: (_, navigation) async {
-                      final uri = navigation.request.url;
-                      final expected = Uri.parse(_url);
-                      return uri?.scheme == 'https' &&
-                              uri?.host == expected.host &&
-                              uri!.userInfo.isEmpty &&
-                              !uri.hasPort &&
-                              !uri.path.contains('/login') &&
-                              !uri.path.contains('/oauth')
-                          ? NavigationActionPolicy.ALLOW
-                          : NavigationActionPolicy.CANCEL;
-                    },
-                    onLoadStart: (_, _) {
-                      if (mounted) {
-                        setState(() {
-                          _loading = true;
-                        });
-                      }
-                    },
-                    onLoadStop: (_, _) {
-                      if (mounted) {
-                        setState(() {
-                          _loading = false;
-                        });
-                      }
-                    },
-                    onReceivedError: (_, request, _) {
-                      if (request.isForMainFrame == true && mounted) {
-                        setState(() {
-                          _loading = false;
-                          _error = '验证页面加载失败，请检查网络/代理出口，或关闭镜像回退官方。';
-                        });
-                      }
-                    },
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      InAppWebView(
+                        webViewEnvironment: _environment,
+                        initialUrlRequest: URLRequest(url: WebUri(_url)),
+                        initialSettings: InAppWebViewSettings(
+                          javaScriptEnabled: true,
+                          useShouldOverrideUrlLoading: true,
+                          javaScriptCanOpenWindowsAutomatically: false,
+                          supportMultipleWindows: false,
+                          // Use platform CookieManager, including native HttpOnly access.
+                          sharedCookiesEnabled: true,
+                        ),
+                        onWebViewCreated: (controller) {
+                          _controller = controller;
+                          if (mounted) setState(() {});
+                        },
+                        shouldOverrideUrlLoading: (_, navigation) async {
+                          final uri = navigation.request.url;
+                          final expected = Uri.parse(_url);
+                          return uri?.scheme == 'https' &&
+                                  uri?.host == expected.host &&
+                                  uri!.userInfo.isEmpty &&
+                                  !uri.hasPort &&
+                                  !uri.path.contains('/login') &&
+                                  !uri.path.contains('/oauth')
+                              ? NavigationActionPolicy.ALLOW
+                              : NavigationActionPolicy.CANCEL;
+                        },
+                        onLoadStart: (_, _) {
+                          if (mounted) {
+                            setState(() {
+                              _loading = true;
+                              _apiPageReady = false;
+                            });
+                          }
+                        },
+                        onLoadStop: (controller, url) async {
+                          if (mounted) {
+                            setState(() => _loading = false);
+                          }
+                          try {
+                            await _inspectApiPage(controller, url);
+                          } catch (_) {
+                            // A manual check still verifies cookies and real requests.
+                          }
+                        },
+                        onReceivedError: (_, request, _) {
+                          if (request.isForMainFrame == true && mounted) {
+                            setState(() {
+                              _loading = false;
+                              _error = '验证页面加载失败，请检查网络/代理出口，或关闭镜像回退官方。';
+                            });
+                          }
+                        },
+                      ),
+                      // Only covers the raw API document, never the challenge.
+                      if (_apiPageReady && !_imageStage)
+                        ColoredBox(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(24),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.verified_outlined,
+                                    size: 64,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                  ),
+                                  const SizedBox(height: 20),
+                                  Text(
+                                    'API 页面已通过人机验证',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleLarge,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    '点击“检查并继续”，应用会验证实际 API 请求，\n然后继续测试封面图片。',
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   );
                 },
               ),

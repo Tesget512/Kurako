@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../build_info.dart';
 import '../state/update_provider.dart';
+import '../widgets/update_download_dialog.dart';
 import '../widgets/window_caption.dart';
 
 /// Product and attribution information kept out of the operational settings
@@ -143,7 +144,7 @@ class _UpdateCheckSection extends ConsumerWidget {
           contentPadding: EdgeInsets.zero,
           leading: const Icon(Icons.system_update_alt),
           title: const Text('检查更新'),
-          subtitle: Text('$statusText\n只提示并跳转 Release 页面，不会自动下载或安装。'),
+          subtitle: Text(statusText),
         ),
         Wrap(
           spacing: 8,
@@ -170,16 +171,9 @@ class _UpdateCheckSection extends ConsumerWidget {
             ),
             if (state.status == UpdateCheckStatus.available)
               FilledButton.icon(
-                onPressed: () async {
-                  final opened = await notifier.openRelease();
-                  if (!opened && context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('无法打开 Release 页面，请重试')),
-                    );
-                  }
-                },
-                icon: const Icon(Icons.open_in_new),
-                label: const Text('查看新版本'),
+                onPressed: () => showUpdateDownload(context, ref),
+                icon: const Icon(Icons.download),
+                label: const Text('下载更新'),
               ),
           ],
         ),

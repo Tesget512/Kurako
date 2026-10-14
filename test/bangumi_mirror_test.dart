@@ -312,4 +312,31 @@ void main() {
     expect(calls.contains('enabled=true'), false);
     s.dispose();
   });
+
+  test('API probe readiness needs the real subject document', () {
+    // The probe requests subject 1; only that decoded object counts as done.
+    expect(
+      isBangumiMirrorSubjectResponse('{"id":1,"name":"Cowboy Bebop"}'),
+      isTrue,
+    );
+    expect(
+      isBangumiMirrorSubjectResponse(
+        '{"id":1,"name":"Cowboy Bebop","name_cn":"星际牛仔"}',
+      ),
+      isTrue,
+    );
+
+    // The Anubis challenge is HTML, not JSON.
+    expect(
+      isBangumiMirrorSubjectResponse('<html><body>Verifying…</body></html>'),
+      isFalse,
+    );
+    expect(isBangumiMirrorSubjectResponse(''), isFalse);
+    expect(isBangumiMirrorSubjectResponse('not json at all'), isFalse);
+    // JSON, but not the subject we asked for.
+    expect(isBangumiMirrorSubjectResponse('{"id":2,"name":"Other"}'), isFalse);
+    expect(isBangumiMirrorSubjectResponse('{"id":1}'), isFalse);
+    expect(isBangumiMirrorSubjectResponse('{"id":"1","name":"X"}'), isFalse);
+    expect(isBangumiMirrorSubjectResponse('[{"id":1,"name":"X"}]'), isFalse);
+  });
 }

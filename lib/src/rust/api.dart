@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_fallback`, `apply_one`, `apply_sidecars`, `bind_anime_during_scan`, `binding_survivor`, `configured_download_directory`, `download_match_is_valid`, `ensure_anime_for_subject_during_scan`, `ensure_anime_for_subject`, `finish_scan_session`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `binding_survivor`, `configured_download_directory`, `download_match_is_valid`, `ensure_anime_for_subject`, `finish_scan_session`, `import_scan_manual_matches`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -34,13 +34,19 @@ Future<void> setBangumiMirror({required bool enabled}) =>
 Future<String> oauthAuthorizeUrl() =>
     RustLib.instance.api.crateApiOauthAuthorizeUrl();
 
-/// The registered OAuth callback URL (for the Dart loopback server to bind).
+/// The registered OAuth callback URL, shared with the Dart callback matcher.
 Future<String> oauthRedirectUri() =>
     RustLib.instance.api.crateApiOauthRedirectUri();
 
 /// Exchange an authorization code (from the callback) for tokens.
-Future<OAuthResult> oauthExchangeCode({required String code}) =>
-    RustLib.instance.api.crateApiOauthExchangeCode(code: code);
+///
+/// `state` is the same value the authorize URL carried and that the Dart side
+/// already checked against the callback; Bangumi accepts it on the exchange
+/// too, so it is forwarded rather than dropped.
+Future<OAuthResult> oauthExchangeCode({
+  required String code,
+  required String state,
+}) => RustLib.instance.api.crateApiOauthExchangeCode(code: code, state: state);
 
 /// Refresh an access token using a stored refresh token.
 Future<OAuthResult> oauthRefresh({required String refreshToken}) =>
@@ -127,9 +133,8 @@ Future<ScanFileBatch> enumerateLocalFolder({
 /// Scan all library folders, group files into anime, then auto-match each new
 /// anime against Bangumi. Emits ScanProgress events throughout.
 ///
-/// When `incremental` is true, folders whose newest file/dir mtime is older than
-/// their last recorded scan time are skipped entirely — dramatically faster on
-/// large libraries where only a few folders changed.
+/// Incremental scans still enumerate every directory; only changed recognition
+/// inputs are regrouped. Complete snapshots are required to detect removals.
 Stream<ScanProgress> scanAndMatch({required bool incremental}) =>
     RustLib.instance.api.crateApiScanAndMatch(incremental: incremental);
 

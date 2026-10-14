@@ -108,6 +108,28 @@ const kDefaultMaterialVideoControlsThemeDataFullscreen =
 
 enum MaterialVerticalGestureKind { brightness, volume }
 
+/// Resolves which OSD a vertical gesture should show.
+///
+/// The OSD widget stays mounted while `AnimatedOpacity` fades it out, and by
+/// then both indicator flags are already cleared. Deriving the kind from those
+/// flags alone would repaint the OSD as the *other* indicator during that fade
+/// — a finished volume adjustment briefly flashing the brightness UI — so the
+/// last used kind is remembered and reused until a new gesture replaces it.
+MaterialVerticalGestureKind resolveVerticalGestureKind({
+  required bool dragging,
+  required MaterialVerticalGestureKind? activeKind,
+  required bool volumeIndicator,
+  required bool brightnessIndicator,
+  required MaterialVerticalGestureKind? lastKind,
+}) {
+  if (dragging) {
+    return activeKind ?? lastKind ?? MaterialVerticalGestureKind.volume;
+  }
+  if (volumeIndicator) return MaterialVerticalGestureKind.volume;
+  if (brightnessIndicator) return MaterialVerticalGestureKind.brightness;
+  return lastKind ?? MaterialVerticalGestureKind.volume;
+}
+
 class MaterialVerticalGestureIndicatorData {
   final MaterialVerticalGestureKind kind;
   final double value;
@@ -591,6 +613,12 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
 
   final GlobalKey _controlsRootKey = GlobalKey();
   MaterialVerticalGestureKind? _verticalKind;
+
+  /// The most recent vertical gesture kind. The indicator widget keeps fading
+  /// out after its flag clears, so the kind must not fall back to a default
+  /// while that fade is still running (a volume gesture would otherwise
+  /// repaint as the brightness indicator for the last frames).
+  MaterialVerticalGestureKind? _lastVerticalKind;
   Offset? _verticalPosition;
   bool _verticalDragging = false;
 
@@ -603,6 +631,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     if (!_verticalDragging) return;
     setState(() {
       _verticalDragging = false;
+      _lastVerticalKind = _verticalKind;
       if (_verticalKind == MaterialVerticalGestureKind.volume) {
         _volumeIndicator = true;
       } else {
@@ -1046,6 +1075,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
               _volumeValue = value;
               _verticalPosition = null;
               _volumeIndicator = true;
+              _lastVerticalKind = MaterialVerticalGestureKind.volume;
             });
             _volumeTimer?.cancel();
             _volumeTimer = Timer(const Duration(milliseconds: 800), () {
@@ -1085,6 +1115,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     setState(() {
       _volumeValue = target;
       _volumeIndicator = true;
+      _lastVerticalKind = MaterialVerticalGestureKind.volume;
       _volumeInterceptEventStream = true;
     });
     _volumeInterceptTimer?.cancel();
@@ -1110,6 +1141,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     setState(() {
       _brightnessValue = target;
       _brightnessIndicator = true;
+      _lastVerticalKind = MaterialVerticalGestureKind.brightness;
       _brightnessInterceptEventStream = true;
     });
     _brightnessInterceptTimer?.cancel();
@@ -1152,6 +1184,29 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
       }
     }
     // --------------------------------------------------
+  }
+
+  /// Builds the brightness/volume OSD. See [resolveVerticalGestureKind] for
+  /// why the last kind is remembered across the fade-out.
+  Widget _buildVerticalGestureIndicator(BuildContext context) {
+    final kind = resolveVerticalGestureKind(
+      dragging: _verticalDragging,
+      activeKind: _verticalKind,
+      volumeIndicator: _volumeIndicator,
+      brightnessIndicator: _brightnessIndicator,
+      lastKind: _lastVerticalKind,
+    );
+    return _theme(context).verticalGestureIndicatorBuilder!(
+      context,
+      MaterialVerticalGestureIndicatorData(
+        kind: kind,
+        value: kind == MaterialVerticalGestureKind.volume
+            ? _volumeValue
+            : _brightnessValue,
+        position: _verticalPosition,
+        isDragging: _verticalDragging,
+      ),
+    );
   }
 
   @override
@@ -1450,6 +1505,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                                   .brightness
                                               : MaterialVerticalGestureKind
                                                   .volume;
+                                          _lastVerticalKind = _verticalKind;
                                           _verticalPosition = position;
                                           _verticalDragging = true;
                                           if (left) {
@@ -1706,23 +1762,7 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                             ? 1
                             : 0,
                         duration: _theme(context).controlsTransitionDuration,
-                        child: _theme(context).verticalGestureIndicatorBuilder!(
-                            context,
-                            MaterialVerticalGestureIndicatorData(
-                                kind: _verticalDragging
-                                    ? _verticalKind!
-                                    : _volumeIndicator
-                                        ? MaterialVerticalGestureKind.volume
-                                        : MaterialVerticalGestureKind
-                                            .brightness,
-                                value: (_verticalDragging
-                                        ? _verticalKind ==
-                                            MaterialVerticalGestureKind.volume
-                                        : _volumeIndicator)
-                                    ? _volumeValue
-                                    : _brightnessValue,
-                                position: _verticalPosition,
-                                isDragging: _verticalDragging)),
+                        child: _buildVerticalGestureIndicator(context),
                       ))),
                     // Volume Indicator.
                     if (_theme(context).verticalGestureIndicatorBuilder == null)

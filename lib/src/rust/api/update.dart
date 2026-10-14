@@ -8,6 +8,7 @@ import '../update.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Fetch the latest stable official release. None means no stable release exists.
-/// Version comparison belongs to Dart, using PackageInfo's installed version.
+/// Version comparison and asset selection belong to Dart, using PackageInfo's
+/// installed version and the running platform/ABI.
 Future<UpdateRelease?> checkUpdate() =>
     RustLib.instance.api.crateApiUpdateCheckUpdate();

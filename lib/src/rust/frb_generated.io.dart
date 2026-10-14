@@ -156,6 +156,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<SubtitleCandidate> dco_decode_list_subtitle_candidate(dynamic raw);
 
   @protected
+  List<UpdateAsset> dco_decode_list_update_asset(dynamic raw);
+
+  @protected
   OAuthResult dco_decode_o_auth_result(dynamic raw);
 
   @protected
@@ -219,6 +222,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void dco_decode_unit(dynamic raw);
+
+  @protected
+  UpdateAsset dco_decode_update_asset(dynamic raw);
 
   @protected
   UpdateRelease dco_decode_update_release(dynamic raw);
@@ -387,6 +393,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  List<UpdateAsset> sse_decode_list_update_asset(SseDeserializer deserializer);
+
+  @protected
   OAuthResult sse_decode_o_auth_result(SseDeserializer deserializer);
 
   @protected
@@ -454,6 +463,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_decode_unit(SseDeserializer deserializer);
+
+  @protected
+  UpdateAsset sse_decode_update_asset(SseDeserializer deserializer);
 
   @protected
   UpdateRelease sse_decode_update_release(SseDeserializer deserializer);
@@ -675,6 +687,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_update_asset(
+    List<UpdateAsset> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_o_auth_result(OAuthResult self, SseSerializer serializer);
 
   @protected
@@ -757,6 +775,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_unit(void self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_update_asset(UpdateAsset self, SseSerializer serializer);
 
   @protected
   void sse_encode_update_release(UpdateRelease self, SseSerializer serializer);

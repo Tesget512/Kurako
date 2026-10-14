@@ -148,19 +148,24 @@ pub fn oauth_authorize_url() -> String {
     bangumi::authorize_url(bangumi::OAUTH_CLIENT_ID, bangumi::OAUTH_REDIRECT_URI)
 }
 
-/// The registered OAuth callback URL (for the Dart loopback server to bind).
+/// The registered OAuth callback URL, shared with the Dart callback matcher.
 pub fn oauth_redirect_uri() -> String {
     bangumi::OAUTH_REDIRECT_URI.to_string()
 }
 
 /// Exchange an authorization code (from the callback) for tokens.
-pub fn oauth_exchange_code(code: String) -> Result<OAuthResult, String> {
+///
+/// `state` is the same value the authorize URL carried and that the Dart side
+/// already checked against the callback; Bangumi accepts it on the exchange
+/// too, so it is forwarded rather than dropped.
+pub fn oauth_exchange_code(code: String, state: String) -> Result<OAuthResult, String> {
     RT.block_on(async {
         bangumi::exchange_code(
             bangumi::OAUTH_CLIENT_ID,
             bangumi::OAUTH_CLIENT_SECRET,
             &code,
             bangumi::OAUTH_REDIRECT_URI,
+            &state,
         )
         .await
     })
@@ -1112,12 +1117,19 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
             break;
         } // Offline: do not pay one timeout per manual subject.
     }
-    let unmatched =
-        scan_control::matching_candidates(db::unmatched_anime().map_err(|e| e.to_string())?);
+    let retry_pending = db::match_retry_ids().map_err(|e| e.to_string())?;
+    let unmatched = scan_control::matching_candidates(
+        db::unmatched_anime().map_err(|e| e.to_string())?,
+        &retry_pending,
+    );
     let match_total = unmatched.len() as i64;
     let done = std::sync::atomic::AtomicI64::new(0);
     let consecutive_errors = std::sync::atomic::AtomicI64::new(0);
     let total_errors = std::sync::atomic::AtomicI64::new(0);
+    // Which candidates finished a match attempt (found a subject or searched
+    // and found none) versus which could not be attempted at all. The latter
+    // stay flagged so the next incremental scan retries them.
+    let outcomes: std::sync::Mutex<Vec<(i64, bool)>> = std::sync::Mutex::new(Vec::new());
 
     RT.block_on(async {
         use futures::stream::{self, StreamExt};
@@ -1129,10 +1141,16 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
                 let done = &done;
                 let consecutive_errors = &consecutive_errors;
                 let total_errors = &total_errors;
+                let outcomes = &outcomes;
                 async move {
+                    let record = |completed: bool| {
+                        outcomes.lock().unwrap().push((anime_id, completed));
+                    };
                     if scan_control::is_cancelled()
                         || consecutive_errors.load(std::sync::atomic::Ordering::Relaxed) >= 3
                     {
+                        // Not attempted at all: retry it on a later scan.
+                        record(false);
                         return;
                     }
                     let result = tokio::select! {
@@ -1147,10 +1165,14 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
                     match &result {
                         Ok(_) => {
                             consecutive_errors.store(0, std::sync::atomic::Ordering::Relaxed);
+                            // The search itself completed; "no candidate" is a
+                            // real answer, not an outage.
+                            record(true);
                         }
                         Err(_) => {
                             consecutive_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             total_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            record(false);
                         }
                     }
                     if scan_control::is_cancelled() {
@@ -1240,6 +1262,27 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
     // titles) can land in separate rows that both matched the same subject —
     // fold them into one entry; episodes keep their release_group label.
     let _ = db::merge_duplicate_bindings();
+
+    // Persist which titles still need a match attempt so a later incremental
+    // scan retries them even though their files never changed.
+    {
+        let outcomes = outcomes.into_inner().unwrap_or_default();
+        let mut completed = Vec::new();
+        let mut incomplete = Vec::new();
+        for (anime_id, finished) in outcomes {
+            if finished {
+                completed.push(anime_id);
+            } else {
+                incomplete.push(anime_id);
+            }
+        }
+        if let Err(error) = db::clear_match_retry(completed) {
+            eprintln!("clear_match_retry: {error}");
+        }
+        if let Err(error) = db::mark_match_retry(incomplete) {
+            eprintln!("mark_match_retry: {error}");
+        }
+    }
 
     let api_unreachable = consecutive_errors.load(std::sync::atomic::Ordering::Relaxed) >= 3;
 

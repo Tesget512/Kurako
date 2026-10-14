@@ -59,11 +59,19 @@ class BangumiOAuth {
               onTimeout: () => throw const OAuthException('授权超时，请重试'),
             );
     } on PlatformException catch (e) {
-      throw OAuthException('无法完成 Bangumi 授权：${e.message ?? e.code}');
+      throw OAuthException(
+        e.code.toLowerCase().contains('cancel')
+            ? '已取消 Bangumi 授权。'
+            : '无法打开或完成系统授权窗口，请检查默认浏览器后重试。',
+      );
     }
 
     final code = parseBangumiOAuthCode(callbackUrl, expectedState: state);
-    return rust.oauthExchangeCode(code: code);
+    try {
+      return await rust.oauthExchangeCode(code: code, state: state);
+    } catch (error) {
+      throw OAuthException(bangumiLoginFailureMessage(error));
+    }
   }
 
   static Future<String> _authenticateWithDesktopBrowser(
@@ -109,10 +117,16 @@ class BangumiOAuth {
   }
 }
 
+/// A callback is only accepted for the exact registered shape: the `kurako`
+/// scheme, `oauth` host and `/callback` path, with no userinfo, port or
+/// fragment. Anything else cannot be the redirect the app asked for.
 bool _isOAuthCallback(Uri callback) =>
     callback.scheme == _kCallbackScheme &&
     callback.host == _kCallbackHost &&
-    callback.path == _kCallbackPath;
+    callback.path == _kCallbackPath &&
+    callback.userInfo.isEmpty &&
+    !callback.hasPort &&
+    !callback.hasFragment;
 
 @visibleForTesting
 String parseBangumiOAuthCode(
@@ -123,18 +137,60 @@ String parseBangumiOAuthCode(
   if (callback == null || !_isOAuthCallback(callback)) {
     throw const OAuthException('Bangumi 返回了无效的授权回调，请重试。');
   }
-  final error = callback.queryParameters['error'];
-  if (error != null && error.isNotEmpty) {
-    throw OAuthException('授权被拒绝或失败：$error');
+  // Reject repeated parameters outright: `Uri.queryParameters` keeps only one
+  // value, so a duplicated `code` or `state` would otherwise be silently
+  // resolved in the attacker's favour.
+  if (expectedState.isEmpty ||
+      [
+        'code',
+        'state',
+        'error',
+      ].any((key) => (callback.queryParametersAll[key]?.length ?? 0) > 1)) {
+    throw const OAuthException('Bangumi 返回了无效的授权参数，请重试。');
   }
-  final code = callback.queryParameters['code'];
-  if (code == null || code.isEmpty) {
-    throw const OAuthException('授权回调未包含授权码，请重试。');
-  }
+  // Check state before reading the code or the provider error, so a forged
+  // callback cannot even influence which message the user sees.
   if (callback.queryParameters['state'] != expectedState) {
     throw const OAuthException('授权状态校验失败，请关闭授权窗口后重试。');
   }
+  final error = callback.queryParameters['error'];
+  if (error != null && error.isNotEmpty) {
+    throw const OAuthException('授权被拒绝或失败：access_denied');
+  }
+  final code = callback.queryParameters['code'];
+  if (code == null || code.trim().isEmpty) {
+    throw const OAuthException('授权回调未包含授权码，请重试。');
+  }
   return code;
+}
+
+/// Translate a login failure into a user-facing reason.
+///
+/// Rust reports fixed, allowlisted codes and never the response body, so this
+/// mapping only needs to recognise those codes plus generic transport errors.
+/// It deliberately does not surface raw native or server text.
+String bangumiLoginFailureMessage(Object error) {
+  if (error is OAuthException) return error.message;
+  final text = error.toString().toLowerCase();
+  if (text.contains('invalid_grant')) {
+    return '授权码已过期或已使用，请重新授权并在返回后立即完成登录。';
+  }
+  if (text.contains('invalid_client') || text.contains('unauthorized_client')) {
+    return 'Bangumi 拒绝了应用授权配置，请检查 App ID、密钥与已登记回调地址。';
+  }
+  if (text.contains('invalid_request')) {
+    return 'Bangumi 拒绝了授权请求，请检查已登记回调地址后重试。';
+  }
+  if (text.contains('token verification')) {
+    return 'Bangumi 返回的授权身份或有效期验证失败，未保存账号，请重新授权。';
+  }
+  if (text.contains('oauth response')) {
+    return '授权服务未返回有效数据，可能受到验证页面或网络拦截，请检查网络后重试。';
+  }
+  if (text.contains('oauth request http')) {
+    return 'Bangumi 授权服务返回错误，请稍后重试或检查网络与代理。';
+  }
+  return '无法连接 Bangumi 授权服务，请检查网络及代理后重试。';
 }
 
 class OAuthException implements Exception {

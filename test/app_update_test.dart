@@ -15,6 +15,24 @@ AppUpdateRelease release([String tag = 'v1.2.0']) => AppUpdateRelease(
   name: 'Kurako $tag',
 );
 
+AppUpdateRelease releaseWithAssets(List<AppUpdateAsset> assets) =>
+    AppUpdateRelease(
+      tagName: 'v1.2.0',
+      htmlUrl: 'https://github.com/Tesget512/Kurako/releases/tag/v1.2.0',
+      name: 'Kurako v1.2.0',
+      assets: assets,
+    );
+
+/// A release asset under the version this project actually publishes, using
+/// the real download URL shape.
+AppUpdateAsset asset(String name, {String? url}) => AppUpdateAsset(
+  name: name,
+  size: 52 * 1024 * 1024,
+  url:
+      url ??
+      'https://github.com/Tesget512/Kurako/releases/download/v1.2.0/$name',
+);
+
 AppUpdateService service({
   Future<AppUpdateRelease?> Function()? fetch,
   String installed = '1.0.2',
@@ -26,6 +44,213 @@ AppUpdateService service({
 );
 
 void main() {
+  test('asset URLs accept only this project release download', () {
+    final release = releaseWithAssets([
+      asset('Kurako-Android-arm64-v8a-1.2.0-release.apk'),
+    ]);
+    final good = asset('Kurako-Android-arm64-v8a-1.2.0-release.apk');
+    expect(isProjectAssetUrl(release, good), isTrue);
+    // A digest is optional, but a malformed one is not accepted.
+    expect(
+      isProjectAssetUrl(
+        release,
+        AppUpdateAsset(
+          name: good.name,
+          size: good.size,
+          url: good.url,
+          digest: 'sha256:${'a' * 64}',
+        ),
+      ),
+      isTrue,
+    );
+
+    for (final bad in [
+      // wrong host / scheme / credentials / port / query / fragment
+      asset(good.name, url: 'https://example.com/${good.name}'),
+      asset(
+        good.name,
+        url:
+            'http://github.com/Tesget512/Kurako/releases/download/v1.2.0/${good.name}',
+      ),
+      asset(
+        good.name,
+        url:
+            'https://user@github.com/Tesget512/Kurako/releases/download/v1.2.0/${good.name}',
+      ),
+      asset(
+        good.name,
+        url:
+            'https://github.com:443/Tesget512/Kurako/releases/download/v1.2.0/${good.name}',
+      ),
+      asset(good.name, url: '${good.url}?x=1'),
+      asset(good.name, url: '${good.url}#x'),
+      // another repository or a tag page rather than a download
+      asset(
+        good.name,
+        url:
+            'https://github.com/other/Kurako/releases/download/v1.2.0/${good.name}',
+      ),
+      asset(
+        good.name,
+        url: 'https://github.com/Tesget512/Kurako/releases/tag/v1.2.0',
+      ),
+      // tag mismatch, name mismatch, non-Kurako name, blank name
+      asset(
+        good.name,
+        url:
+            'https://github.com/Tesget512/Kurako/releases/download/v9.9.9/${good.name}',
+      ),
+      asset(
+        'Kurako-Android-arm64-v8a-1.2.0-release.apk',
+        url: good.url.replaceAll('arm64-v8a', 'x86_64'),
+      ),
+      asset(good.name, url: good.url.replaceAll('Kurako-', 'Malware-')),
+      asset(good.name, url: good.url.replaceAll(good.name, 'notes.txt')),
+    ]) {
+      expect(isProjectAssetUrl(release, bad), isFalse, reason: bad.url);
+    }
+
+    // A malformed digest and an implausible size are rejected.
+    expect(
+      isProjectAssetUrl(
+        release,
+        AppUpdateAsset(
+          name: good.name,
+          size: good.size,
+          url: good.url,
+          digest: 'sha256:xyz',
+        ),
+      ),
+      isFalse,
+    );
+    expect(
+      isProjectAssetUrl(
+        release,
+        AppUpdateAsset(name: good.name, size: 0, url: good.url),
+      ),
+      isFalse,
+    );
+    expect(
+      isProjectAssetUrl(
+        release,
+        AppUpdateAsset(
+          name: good.name,
+          size: 5 * 1024 * 1024 * 1024,
+          url: good.url,
+        ),
+      ),
+      isFalse,
+    );
+  });
+
+  test('compatible assets are selected per platform and architecture', () {
+    final release = releaseWithAssets([
+      asset('Kurako-Android-armeabi-v7a-1.2.0-release.apk'),
+      asset('Kurako-Android-arm64-v8a-1.2.0-release.apk'),
+      asset('Kurako-Android-x86_64-1.2.0-release.apk'),
+      asset('Kurako-iOS-1.2.0-no_sign-release.ipa'),
+      asset('Kurako-macOS-1.2.0-universal-adhoc-release.dmg'),
+      asset('Kurako-Windows-x64-1.2.0-unsigned-setup.exe'),
+      asset('Kurako-Windows-x64-1.2.0-release.zip'),
+      asset('Kurako-Linux-1.2.0+4-x86_64.deb'),
+      asset('Kurako-Setup-1.2.0.exe'),
+    ]);
+
+    String only(String platform, String architecture) => compatibleUpdateAssets(
+      release,
+      platform: platform,
+      architecture: architecture,
+    ).single.name;
+
+    expect(
+      only('android', 'arm64-v8a'),
+      'Kurako-Android-arm64-v8a-1.2.0-release.apk',
+    );
+    expect(
+      only('android', 'armeabi-v7a'),
+      'Kurako-Android-armeabi-v7a-1.2.0-release.apk',
+    );
+    expect(
+      only('android', 'x86_64'),
+      'Kurako-Android-x86_64-1.2.0-release.apk',
+    );
+    expect(only('ios', 'other'), 'Kurako-iOS-1.2.0-no_sign-release.ipa');
+    expect(
+      only('macos', 'other'),
+      'Kurako-macOS-1.2.0-universal-adhoc-release.dmg',
+    );
+    // The Linux package name carries the pubspec build suffix.
+    expect(only('linux', 'x86_64'), 'Kurako-Linux-1.2.0+4-x86_64.deb');
+
+    // Windows offers the setup and the portable ZIP, but not the APKs.
+    final windows = compatibleUpdateAssets(
+      release,
+      platform: 'windows',
+      architecture: 'x86_64',
+    ).map((a) => a.name).toList();
+    expect(windows, contains('Kurako-Windows-x64-1.2.0-unsigned-setup.exe'));
+    expect(windows, contains('Kurako-Windows-x64-1.2.0-release.zip'));
+    expect(windows, contains('Kurako-Setup-1.2.0.exe'));
+
+    // An architecture mismatch offers nothing rather than a wrong binary.
+    expect(
+      compatibleUpdateAssets(release, platform: 'linux', architecture: 'arm64'),
+      isEmpty,
+    );
+    expect(
+      compatibleUpdateAssets(
+        release,
+        platform: 'windows',
+        architecture: 'other',
+      ),
+      isEmpty,
+    );
+    expect(
+      compatibleUpdateAssets(
+        release,
+        platform: 'other',
+        architecture: 'x86_64',
+      ),
+      isEmpty,
+    );
+  });
+
+  test('an older Windows Setup-only release still offers the installer', () {
+    final release = releaseWithAssets([asset('Kurako-Setup-1.2.0.exe')]);
+    expect(
+      compatibleUpdateAssets(
+        release,
+        platform: 'windows',
+        architecture: 'x86_64',
+      ).single.name,
+      'Kurako-Setup-1.2.0.exe',
+    );
+  });
+
+  test('a v-prefixed tag still matches the unprefixed asset names', () {
+    final release = AppUpdateRelease(
+      tagName: 'v1.2.0',
+      htmlUrl: 'https://github.com/Tesget512/Kurako/releases/tag/v1.2.0',
+      name: 'v1.2.0',
+      assets: [
+        AppUpdateAsset(
+          name: 'Kurako-Android-arm64-v8a-1.2.0-release.apk',
+          size: 1024,
+          url:
+              'https://github.com/Tesget512/Kurako/releases/download/v1.2.0/Kurako-Android-arm64-v8a-1.2.0-release.apk',
+        ),
+      ],
+    );
+    expect(
+      compatibleUpdateAssets(
+        release,
+        platform: 'android',
+        architecture: 'arm64-v8a',
+      ),
+      hasLength(1),
+    );
+  });
+
   test('SemVer compares numbers, build metadata and prerelease precedence', () {
     int compare(String a, String b) => AppSemanticVersion.tryParse(
       a,
@@ -247,23 +472,29 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(
+          child: MaterialApp(
+            navigatorKey: updateNavigatorKey,
             builder: bannerBuilder,
-            home: Scaffold(body: Text('app content')),
+            home: const Scaffold(body: Text('app content')),
           ),
         ),
       );
       expect(find.text('app content'), findsOneWidget);
-      expect(find.text('查看'), findsNothing);
+      expect(find.text('下载'), findsNothing);
       await container.read(updateCheckProvider.notifier).checkAtStartup();
       await tester.pump();
       expect(find.text('Kurako v1.2.0 可用'), findsOneWidget);
-      await tester.tap(find.text('查看'));
+      // The banner button opens the in-app download dialog rather than a
+      // browser page.
+      await tester.tap(find.text('下载'));
       await tester.pumpAndSettle();
-      expect(find.textContaining('无法打开 Release'), findsOneWidget);
+      expect(find.text('更新至 v1.2.0'), findsOneWidget);
+      expect(find.text('此版本未提供适用于当前设备的更新包。'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '关闭'));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('dismiss-update-banner')));
       await tester.pump();
-      expect(find.text('查看'), findsNothing);
+      expect(find.text('下载'), findsNothing);
       expect(find.text('app content'), findsOneWidget);
     },
   );
@@ -284,6 +515,7 @@ void main() {
       UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
+          navigatorKey: updateNavigatorKey,
           builder: bannerBuilder,
           home: Scaffold(
             body: Center(
@@ -305,7 +537,7 @@ void main() {
     expect(taps, 1);
   });
 
-  testWidgets('about page manual failure retry and release navigation', (
+  testWidgets('about page manual failure retry and in-app download', (
     tester,
   ) async {
     PackageInfo.setMockInitialValues(
@@ -316,7 +548,6 @@ void main() {
       buildSignature: '',
     );
     var requests = 0;
-    var opens = 0;
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -324,11 +555,9 @@ void main() {
             service(
               fetch: () async {
                 if (++requests == 1) throw StateError('offline');
-                return release();
-              },
-              open: (_) async {
-                opens++;
-                return true;
+                return releaseWithAssets([
+                  asset('Kurako-Android-arm64-v8a-1.2.0-release.apk'),
+                ]);
               },
             ),
           ),
@@ -337,16 +566,18 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    // The removed sentence must not come back.
+    expect(find.textContaining('不会自动下载或安装'), findsNothing);
     await tester.tap(find.widgetWithText(OutlinedButton, '检查更新'));
     await tester.pumpAndSettle();
     expect(find.widgetWithText(OutlinedButton, '重试'), findsOneWidget);
     await tester.tap(find.widgetWithText(OutlinedButton, '重试'));
     await tester.pumpAndSettle();
     expect(find.textContaining('发现新版本 v1.2.0'), findsOneWidget);
-    await tester.ensureVisible(find.text('查看新版本'));
-    await tester.tap(find.text('查看新版本'));
+    await tester.ensureVisible(find.text('下载更新'));
+    await tester.tap(find.text('下载更新'));
     await tester.pumpAndSettle();
-    expect(opens, 1);
+    expect(find.text('更新至 v1.2.0'), findsOneWidget);
   });
 }
 

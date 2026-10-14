@@ -1730,12 +1730,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         bottom: 12,
       ),
       bufferingIndicatorBuilder: (_) => const PlayerBufferingIndicator(),
-      controlsOverlayBuilder: (_) => PlayerActionRail(
-        locked: false,
-        takingScreenshot: _takingScreenshot,
-        onLock: () => _setControlsLocked(true),
-        onScreenshot: _takeScreenshot,
-      ),
       verticalGestureIndicatorBuilder: (context, data) {
         final brightness = data.kind == MaterialVerticalGestureKind.brightness;
         return LayoutBuilder(
@@ -1789,13 +1783,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     );
   }
 
-  Widget _readableBar({required Widget child}) => Material(
-    color: _cs.surfaceContainerHigh.withValues(alpha: 0.78),
-    borderRadius: BorderRadius.circular(24),
-    child: DefaultTextStyle.merge(
-      style: TextStyle(color: _cs.onSurface),
-      child: child,
+  /// Bars stay unfilled: the picture shows through and only the glyphs get a
+  /// soft shadow for legibility. Filling them with a rounded surface reads as
+  /// a heavy slab over the video.
+  Widget _readableBar({required Widget child}) => DefaultTextStyle.merge(
+    style: const TextStyle(
+      shadows: [Shadow(color: Color(0xBB000000), blurRadius: 4)],
     ),
+    child: child,
   );
 
   Widget _readableTopBar() => _readableBar(
@@ -1813,6 +1808,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
             onPressed: _enterPip,
           ),
         _rateButton(),
+        MaterialCustomButton(
+          icon: Icon(
+            _takingScreenshot
+                ? Icons.hourglass_top
+                : Icons.photo_camera_outlined,
+            color: Colors.white,
+          ),
+          onPressed: _takingScreenshot ? () {} : () => _takeScreenshot(),
+        ),
+        MaterialCustomButton(
+          icon: Icon(
+            _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
+            color: Colors.white,
+          ),
+          onPressed: () => _setControlsLocked(!_controlsLocked),
+        ),
         MaterialCustomButton(
           icon: const Icon(Icons.tune, color: Colors.white),
           onPressed: () => _openPanel(_Panel.menu),
@@ -1934,10 +1945,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     });
   }
 
-  Widget _buildUnlockControlsButton() => PlayerActionRail(
-    locked: true,
-    onLock: () => _setControlsLocked(false),
-    onScreenshot: _takeScreenshot,
+  Widget _buildUnlockControlsButton() => Align(
+    alignment: Alignment.centerLeft,
+    child: SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(left: 8),
+        child: Material(
+          color: Colors.transparent,
+          child: IconButton(
+            tooltip: '解锁播放器',
+            onPressed: () => _setControlsLocked(false),
+            icon: const Icon(
+              Icons.lock_outline,
+              color: Colors.white70,
+              size: 24,
+              shadows: [Shadow(color: Colors.black, blurRadius: 4)],
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 
   /// Windows-touch fullscreen toggle; icon tracks [_fullscreen] live.

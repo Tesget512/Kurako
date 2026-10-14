@@ -1308,8 +1308,9 @@ pub fn authorize_url(client_id: &str, redirect_uri: &str) -> String {
 }
 
 /// The token payload returned by the OAuth token endpoint. Field names match
-/// Bangumi's JSON so it deserializes directly.
-#[derive(Debug, Clone, Deserialize)]
+/// Bangumi's JSON so it deserializes directly. Deliberately not `Debug`: this
+/// value holds credentials that must never reach a log or panic message.
+#[derive(Clone, Deserialize)]
 pub struct OAuthToken {
     pub access_token: String,
     pub refresh_token: String,
@@ -1327,37 +1328,78 @@ struct RawOAuthToken {
     #[serde(default)]
     user_id: serde_json::Value,
     error: Option<String>,
-    error_description: Option<String>,
+    token_type: Option<String>,
+}
+
+/// Map a provider error code onto a fixed, client-safe set. Unknown codes and
+/// any provider-authored text are collapsed into `unknown_error` so a response
+/// body can never be reflected into the UI.
+fn oauth_protocol_error(code: &str) -> anyhow::Error {
+    let known = match code {
+        "invalid_grant"
+        | "invalid_token"
+        | "invalid_client"
+        | "invalid_request"
+        | "access_denied"
+        | "unauthorized_client"
+        | "server_error"
+        | "temporarily_unavailable"
+        | "unsupported_grant_type" => code,
+        _ => "unknown_error",
+    };
+    anyhow::anyhow!("oauth error: {known}")
 }
 
 impl RawOAuthToken {
     fn into_token(self) -> Result<OAuthToken> {
         if let Some(err) = self.error {
-            let desc = self.error_description.unwrap_or_default();
-            anyhow::bail!("oauth error: {err} {desc}");
+            return Err(oauth_protocol_error(&err));
         }
         let user_id = match self.user_id {
             serde_json::Value::Number(n) => n.as_i64().unwrap_or(0),
             serde_json::Value::String(s) => s.parse().unwrap_or(0),
             _ => 0,
         };
+        // Bangumi returns a 7-day token; treat an absent or absurd lifetime as
+        // a malformed response rather than silently storing an expired token.
+        let access_token = self
+            .access_token
+            .filter(|v| !v.trim().is_empty())
+            .context("oauth response missing access_token")?;
+        let refresh_token = self
+            .refresh_token
+            .filter(|v| !v.trim().is_empty())
+            .context("oauth response missing refresh_token")?;
+        let expires_in = self
+            .expires_in
+            .filter(|v| *v > 0 && *v <= 366 * 86400)
+            .context("oauth response invalid expires_in")?;
+        if !self
+            .token_type
+            .as_deref()
+            .is_some_and(|v| v.eq_ignore_ascii_case("bearer"))
+        {
+            anyhow::bail!("oauth response invalid token_type");
+        }
         Ok(OAuthToken {
-            access_token: self
-                .access_token
-                .context("oauth response missing access_token")?,
-            refresh_token: self.refresh_token.unwrap_or_default(),
-            expires_in: self.expires_in.unwrap_or(0),
+            access_token,
+            refresh_token,
+            expires_in,
             user_id,
         })
     }
 }
 
 /// Exchange an authorization `code` for an access + refresh token.
+///
+/// The `state` echoed back here is the same value the app sent to `/authorize`
+/// and already validated against the callback.
 pub async fn exchange_code(
     client_id: &str,
     client_secret: &str,
     code: &str,
     redirect_uri: &str,
+    state: &str,
 ) -> Result<OAuthToken> {
     let params = [
         ("grant_type", "authorization_code"),
@@ -1365,8 +1407,19 @@ pub async fn exchange_code(
         ("client_secret", client_secret),
         ("code", code),
         ("redirect_uri", redirect_uri),
+        ("state", state),
     ];
-    post_token(&params).await
+    let mut token = post_token(&params).await?;
+    // The exchange alone only proves *a* token was issued. token_status proves
+    // it belongs to this client, is still valid, and reports the user id the
+    // refresh response omits.
+    let status = oauth_post(
+        "token_status",
+        &[("access_token", token.access_token.as_str())],
+    )
+    .await?;
+    validate_token_status(&status, client_id, &mut token)?;
+    Ok(token)
 }
 
 /// Refresh an expired access token using the stored refresh token.
@@ -1387,17 +1440,103 @@ pub async fn refresh_token(
 }
 
 async fn post_token(params: &[(&str, &str)]) -> Result<OAuthToken> {
-    let resp = client()?
-        .post(format!("{OAUTH_BASE}/access_token"))
+    let value = oauth_post("access_token", params).await?;
+    let raw: RawOAuthToken = serde_json::from_value(value)
+        .map_err(|_| anyhow::anyhow!("oauth response invalid fields"))?;
+    raw.into_token()
+}
+
+/// Parse a token-endpoint response without ever logging or echoing its body:
+/// a successful body contains the access and refresh tokens themselves.
+fn parse_oauth_response(status: reqwest::StatusCode, body: &[u8]) -> Result<serde_json::Value> {
+    let value: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| anyhow::anyhow!("oauth response invalid JSON (http {})", status.as_u16()))?;
+    if let Some(error) = value["error"].as_str() {
+        return Err(oauth_protocol_error(error));
+    }
+    if !status.is_success() {
+        anyhow::bail!("oauth request http {}", status.as_u16());
+    }
+    Ok(value)
+}
+
+/// POST to the OAuth endpoints with a dedicated client.
+///
+/// Deliberately separate from the shared `client()`: that client follows up to
+/// ten redirects, and a redirect on a form POST can drop the body or change the
+/// method, which turns a valid exchange into an unexplained failure. The token
+/// endpoints also need `Accept: application/json`, otherwise Rails may answer
+/// with HTML that cannot be parsed.
+async fn oauth_post(endpoint: &str, params: &[(&str, &str)]) -> Result<serde_json::Value> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(30));
+    if let Some(proxy) = detect_system_proxy() {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).context("oauth proxy configuration")?);
+    }
+    let mut resp = builder
+        .build()
+        .context("oauth client initialization")?
+        .post(format!("{OAUTH_BASE}/{endpoint}"))
+        .header(reqwest::header::ACCEPT, "application/json")
         .form(params)
         .send()
         .await
-        .context("oauth token request")?;
+        .map_err(|_| anyhow::anyhow!("oauth token request failed"))?;
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    let raw: RawOAuthToken = serde_json::from_str(&body)
-        .with_context(|| format!("parse oauth token response (http {status}): {body}"))?;
-    raw.into_token()
+    // Bound the read: an HTML error page or a proxy captive portal must not be
+    // buffered without limit.
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| anyhow::anyhow!("oauth token request failed"))?
+    {
+        if body.len().saturating_add(chunk.len()) > 64 * 1024 {
+            anyhow::bail!("oauth response too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    parse_oauth_response(status, &body)
+}
+
+/// Confirm the freshly issued token really belongs to this client and is live.
+///
+/// `token_status` returns the client id, an absolute expiry and the user id;
+/// the documented refresh response omits `user_id`, so this is also where a
+/// refreshed session recovers its identity.
+fn validate_token_status(
+    value: &serde_json::Value,
+    client_id: &str,
+    token: &mut OAuthToken,
+) -> Result<()> {
+    let number = |v: &serde_json::Value| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+    };
+    let client = value["client_id"]
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| value["client_id"].as_i64().map(|v| v.to_string()));
+    let user_id = number(&value["user_id"]).filter(|v| *v > 0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs() as i64;
+    let expires = number(&value["expires"]).filter(|v| *v > now);
+    if client.as_deref() != Some(client_id)
+        || user_id.is_none()
+        || expires.is_none()
+        || value["access_token"].as_str() != Some(token.access_token.as_str())
+        || (token.user_id > 0 && Some(token.user_id) != user_id)
+    {
+        anyhow::bail!("oauth token verification failed");
+    }
+    token.user_id = user_id.unwrap();
+    // Trust whichever lifetime is shorter.
+    token.expires_in = token.expires_in.min(expires.unwrap() - now);
+    Ok(())
 }
 
 // ---- Collection endpoints ----
@@ -1426,6 +1565,31 @@ struct CollectionPage {
     offset: i64,
 }
 
+/// Validate one page of a collection listing. A failure here must reach the
+/// caller: silently returning the pages fetched so far would let the UI report
+/// a complete sync while the library is only partially updated.
+///
+/// A 404 on the *first* page is the endpoint's answer for an account with no
+/// collections and is reported as an empty page; later 404s are real failures.
+fn parse_collection_page(
+    status: reqwest::StatusCode,
+    body: &[u8],
+    offset: i64,
+) -> Result<Option<CollectionPage>> {
+    if status == reqwest::StatusCode::NOT_FOUND && offset == 0 {
+        return Ok(None);
+    }
+    if !status.is_success() {
+        anyhow::bail!("bangumi collections http {}", status.as_u16());
+    }
+    let page: CollectionPage = serde_json::from_slice(body)
+        .map_err(|_| anyhow::anyhow!("bangumi collections invalid response"))?;
+    if page.offset != offset || page.total < 0 || (page.data.is_empty() && offset < page.total) {
+        anyhow::bail!("bangumi collections incomplete page");
+    }
+    Ok(Some(page))
+}
+
 /// Fetch all anime subjects the user has collected, as (subject_id, type).
 /// type: 1=想看, 2=看过, 3=在看, 4=搁置, 5=抛弃.
 /// Requires a token; returns empty vec when unauthenticated.
@@ -1445,13 +1609,8 @@ pub async fn all_collections() -> Result<Vec<(i64, i64)>> {
             BASE_OFFICIAL
         );
         let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi all_collections").await?;
-        if !resp.status().is_success() {
-            // 404 = no collections
-            break;
-        }
-        let page: CollectionPage = match resp.json().await {
-            Ok(p) => p,
-            Err(_) => break,
+        let Some(page) = parse_collection_page(resp.status(), &resp.bytes().await?, offset)? else {
+            return Ok(out);
         };
         for item in &page.data {
             if item.kind > 0 {
@@ -1879,5 +2038,217 @@ mod match_tests {
         let sj = score_candidate(&title, raw, &junk, 1.0, 0.42, 2);
         assert!(sc > sj, "correct {sc} must beat junk {sj}");
         assert!(sj < 0.38, "junk must sink below floor, got {sj}");
+    }
+}
+
+#[cfg(test)]
+mod oauth_tests {
+    use super::*;
+
+    fn raw(json: &str) -> RawOAuthToken {
+        serde_json::from_str(json).unwrap()
+    }
+
+    fn token() -> OAuthToken {
+        OAuthToken {
+            access_token: "access".into(),
+            refresh_token: "refresh".into(),
+            expires_in: 604800,
+            user_id: 0,
+        }
+    }
+
+    #[test]
+    fn protocol_errors_are_allowlisted() {
+        for known in [
+            "invalid_grant",
+            "invalid_token",
+            "invalid_client",
+            "invalid_request",
+            "access_denied",
+            "unauthorized_client",
+            "server_error",
+            "temporarily_unavailable",
+            "unsupported_grant_type",
+        ] {
+            assert_eq!(
+                oauth_protocol_error(known).to_string(),
+                format!("oauth error: {known}")
+            );
+        }
+        // Provider-authored text and unknown codes must never be reflected.
+        let injected = oauth_protocol_error("<b>invalid</b> secret-token").to_string();
+        assert_eq!(injected, "oauth error: unknown_error");
+        assert!(!injected.contains("secret-token"));
+    }
+
+    #[test]
+    fn token_response_requires_real_credentials() {
+        let ok = raw(
+            r#"{"access_token":"a","refresh_token":"r","expires_in":604800,
+                "token_type":"Bearer","user_id":7}"#,
+        )
+        .into_token()
+        .unwrap();
+        assert_eq!(ok.user_id, 7);
+        assert_eq!(ok.expires_in, 604800);
+        // Lowercase is accepted; Bangumi sends "Bearer".
+        assert!(raw(
+            r#"{"access_token":"a","refresh_token":"r","expires_in":600,"token_type":"bearer"}"#
+        )
+        .into_token()
+        .is_ok());
+
+        for json in [
+            // blank access token
+            r#"{"access_token":"  ","refresh_token":"r","expires_in":600,"token_type":"Bearer"}"#,
+            // missing refresh token must not silently become ""
+            r#"{"access_token":"a","expires_in":600,"token_type":"Bearer"}"#,
+            // missing / zero / absurd lifetime
+            r#"{"access_token":"a","refresh_token":"r","token_type":"Bearer"}"#,
+            r#"{"access_token":"a","refresh_token":"r","expires_in":0,"token_type":"Bearer"}"#,
+            r#"{"access_token":"a","refresh_token":"r","expires_in":999999999,"token_type":"Bearer"}"#,
+            // wrong or missing token_type
+            r#"{"access_token":"a","refresh_token":"r","expires_in":600,"token_type":"mac"}"#,
+            r#"{"access_token":"a","refresh_token":"r","expires_in":600}"#,
+        ] {
+            assert!(raw(json).into_token().is_err(), "{json}");
+        }
+    }
+
+    #[test]
+    fn token_error_body_is_reported_by_code_only() {
+        // OAuthToken deliberately has no Debug, so extract the error by match.
+        let err = match raw(
+            r#"{"error":"invalid_grant","error_description":"code has expired for user xyz"}"#,
+        )
+        .into_token()
+        {
+            Ok(_) => panic!("an error payload must not produce a token"),
+            Err(error) => error.to_string(),
+        };
+        assert_eq!(err, "oauth error: invalid_grant");
+        assert!(!err.contains("xyz"));
+    }
+
+    #[test]
+    fn response_bodies_are_never_echoed_in_errors() {
+        // A successful HTTP status with a non-JSON body (captive portal HTML).
+        let err = parse_oauth_response(reqwest::StatusCode::OK, b"<html>portal</html>")
+            .unwrap_err()
+            .to_string();
+        assert!(!err.contains("portal"), "{err}");
+        assert!(err.contains("oauth response invalid JSON"));
+
+        // An error payload on a 200 still reports only the allowlisted code.
+        let err = parse_oauth_response(
+            reqwest::StatusCode::OK,
+            br#"{"error":"invalid_client","error_description":"client abc-secret"}"#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert_eq!(err, "oauth error: invalid_client");
+
+        // A non-success status without an error field reports the status only.
+        let err = parse_oauth_response(reqwest::StatusCode::BAD_GATEWAY, b"{}")
+            .unwrap_err()
+            .to_string();
+        assert_eq!(err, "oauth request http 502");
+    }
+
+    #[test]
+    fn token_status_must_match_client_token_and_expiry() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let good = serde_json::json!({
+            "access_token": "access",
+            "client_id": "app-id",
+            "expires": now + 3600,
+            "user_id": 42,
+        });
+        let mut t = token();
+        validate_token_status(&good, "app-id", &mut t).unwrap();
+        assert_eq!(t.user_id, 42);
+        assert!(t.expires_in <= 3600);
+
+        // Wrong client.
+        let mut t = token();
+        assert!(validate_token_status(&good, "other-id", &mut t).is_err());
+
+        // Token from a different exchange.
+        let mut t = token();
+        let other = serde_json::json!({
+            "access_token": "different",
+            "client_id": "app-id",
+            "expires": now + 3600,
+            "user_id": 42,
+        });
+        assert!(validate_token_status(&other, "app-id", &mut t).is_err());
+
+        // Already expired / missing identity.
+        for bad in [
+            serde_json::json!({"access_token":"access","client_id":"app-id","expires":now-1,"user_id":42}),
+            serde_json::json!({"access_token":"access","client_id":"app-id","expires":now+3600}),
+            serde_json::json!({"access_token":"access","client_id":"app-id","expires":now+3600,"user_id":0}),
+        ] {
+            let mut t = token();
+            assert!(
+                validate_token_status(&bad, "app-id", &mut t).is_err(),
+                "{bad}"
+            );
+        }
+
+        // Numeric client id and string user id are tolerated.
+        let loose = serde_json::json!({
+            "access_token": "access",
+            "client_id": 12345,
+            "expires": (now + 3600).to_string(),
+            "user_id": "42",
+        });
+        let mut t = token();
+        validate_token_status(&loose, "12345", &mut t).unwrap();
+        assert_eq!(t.user_id, 42);
+    }
+
+    #[test]
+    fn collection_pages_fail_loudly_but_empty_account_is_ok() {
+        // First page 404 = account has no collections.
+        assert!(
+            parse_collection_page(reqwest::StatusCode::NOT_FOUND, b"", 0)
+                .unwrap()
+                .is_none()
+        );
+        // A 404 after the first page is a real failure, not "no collections".
+        assert!(parse_collection_page(reqwest::StatusCode::NOT_FOUND, b"", 50).is_err());
+
+        for status in [
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(parse_collection_page(status, b"{}", 0).is_err(), "{status}");
+        }
+
+        // Malformed JSON must not be mistaken for an empty result.
+        assert!(parse_collection_page(reqwest::StatusCode::OK, b"not json", 0).is_err());
+
+        // A page that claims a different offset is not usable.
+        let shifted = br#"{"data":[],"total":10,"limit":50,"offset":50}"#;
+        assert!(parse_collection_page(reqwest::StatusCode::OK, shifted, 0).is_err());
+
+        // An empty page before the reported total means the listing is broken.
+        let short = br#"{"data":[],"total":10,"limit":50,"offset":0}"#;
+        assert!(parse_collection_page(reqwest::StatusCode::OK, short, 0).is_err());
+
+        // A well-formed final page is accepted.
+        let page = br#"{"data":[{"subject_id":1,"type":2}],"total":1,"limit":50,"offset":0}"#;
+        let parsed = parse_collection_page(reqwest::StatusCode::OK, page, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed.data.len(), 1);
+        assert_eq!(parsed.total, 1);
     }
 }

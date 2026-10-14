@@ -29,6 +29,12 @@ Rect playerLevelIndicatorRect({
   );
 }
 
+/// Vertical brightness/volume OSD.
+///
+/// Deliberately flat: a plain track with the glyph above the value, both drawn
+/// straight over the picture with a soft shadow. An earlier revision wrapped
+/// this in a rounded, filled surface, which read as a heavy slab on top of the
+/// video and hid the frame underneath.
 class PlayerLevelIndicator extends StatelessWidget {
   final double value;
   final bool brightness;
@@ -43,86 +49,79 @@ class PlayerLevelIndicator extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final level = value.clamp(0.0, 1.0);
-    final scheme = ColorScheme.fromSeed(
-      seedColor: color,
-      brightness: Brightness.dark,
-    );
-    final foreground =
-        ThemeData.estimateBrightnessForColor(color) == Brightness.dark
-        ? Colors.white
-        : Colors.black;
+    final icon = brightness
+        ? Icons.brightness_6
+        : level == 0
+        ? Icons.volume_off
+        : Icons.volume_up;
+    final label = '${(level * 100).round()}%';
     return Semantics(
       label: brightness ? '亮度' : '音量',
-      value: '${(level * 100).round()}%',
-      child: Material(
-        color: scheme.surfaceContainerHigh.withValues(alpha: 0.96),
-        borderRadius: BorderRadius.circular(28),
-        clipBehavior: Clip.antiAlias,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            if (constraints.maxHeight < 64 || constraints.maxWidth < 32) {
-              return Center(
-                child: Icon(
-                  brightness ? Icons.brightness_6 : Icons.volume_up,
-                  color: color,
-                  size: math.min(22, constraints.maxHeight),
-                ),
-              );
-            }
-            return Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                children: [
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          ColoredBox(color: color.withValues(alpha: 0.18)),
-                          Align(
-                            alignment: Alignment.bottomCenter,
-                            child: FractionallySizedBox(
-                              widthFactor: 1,
-                              heightFactor: level,
-                              child: ColoredBox(color: color),
-                            ),
-                          ),
-                          Align(
-                            alignment: Alignment.bottomCenter,
-                            child: Padding(
-                              padding: const EdgeInsets.only(bottom: 10),
-                              child: Icon(
-                                brightness
-                                    ? Icons.brightness_6
-                                    : level == 0
-                                    ? Icons.volume_off
-                                    : Icons.volume_up,
-                                color: level > 0.3
-                                    ? foreground
-                                    : scheme.onSurface,
-                                size: 22,
-                              ),
-                            ),
-                          ),
-                        ],
+      value: label,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // The parent rect is normally 64x176, but a cramped or very narrow
+          // viewport must still lay out without overflowing.
+          final track = math.min(
+            96.0,
+            math.max(0.0, constraints.maxHeight - 52),
+          );
+          final glyph = math.min(
+            26.0,
+            math.max(0.0, constraints.maxHeight * 0.2),
+          );
+          final showText = constraints.maxHeight >= 56;
+          return Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (glyph > 0)
+                Icon(icon, color: color, size: glyph, shadows: _shadow),
+              if (track > 0) ...[
+                const SizedBox(height: 8),
+                // Flat fill: no container and no rounding, so the video stays
+                // visible behind a thin track that fills from the bottom.
+                SizedBox(
+                  height: track,
+                  width: 3,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: ColoredBox(
+                          color: Colors.white.withValues(alpha: 0.28),
+                        ),
                       ),
-                    ),
+                      Align(
+                        alignment: Alignment.bottomCenter,
+                        child: FractionallySizedBox(
+                          widthFactor: 1,
+                          heightFactor: level,
+                          child: ColoredBox(color: color),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 5),
-                  Text(
-                    '${(level * 100).round()}%',
-                    style: TextStyle(color: scheme.onSurface, fontSize: 12),
+                ),
+              ],
+              if (showText) ...[
+                const SizedBox(height: 8),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    shadows: _shadow,
                   ),
-                ],
-              ),
-            );
-          },
-        ),
+                ),
+              ],
+            ],
+          );
+        },
       ),
     );
   }
 }
+
+const _shadow = [Shadow(color: Color(0xCC000000), blurRadius: 4)];
 
 class PlayerBufferingIndicator extends StatelessWidget {
   const PlayerBufferingIndicator({super.key});
@@ -151,72 +150,6 @@ class PlayerBufferingIndicator extends StatelessWidget {
               const SizedBox(width: 14),
               Text('加载中', style: TextStyle(color: cs.onSurface)),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class PlayerActionRail extends StatelessWidget {
-  final bool locked;
-  final bool takingScreenshot;
-  final VoidCallback onLock;
-  final VoidCallback onScreenshot;
-  const PlayerActionRail({
-    super.key,
-    required this.locked,
-    this.takingScreenshot = false,
-    required this.onLock,
-    required this.onScreenshot,
-  });
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return SafeArea(
-      child: Align(
-        alignment: Alignment.centerRight,
-        child: Padding(
-          padding: const EdgeInsets.only(right: 12),
-          child: SingleChildScrollView(
-            child: Material(
-              color: cs.surfaceContainerHigh.withValues(alpha: 0.88),
-              borderRadius: BorderRadius.circular(28),
-              child: Padding(
-                padding: const EdgeInsets.all(4),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: locked ? '解锁播放器' : '锁定播放器',
-                      onPressed: onLock,
-                      icon: Icon(
-                        locked ? Icons.lock_outline : Icons.lock_open_outlined,
-                        color: cs.onSurface,
-                      ),
-                    ),
-                    if (!locked)
-                      IconButton(
-                        tooltip: '截图',
-                        onPressed: takingScreenshot ? null : onScreenshot,
-                        icon: takingScreenshot
-                            ? SizedBox(
-                                width: 22,
-                                height: 22,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: cs.primary,
-                                ),
-                              )
-                            : Icon(
-                                Icons.photo_camera_outlined,
-                                color: cs.onSurface,
-                              ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
           ),
         ),
       ),

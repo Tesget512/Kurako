@@ -6,7 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../pages/bangumi_mirror_verification_page.dart';
 
-const bangumiMirrorApiProbe = 'https://api.bangumi.vip/v0/subjects/1';
+const bangumiMirrorApiHost = 'api.bangumi.vip';
+const bangumiMirrorApiProbe = 'https://$bangumiMirrorApiHost/v0/subjects/1';
 const bangumiMirrorImageHost = 'lain.bangumi.vip';
 const bangumiMirrorFailureMessage =
     '镜像验证已失效或请求被拦截。请重新验证，或关闭镜像回退官方；'
@@ -35,7 +36,7 @@ class BangumiMirrorHostProof {
   });
 
   bool get valid =>
-      {'api.bangumi.vip', bangumiMirrorImageHost}.contains(host) &&
+      {bangumiMirrorApiHost, bangumiMirrorImageHost}.contains(host) &&
       userAgent.trim().isNotEmpty &&
       userAgent.length <= 2048 &&
       !userAgent.contains(RegExp(r'[\r\n]')) &&

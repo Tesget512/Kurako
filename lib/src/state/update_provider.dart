@@ -14,6 +14,15 @@ final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
         tagName: release.tagName,
         htmlUrl: release.htmlUrl,
         name: release.name,
+        assets: [
+          for (final asset in release.assets)
+            AppUpdateAsset(
+              name: asset.name,
+              size: asset.size.toInt(),
+              url: asset.browserDownloadUrl,
+              digest: asset.digest,
+            ),
+        ],
       );
     },
   );

@@ -2,6 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/update_provider.dart';
+import 'update_download_dialog.dart';
+
+/// The banner is mounted inside `MaterialApp.builder`, which sits *above* the
+/// navigator, so its own context has no `Navigator`. This key reaches the real
+/// navigator so the download dialog can be pushed from the banner.
+final updateNavigatorKey = GlobalKey<NavigatorState>();
 
 /// Mount inside MaterialApp.builder, wrapping the navigator child before scaling.
 /// This overlay does not resize the navigator or require a ScaffoldMessenger.
@@ -47,20 +53,10 @@ class _UpdateBanner extends ConsumerStatefulWidget {
 }
 
 class _UpdateBannerState extends ConsumerState<_UpdateBanner> {
-  bool _opening = false;
-  bool _openFailed = false;
-
-  Future<void> _openRelease() async {
-    setState(() {
-      _opening = true;
-      _openFailed = false;
-    });
-    final opened = await ref.read(updateCheckProvider.notifier).openRelease();
-    if (!mounted) return;
-    setState(() {
-      _opening = false;
-      _openFailed = !opened;
-    });
+  Future<void> _openDownload() async {
+    final dialogContext = updateNavigatorKey.currentState?.overlay?.context;
+    if (dialogContext == null) return;
+    await showUpdateDownload(dialogContext, ref);
   }
 
   @override
@@ -79,16 +75,11 @@ class _UpdateBannerState extends ConsumerState<_UpdateBanner> {
             const SizedBox(width: 12),
             Expanded(
               child: Text(
-                _openFailed
-                    ? '无法打开 Release 页面，可在关于页重试'
-                    : 'Kurako ${release.tagName} 可用',
+                'Kurako ${release.tagName} 可用',
                 style: TextStyle(color: colors.onSecondaryContainer),
               ),
             ),
-            TextButton(
-              onPressed: _opening ? null : _openRelease,
-              child: Text(_opening ? '正在打开' : '查看'),
-            ),
+            TextButton(onPressed: _openDownload, child: const Text('下载')),
             Semantics(
               label: '忽略此版本提示',
               button: true,

@@ -82,6 +82,11 @@ dependencies:
   path: ^1.9.0
   package_info_plus: ^9.0.1
 
+  # SHA-256 verification of downloaded update packages. GitHub publishes a
+  # sha256 digest for each release asset; this checks it before publishing the
+  # downloaded file. Already present transitively, now used directly.
+  crypto: ^3.0.7
+
   # Network cover images
   cached_network_image: ^3.4.1
 

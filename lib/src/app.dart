@@ -141,6 +141,9 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
           brightness: Brightness.dark,
         );
         return MaterialApp(
+          // The update banner is mounted in `builder`, above the navigator, so
+          // it needs this key to open the download dialog.
+          navigatorKey: updateNavigatorKey,
           title: 'Kurako',
           debugShowCheckedModeBanner: false,
           theme: _theme(light, systemFont: systemFont),

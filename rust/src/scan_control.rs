@@ -55,14 +55,25 @@ pub(crate) fn record_changed_anime(ids: impl IntoIterator<Item = i64>) {
     CHANGED_ANIME_IDS.lock().unwrap().extend(ids);
 }
 
-pub(crate) fn matching_candidates(candidates: Vec<(i64, String)>) -> Vec<(i64, String)> {
+/// Candidates for automatic matching this scan.
+///
+/// A full scan retries everything. An incremental scan normally retries only
+/// the titles whose files changed, but a title whose previous attempt could
+/// not complete (API down, timeout, circuit breaker) is also retried —
+/// otherwise one transient outage would leave it unmatched forever, which
+/// looks like the recognizer got worse. A title that was actually searched and
+/// found nothing is not retried, which is what keeps incremental scans fast.
+pub(crate) fn matching_candidates(
+    candidates: Vec<(i64, String)>,
+    retry_pending: &HashSet<i64>,
+) -> Vec<(i64, String)> {
     if !is_incremental() {
         return candidates;
     }
     let changed = CHANGED_ANIME_IDS.lock().unwrap();
     candidates
         .into_iter()
-        .filter(|(id, _)| changed.contains(id))
+        .filter(|(id, _)| changed.contains(id) || retry_pending.contains(id))
         .collect()
 }
 
@@ -149,15 +160,42 @@ mod tests {
         record_changed_anime([2]);
         let candidates = vec![(1, "unchanged".into()), (2, "changed".into())];
         assert_eq!(
-            matching_candidates(candidates.clone()),
+            matching_candidates(candidates.clone(), &HashSet::new()),
             vec![(2, "changed".into())]
         );
         finish();
         assert!(begin(true));
-        assert!(matching_candidates(candidates.clone()).is_empty());
+        assert!(matching_candidates(candidates.clone(), &HashSet::new()).is_empty());
         finish();
         assert!(begin(false));
-        assert_eq!(matching_candidates(candidates.clone()), candidates);
+        assert_eq!(
+            matching_candidates(candidates.clone(), &HashSet::new()),
+            candidates
+        );
+        finish();
+    }
+
+    #[test]
+    fn incremental_matching_also_retries_incomplete_attempts() {
+        let _guard = TEST_LOCK.lock().unwrap();
+        let candidates = vec![
+            (1, "unchanged".into()),
+            (2, "changed".into()),
+            (3, "failed-earlier".into()),
+        ];
+        // Id 3 was never matched because the API was unreachable, so it must be
+        // retried even though its files are unchanged and id 1 is not.
+        let retry_pending: HashSet<i64> = [3].into_iter().collect();
+        assert!(begin(true));
+        record_changed_anime([2]);
+        assert_eq!(
+            matching_candidates(candidates.clone(), &retry_pending),
+            vec![(2, "changed".into()), (3, "failed-earlier".into())]
+        );
+        finish();
+        // A full scan still retries everything regardless of the flag.
+        assert!(begin(false));
+        assert_eq!(matching_candidates(candidates, &retry_pending).len(), 3);
         finish();
     }
 

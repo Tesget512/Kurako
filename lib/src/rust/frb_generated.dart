@@ -172,7 +172,10 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiOauthAuthorizeUrl();
 
-  Future<OAuthResult> crateApiOauthExchangeCode({required String code});
+  Future<OAuthResult> crateApiOauthExchangeCode({
+    required String code,
+    required String state,
+  });
 
   Future<String> crateApiOauthRedirectUri();
 
@@ -1309,12 +1312,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "oauth_authorize_url", argNames: []);
 
   @override
-  Future<OAuthResult> crateApiOauthExchangeCode({required String code}) {
+  Future<OAuthResult> crateApiOauthExchangeCode({
+    required String code,
+    required String state,
+  }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(code, serializer);
+          sse_encode_String(state, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1327,14 +1334,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiOauthExchangeCodeConstMeta,
-        argValues: [code],
+        argValues: [code, state],
         apiImpl: this,
       ),
     );
   }
 
-  TaskConstMeta get kCrateApiOauthExchangeCodeConstMeta =>
-      const TaskConstMeta(debugName: "oauth_exchange_code", argNames: ["code"]);
+  TaskConstMeta get kCrateApiOauthExchangeCodeConstMeta => const TaskConstMeta(
+    debugName: "oauth_exchange_code",
+    argNames: ["code", "state"],
+  );
 
   @override
   Future<String> crateApiOauthRedirectUri() {
@@ -3504,6 +3513,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<UpdateAsset> dco_decode_list_update_asset(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return (raw as List<dynamic>).map(dco_decode_update_asset).toList();
+  }
+
+  @protected
   OAuthResult dco_decode_o_auth_result(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
@@ -3703,15 +3718,30 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UpdateAsset dco_decode_update_asset(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    final arr = raw as List<dynamic>;
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
+    return UpdateAsset(
+      name: dco_decode_String(arr[0]),
+      size: dco_decode_u_64(arr[1]),
+      browserDownloadUrl: dco_decode_String(arr[2]),
+      digest: dco_decode_opt_String(arr[3]),
+    );
+  }
+
+  @protected
   UpdateRelease dco_decode_update_release(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 3)
-      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
+    if (arr.length != 4)
+      throw Exception('unexpected arr length: expect 4 but see ${arr.length}');
     return UpdateRelease(
       tagName: dco_decode_String(arr[0]),
       htmlUrl: dco_decode_String(arr[1]),
       name: dco_decode_String(arr[2]),
+      assets: dco_decode_list_update_asset(arr[3]),
     );
   }
 
@@ -4309,6 +4339,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<UpdateAsset> sse_decode_list_update_asset(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    var len_ = sse_decode_i_32(deserializer);
+    var ans_ = <UpdateAsset>[];
+    for (var idx_ = 0; idx_ < len_; ++idx_) {
+      ans_.add(sse_decode_update_asset(deserializer));
+    }
+    return ans_;
+  }
+
+  @protected
   OAuthResult sse_decode_o_auth_result(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_accessToken = sse_decode_String(deserializer);
@@ -4528,15 +4570,32 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  UpdateAsset sse_decode_update_asset(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var var_name = sse_decode_String(deserializer);
+    var var_size = sse_decode_u_64(deserializer);
+    var var_browserDownloadUrl = sse_decode_String(deserializer);
+    var var_digest = sse_decode_opt_String(deserializer);
+    return UpdateAsset(
+      name: var_name,
+      size: var_size,
+      browserDownloadUrl: var_browserDownloadUrl,
+      digest: var_digest,
+    );
+  }
+
+  @protected
   UpdateRelease sse_decode_update_release(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_tagName = sse_decode_String(deserializer);
     var var_htmlUrl = sse_decode_String(deserializer);
     var var_name = sse_decode_String(deserializer);
+    var var_assets = sse_decode_list_update_asset(deserializer);
     return UpdateRelease(
       tagName: var_tagName,
       htmlUrl: var_htmlUrl,
       name: var_name,
+      assets: var_assets,
     );
   }
 
@@ -5046,6 +5105,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_list_update_asset(
+    List<UpdateAsset> self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    for (final item in self) {
+      sse_encode_update_asset(item, serializer);
+    }
+  }
+
+  @protected
   void sse_encode_o_auth_result(OAuthResult self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.accessToken, serializer);
@@ -5238,11 +5309,21 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_update_asset(UpdateAsset self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_String(self.name, serializer);
+    sse_encode_u_64(self.size, serializer);
+    sse_encode_String(self.browserDownloadUrl, serializer);
+    sse_encode_opt_String(self.digest, serializer);
+  }
+
+  @protected
   void sse_encode_update_release(UpdateRelease self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.tagName, serializer);
     sse_encode_String(self.htmlUrl, serializer);
     sse_encode_String(self.name, serializer);
+    sse_encode_list_update_asset(self.assets, serializer);
   }
 
   @protected

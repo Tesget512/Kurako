@@ -6,19 +6,55 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+/// One downloadable file attached to a release. GitHub supplies a
+/// `sha256:<hex>` digest for uploaded assets, which the downloader checks.
+class UpdateAsset {
+  final String name;
+  final BigInt size;
+  final String browserDownloadUrl;
+  final String? digest;
+
+  const UpdateAsset({
+    required this.name,
+    required this.size,
+    required this.browserDownloadUrl,
+    this.digest,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      size.hashCode ^
+      browserDownloadUrl.hashCode ^
+      digest.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is UpdateAsset &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          size == other.size &&
+          browserDownloadUrl == other.browserDownloadUrl &&
+          digest == other.digest;
+}
+
 class UpdateRelease {
   final String tagName;
   final String htmlUrl;
   final String name;
+  final List<UpdateAsset> assets;
 
   const UpdateRelease({
     required this.tagName,
     required this.htmlUrl,
     required this.name,
+    required this.assets,
   });
 
   @override
-  int get hashCode => tagName.hashCode ^ htmlUrl.hashCode ^ name.hashCode;
+  int get hashCode =>
+      tagName.hashCode ^ htmlUrl.hashCode ^ name.hashCode ^ assets.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -27,5 +63,6 @@ class UpdateRelease {
           runtimeType == other.runtimeType &&
           tagName == other.tagName &&
           htmlUrl == other.htmlUrl &&
-          name == other.name;
+          name == other.name &&
+          assets == other.assets;
 }

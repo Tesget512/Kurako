@@ -50,7 +50,12 @@ pub fn init(db_path: &str) -> Result<()> {
             has_new_files    INTEGER NOT NULL DEFAULT 0,
             collection       INTEGER NOT NULL DEFAULT 0,
             match_confidence TEXT NOT NULL DEFAULT 'none',
-            corrected        INTEGER NOT NULL DEFAULT 0
+            corrected        INTEGER NOT NULL DEFAULT 0,
+            -- Set when a match attempt could not complete (API unreachable,
+            -- timeout, circuit breaker). Incremental scans retry these even
+            -- though their files did not change, so a transient outage does not
+            -- permanently leave a title unmatched.
+            match_retry      INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS episodes (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +136,7 @@ pub fn init(db_path: &str) -> Result<()> {
         "ALTER TABLE downloads ADD COLUMN episode_title TEXT",
         "ALTER TABLE downloads ADD COLUMN file_name TEXT",
         "ALTER TABLE episodes ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE anime ADD COLUMN match_retry INTEGER NOT NULL DEFAULT 0",
     ] {
         let _ = conn.execute(ddl, []);
     }
@@ -1189,6 +1195,63 @@ pub fn unmatched_anime() -> Result<Vec<(i64, String)>> {
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     })
+}
+
+/// Record that a match attempt for these rows could not complete. The flag is
+/// persisted so the next incremental scan retries them despite unchanged files.
+pub fn mark_match_retry(ids: impl IntoIterator<Item = i64>) -> Result<()> {
+    let ids: Vec<i64> = ids.into_iter().collect();
+    with_conn(|c| mark_match_retry_on(c, &ids))
+}
+
+fn mark_match_retry_on(c: &Connection, ids: &[i64]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let tx = c.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE anime SET match_retry=1 WHERE id=?1")?;
+        for id in ids {
+            stmt.execute(params![id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Clear the retry flag for rows whose match attempt completed — whether it
+/// found a subject or definitively found none.
+pub fn clear_match_retry(ids: impl IntoIterator<Item = i64>) -> Result<()> {
+    let ids: Vec<i64> = ids.into_iter().collect();
+    with_conn(|c| clear_match_retry_on(c, &ids))
+}
+
+fn clear_match_retry_on(c: &Connection, ids: &[i64]) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let tx = c.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE anime SET match_retry=0 WHERE id=?1")?;
+        for id in ids {
+            stmt.execute(params![id])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Rows still awaiting a completed match attempt.
+pub fn match_retry_ids() -> Result<std::collections::HashSet<i64>> {
+    with_conn(match_retry_ids_on)
+}
+
+fn match_retry_ids_on(c: &Connection) -> Result<std::collections::HashSet<i64>> {
+    let mut stmt = c.prepare("SELECT id FROM anime WHERE match_retry=1")?;
+    let rows = stmt
+        .query_map([], |r| r.get::<_, i64>(0))?
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    Ok(rows)
 }
 
 /// Merge anime rows bound to the SAME Bangumi subject (multiple sources /
@@ -3205,7 +3268,7 @@ mod scan_snapshot_tests {
         let c = Connection::open_in_memory().unwrap();
         c.execute_batch("CREATE TABLE library_folders(id INTEGER PRIMARY KEY,last_scanned INTEGER);
           INSERT INTO library_folders VALUES(1,NULL);
-          CREATE TABLE anime(id INTEGER PRIMARY KEY,group_key TEXT UNIQUE,title_raw TEXT,bangumi_id INTEGER,corrected INTEGER DEFAULT 0,match_confidence TEXT,has_new_files INTEGER DEFAULT 0);
+          CREATE TABLE anime(id INTEGER PRIMARY KEY,group_key TEXT UNIQUE,title_raw TEXT,bangumi_id INTEGER,corrected INTEGER DEFAULT 0,match_confidence TEXT,has_new_files INTEGER DEFAULT 0,match_retry INTEGER NOT NULL DEFAULT 0);
           CREATE TABLE episodes(id INTEGER PRIMARY KEY,anime_id INTEGER,file_path TEXT UNIQUE,file_name TEXT,file_name_key TEXT,file_size INTEGER,episode_no INTEGER,resolution TEXT,release_group TEXT,source_type TEXT,folder_id INTEGER,is_new_file INTEGER,locked INTEGER DEFAULT 0);
           CREATE TABLE scan_file_cache(folder_id INTEGER,file_path TEXT,file_name TEXT,file_size INTEGER,relative_parent TEXT,PRIMARY KEY(folder_id,file_path));
           CREATE TABLE manual_scan_matches(file_path TEXT PRIMARY KEY,bangumi_id INTEGER);").unwrap();
@@ -3375,5 +3438,42 @@ mod scan_snapshot_tests {
         assert!(changed_scan_files_on(&c, 1, &first, true)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn match_retry_flag_survives_until_an_attempt_completes() {
+        let c = connection();
+        c.execute_batch(
+            "INSERT INTO anime(id,group_key,title_raw,bangumi_id) VALUES
+                (1,'a','Anime A',NULL),
+                (2,'b','Anime B',NULL),
+                (3,'c','Anime C',NULL);",
+        )
+        .unwrap();
+
+        // Nothing is pending on a fresh database.
+        assert!(match_retry_ids_on(&c).unwrap().is_empty());
+
+        // An unreachable API marks the titles it could not attempt.
+        mark_match_retry_on(&c, &[1, 2]).unwrap();
+        assert_eq!(
+            match_retry_ids_on(&c).unwrap(),
+            [1, 2].into_iter().collect::<std::collections::HashSet<_>>()
+        );
+
+        // The next scan retries them and one now completes (searched, no hit);
+        // the other still cannot be reached, so it stays flagged.
+        clear_match_retry_on(&c, &[1]).unwrap();
+        mark_match_retry_on(&c, &[2]).unwrap();
+        assert_eq!(
+            match_retry_ids_on(&c).unwrap(),
+            [2].into_iter().collect::<std::collections::HashSet<_>>()
+        );
+
+        // Clearing is idempotent and an empty list is a no-op.
+        clear_match_retry_on(&c, &[2]).unwrap();
+        clear_match_retry_on(&c, &[]).unwrap();
+        mark_match_retry_on(&c, &[]).unwrap();
+        assert!(match_retry_ids_on(&c).unwrap().is_empty());
     }
 }

@@ -1113,10 +1113,11 @@ fn wire__crate__api__oauth_exchange_code_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_code = <String>::sse_decode(&mut deserializer);
+            let api_state = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::oauth_exchange_code(api_code)?;
+                    let output_ok = crate::api::oauth_exchange_code(api_code, api_state)?;
                     Ok(output_ok)
                 })())
             }
@@ -3640,6 +3641,18 @@ impl SseDecode for Vec<crate::models::SubtitleCandidate> {
     }
 }
 
+impl SseDecode for Vec<crate::update::UpdateAsset> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<crate::update::UpdateAsset>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for crate::api::OAuthResult {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -3879,16 +3892,34 @@ impl SseDecode for () {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {}
 }
 
+impl SseDecode for crate::update::UpdateAsset {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_size = <u64>::sse_decode(deserializer);
+        let mut var_browserDownloadUrl = <String>::sse_decode(deserializer);
+        let mut var_digest = <Option<String>>::sse_decode(deserializer);
+        return crate::update::UpdateAsset {
+            name: var_name,
+            size: var_size,
+            browser_download_url: var_browserDownloadUrl,
+            digest: var_digest,
+        };
+    }
+}
+
 impl SseDecode for crate::update::UpdateRelease {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_tagName = <String>::sse_decode(deserializer);
         let mut var_htmlUrl = <String>::sse_decode(deserializer);
         let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_assets = <Vec<crate::update::UpdateAsset>>::sse_decode(deserializer);
         return crate::update::UpdateRelease {
             tag_name: var_tagName,
             html_url: var_htmlUrl,
             name: var_name,
+            assets: var_assets,
         };
     }
 }
@@ -4533,12 +4564,31 @@ impl flutter_rust_bridge::IntoIntoDart<crate::models::SubtitleCandidate>
     }
 }
 // Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::update::UpdateAsset {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.name.into_into_dart().into_dart(),
+            self.size.into_into_dart().into_dart(),
+            self.browser_download_url.into_into_dart().into_dart(),
+            self.digest.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::update::UpdateAsset {}
+impl flutter_rust_bridge::IntoIntoDart<crate::update::UpdateAsset> for crate::update::UpdateAsset {
+    fn into_into_dart(self) -> crate::update::UpdateAsset {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
 impl flutter_rust_bridge::IntoDart for crate::update::UpdateRelease {
     fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
         [
             self.tag_name.into_into_dart().into_dart(),
             self.html_url.into_into_dart().into_dart(),
             self.name.into_into_dart().into_dart(),
+            self.assets.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4957,6 +5007,16 @@ impl SseEncode for Vec<crate::models::SubtitleCandidate> {
     }
 }
 
+impl SseEncode for Vec<crate::update::UpdateAsset> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::update::UpdateAsset>::sse_encode(item, serializer);
+        }
+    }
+}
+
 impl SseEncode for crate::api::OAuthResult {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -5139,12 +5199,23 @@ impl SseEncode for () {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {}
 }
 
+impl SseEncode for crate::update::UpdateAsset {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <String>::sse_encode(self.name, serializer);
+        <u64>::sse_encode(self.size, serializer);
+        <String>::sse_encode(self.browser_download_url, serializer);
+        <Option<String>>::sse_encode(self.digest, serializer);
+    }
+}
+
 impl SseEncode for crate::update::UpdateRelease {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <String>::sse_encode(self.tag_name, serializer);
         <String>::sse_encode(self.html_url, serializer);
         <String>::sse_encode(self.name, serializer);
+        <Vec<crate::update::UpdateAsset>>::sse_encode(self.assets, serializer);
     }
 }
 

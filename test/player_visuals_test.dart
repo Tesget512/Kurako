@@ -51,43 +51,95 @@ void main() {
     );
   });
 
-  testWidgets('indicator and actions fit a short window', (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 40,
-              height: 40,
-              child: PlayerLevelIndicator(
-                value: 0.5,
-                brightness: true,
-                color: Colors.amber,
+  testWidgets('indicator fits a cramped window without overflowing', (
+    tester,
+  ) async {
+    for (final size in [
+      const Size(40, 40),
+      const Size(120, 60),
+      const Size(64, 176),
+    ]) {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: size.width,
+                height: size.height,
+                child: PlayerLevelIndicator(
+                  value: 0.5,
+                  brightness: true,
+                  color: Colors.amber,
+                ),
               ),
             ),
           ),
         ),
+      );
+      expect(tester.takeException(), isNull, reason: '$size');
+    }
+  });
+
+  test('a finished volume gesture never fades out as the brightness OSD', () {
+    // Regression: the OSD stays mounted while it fades out, and by then both
+    // indicator flags are cleared. Without the remembered kind it repainted as
+    // brightness for the last frames — the flash seen after adjusting volume.
+    expect(
+      resolveVerticalGestureKind(
+        dragging: false,
+        activeKind: null,
+        volumeIndicator: false,
+        brightnessIndicator: false,
+        lastKind: MaterialVerticalGestureKind.volume,
       ),
+      MaterialVerticalGestureKind.volume,
     );
-    expect(tester.takeException(), isNull);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 120,
-              height: 60,
-              child: PlayerActionRail(
-                locked: false,
-                onLock: () {},
-                onScreenshot: () {},
-              ),
-            ),
-          ),
-        ),
+    expect(
+      resolveVerticalGestureKind(
+        dragging: false,
+        activeKind: null,
+        volumeIndicator: false,
+        brightnessIndicator: false,
+        lastKind: MaterialVerticalGestureKind.brightness,
       ),
+      MaterialVerticalGestureKind.brightness,
     );
-    expect(tester.takeException(), isNull);
+  });
+
+  test('the active gesture kind wins over the remembered one', () {
+    // Mid-drag the live kind is authoritative.
+    expect(
+      resolveVerticalGestureKind(
+        dragging: true,
+        activeKind: MaterialVerticalGestureKind.brightness,
+        volumeIndicator: false,
+        brightnessIndicator: false,
+        lastKind: MaterialVerticalGestureKind.volume,
+      ),
+      MaterialVerticalGestureKind.brightness,
+    );
+    // A volume event from the platform (e.g. a hardware key) must show volume
+    // even if the previous gesture was brightness.
+    expect(
+      resolveVerticalGestureKind(
+        dragging: false,
+        activeKind: null,
+        volumeIndicator: true,
+        brightnessIndicator: false,
+        lastKind: MaterialVerticalGestureKind.brightness,
+      ),
+      MaterialVerticalGestureKind.volume,
+    );
+    expect(
+      resolveVerticalGestureKind(
+        dragging: false,
+        activeKind: null,
+        volumeIndicator: false,
+        brightnessIndicator: true,
+        lastKind: MaterialVerticalGestureKind.volume,
+      ),
+      MaterialVerticalGestureKind.brightness,
+    );
   });
 
   test('new theme hooks survive copyWith', () {
@@ -105,45 +157,39 @@ void main() {
     expect(copied.verticalGestureIndicatorBuilder, same(indicator));
   });
 
-  testWidgets('action rail is vertical on right and lock hides screenshot', (
+  testWidgets('level indicator is a flat track, not a filled rounded block', (
     tester,
   ) async {
-    var locks = 0;
     await tester.pumpWidget(
-      MaterialApp(
+      const MaterialApp(
         home: Scaffold(
-          body: PlayerActionRail(
-            locked: false,
-            onLock: () => locks++,
-            onScreenshot: () {},
+          body: Center(
+            child: SizedBox(
+              width: 64,
+              height: 176,
+              child: PlayerLevelIndicator(
+                value: 0.4,
+                brightness: false,
+                color: Colors.teal,
+              ),
+            ),
           ),
         ),
       ),
     );
-    final lock = find.byTooltip('锁定播放器');
-    final screenshot = find.byTooltip('截图');
-    expect(tester.getCenter(lock).dx, tester.getCenter(screenshot).dx);
+    expect(find.text('40%'), findsOneWidget);
+    // The OSD must not paint an opaque rounded surface over the video: the
+    // indicator subtree itself contains no Material or ClipRRect.
+    final indicator = find.byType(PlayerLevelIndicator);
     expect(
-      tester.getCenter(lock).dy,
-      lessThan(tester.getCenter(screenshot).dy),
+      find.descendant(of: indicator, matching: find.byType(Material)),
+      findsNothing,
     );
-    expect(tester.getCenter(lock).dx, greaterThan(700));
-    await tester.tap(lock);
-    expect(locks, 1);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: PlayerActionRail(
-            locked: true,
-            onLock: () {},
-            onScreenshot: () {},
-          ),
-        ),
-      ),
+    expect(
+      find.descendant(of: indicator, matching: find.byType(ClipRRect)),
+      findsNothing,
     );
-    expect(find.byTooltip('截图'), findsNothing);
-    expect(find.byTooltip('解锁播放器'), findsOneWidget);
-    expect(tester.getCenter(find.byTooltip('解锁播放器')).dx, greaterThan(700));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('vertical indicator clamps percentage and fits normal layout', (

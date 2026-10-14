@@ -409,10 +409,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         expiresAt: result.expiresAt,
       );
       _snack('登录成功，正在同步收藏…');
-      await _syncCollections(silent: true);
-      _snack('登录并同步完成');
-    } catch (_) {
-      _snack('登录未完成，请检查网络后重新授权。');
+      final synced = await _syncCollections(silent: true);
+      _snack(synced ? '登录并同步完成' : '登录成功，但收藏同步失败，可稍后重试同步。');
+    } catch (error) {
+      _snack(bangumiLoginFailureMessage(error));
     } finally {
       notifier.endBangumiLogin();
       if (mounted) setState(() => _loggingIn = false);
@@ -425,13 +425,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _snack('已退出登录');
   }
 
-  Future<void> _syncCollections({bool silent = false}) async {
+  /// Returns whether the collection sync actually completed, so the caller
+  /// does not report success for a partial or failed sync.
+  Future<bool> _syncCollections({bool silent = false}) async {
     try {
       final n = await rust.syncCollections();
       ref.invalidate(animeListProvider);
       if (!silent) _snack('已同步 $n 部番剧的收藏状态');
+      return true;
     } catch (_) {
       if (!silent) _snack('同步失败，请检查网络及账号授权后重试。');
+      return false;
     }
   }
 

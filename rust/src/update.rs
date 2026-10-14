@@ -1,4 +1,6 @@
-//! GitHub update metadata only. No authentication, download or installation.
+//! GitHub release metadata for the in-app update check. Assets are described
+//! (name, size, URL, digest) so the Dart layer can pick and verify a download;
+//! no download, authentication or installation happens here.
 use anyhow::{bail, Context, Result};
 use reqwest::{redirect::Policy, StatusCode, Url};
 use serde::Deserialize;
@@ -6,11 +8,24 @@ use std::time::Duration;
 
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/Tesget512/Kurako/releases/latest";
 
+/// One downloadable file attached to a release. GitHub supplies a
+/// `sha256:<hex>` digest for uploaded assets, which the downloader checks.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct UpdateAsset {
+    pub name: String,
+    #[serde(default)]
+    pub size: u64,
+    pub browser_download_url: String,
+    #[serde(default)]
+    pub digest: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateRelease {
     pub tag_name: String,
     pub html_url: String,
     pub name: String,
+    pub assets: Vec<UpdateAsset>,
 }
 
 #[derive(Deserialize)]
@@ -20,6 +35,8 @@ struct GithubRelease {
     name: Option<String>,
     draft: bool,
     prerelease: bool,
+    #[serde(default)]
+    assets: Vec<UpdateAsset>,
 }
 
 /// Only allow the project's HTTPS release pages, never a download URL.
@@ -66,6 +83,7 @@ fn stable_release(release: GithubRelease) -> Result<Option<UpdateRelease>> {
         name: release.name.unwrap_or_else(|| release.tag_name.clone()),
         tag_name: release.tag_name,
         html_url: release.html_url,
+        assets: release.assets,
     }))
 }
 
@@ -80,7 +98,7 @@ pub async fn check_update() -> Result<Option<UpdateRelease>> {
     if let Some(proxy) = crate::bangumi::detect_system_proxy() {
         builder = builder.proxy(reqwest::Proxy::all(proxy).context("invalid system proxy")?);
     }
-    let response = builder
+    let mut response = builder
         .build()
         .context("build update client")?
         .get(LATEST_RELEASE_API)
@@ -99,9 +117,20 @@ pub async fn check_update() -> Result<Option<UpdateRelease>> {
             response.status().as_u16()
         );
     }
-    let release = response
-        .json::<GithubRelease>()
+    // The release payload is a few KB; bound it so a hijacked or misbehaving
+    // endpoint cannot stream an unbounded body into memory.
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
         .await
+        .context("GitHub update request failed")?
+    {
+        if body.len().saturating_add(chunk.len()) > 512 * 1024 {
+            bail!("GitHub update response too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let release = serde_json::from_slice::<GithubRelease>(&body)
         .context("invalid GitHub release response")?;
     stable_release(release)
 }
@@ -117,7 +146,47 @@ mod tests {
             name: None,
             draft,
             prerelease,
+            assets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn assets_are_carried_through_with_optional_fields() {
+        let mut with_assets = release(false, false);
+        with_assets.assets = vec![
+            UpdateAsset {
+                name: "Kurako-Android-arm64-v8a-1.2.3-release.apk".into(),
+                size: 60_000_000,
+                browser_download_url:
+                    "https://github.com/Tesget512/Kurako/releases/download/v1.2.3/Kurako-Android-arm64-v8a-1.2.3-release.apk"
+                        .into(),
+                digest: Some(format!("sha256:{}", "a".repeat(64))),
+            },
+            // Older releases predate GitHub's digest field.
+            UpdateAsset {
+                name: "Kurako-Windows-x64-1.2.3-release.zip".into(),
+                size: 55_000_000,
+                browser_download_url:
+                    "https://github.com/Tesget512/Kurako/releases/download/v1.2.3/Kurako-Windows-x64-1.2.3-release.zip"
+                        .into(),
+                digest: None,
+            },
+        ];
+        let parsed = stable_release(with_assets).unwrap().unwrap();
+        assert_eq!(parsed.assets.len(), 2);
+        assert_eq!(parsed.assets[0].size, 60_000_000);
+        assert!(parsed.assets[0].digest.is_some());
+        assert!(parsed.assets[1].digest.is_none());
+    }
+
+    #[test]
+    fn assets_default_to_empty_when_the_field_is_absent() {
+        let json = r#"{"tag_name":"v1.2.3",
+            "html_url":"https://github.com/Tesget512/Kurako/releases/tag/v1.2.3",
+            "draft":false,"prerelease":false}"#;
+        let parsed: GithubRelease = serde_json::from_str(json).unwrap();
+        let release = stable_release(parsed).unwrap().unwrap();
+        assert!(release.assets.is_empty());
     }
 
     #[test]
