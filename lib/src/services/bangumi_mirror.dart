@@ -13,6 +13,13 @@ const bangumiMirrorFailureMessage =
     '镜像验证已失效或请求被拦截。请重新验证，或关闭镜像回退官方；'
     '请确保 WebView 与应用使用相同网络和代理出口，网络/IP 或 User-Agent 改变会使验证失效。';
 
+/// User-Agent used when probing the mirror directly, without a WebView.
+///
+/// The API and image hosts answer plain requests (verified against the live
+/// service: they return JSON/JPEG with no challenge), so the normal path needs
+/// no browser session at all.
+const kBangumiMirrorDirectUserAgent = 'Kurako/1.0';
+
 /// These are the only challenge cookies accepted. Account cookies never leave
 /// the WebView, and document.cookie is deliberately not used for HttpOnly data.
 const bangumiAnubisCookieNames = {
@@ -49,6 +56,14 @@ class BangumiMirrorHostProof {
     'userAgent': userAgent,
     'expiresAt': expiresAt,
   };
+
+  /// Proof for a host that answers without a challenge: no cookie at all.
+  /// Used by the direct (no-WebView) probe path.
+  factory BangumiMirrorHostProof.direct(String host) => BangumiMirrorHostProof(
+    host: host,
+    cookie: '',
+    userAgent: kBangumiMirrorDirectUserAgent,
+  );
 
   factory BangumiMirrorHostProof.fromJson(Map<String, dynamic> value) =>
       BangumiMirrorHostProof(
@@ -183,11 +198,6 @@ class BangumiMirrorService extends ChangeNotifier {
         await (await _prefs).setBool('bangumi_mirror', false);
         return false;
       }
-      if (Platform.isLinux) {
-        throw const BangumiMirrorException(
-          '当前 Linux WebView 无法安全读取指定域名的验证凭据，请使用官方服务。',
-        );
-      }
       final raw = (await _prefs).getString(proofPreferenceKey);
       if (raw == null) throw const BangumiMirrorException('启用镜像前需要在应用内完成验证。');
       final payload = jsonDecode(raw) as Map<String, dynamic>;
@@ -231,10 +241,84 @@ class BangumiMirrorService extends ChangeNotifier {
     }
   }
 
+  /// Enable the mirror by probing it directly, without any WebView session.
+  ///
+  /// The live mirror API and image hosts answer plain requests with real data
+  /// and no challenge, so the browser step is not normally needed. Both probes
+  /// still have to pass against the real service before the mirror turns on;
+  /// if either fails the caller falls back to the WebView flow, which can
+  /// complete a challenge if one is being served.
+  ///
+  /// Returns true only when the mirror is genuinely enabled. Never throws for
+  /// an unreachable mirror — that is the expected signal to fall back.
+  Future<bool> enableDirect() async {
+    if (_busy) return false;
+    _busy = true;
+    final epoch = ++_epoch;
+    notifyListeners();
+    try {
+      await _reset();
+      final api = BangumiMirrorHostProof.direct(bangumiMirrorApiHost);
+      final image = BangumiMirrorHostProof.direct(bangumiMirrorImageHost);
+      await _configure(api, image);
+      final imageUrl = await _bound.probeApi();
+      if (epoch != _epoch) {
+        await _reset();
+        return false;
+      }
+      await _bound.probeImage(imageUrl);
+      if (epoch != _epoch) {
+        await _reset();
+        return false;
+      }
+      // Persist before enabling: a failed write must not leave the mirror on
+      // with nothing to restore at next startup.
+      final saved = await (await _prefs).setString(
+        proofPreferenceKey,
+        jsonEncode({'api': api.toJson(), 'image': image.toJson()}),
+      );
+      if (!saved) {
+        await _reset();
+        return false;
+      }
+      await _bound.setEnabled(true);
+      if (epoch != _epoch) {
+        await _reset();
+        return false;
+      }
+      final enabledSaved = await (await _prefs).setBool('bangumi_mirror', true);
+      if (!enabledSaved) {
+        await _reset();
+        return false;
+      }
+      if (epoch != _epoch) {
+        await _reset();
+        return false;
+      }
+      _apiProof = api;
+      _imageProof = image;
+      _enabled = true;
+      _message = null;
+      return true;
+    } catch (_) {
+      // Any failure (challenge served, network blocked, bad payload) simply
+      // means the direct path is not usable right now.
+      await _reset();
+      return false;
+    } finally {
+      _busy = false;
+      notifyListeners();
+    }
+  }
+
   Future<bool> verifyAndEnable(BuildContext context) async {
     if (_busy) return false;
+    // The WebView fallback needs a working in-app browser. flutter_inappwebview
+    // has no Linux implementation, so on Linux the mirror can only be enabled
+    // through the direct probe; say that plainly instead of implying the mirror
+    // is unsupported there.
     if (Platform.isLinux) {
-      _message = '当前 Linux WebView 无法安全读取指定域名的验证凭据，请关闭镜像使用官方服务。';
+      _message = '当前网络无法直接访问镜像，而 Linux 不支持内置验证页面，请稍后重试或使用官方服务。';
       notifyListeners();
       throw BangumiMirrorException(_message!);
     }

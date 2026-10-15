@@ -40,5 +40,22 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Registers the kurako:// callback scheme. ASWebAuthenticationSession
+	     normally delivers kurako://oauth/callback itself via the
+	     callbackURLScheme argument, but LaunchServices must still know this
+	     app owns the scheme for the session's redirect to resolve; without
+	     registration the browser redirect silently drops and the app returns
+	     to the foreground with no completion. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.tesget.kurako.oauth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>kurako</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

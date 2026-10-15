@@ -172,6 +172,16 @@ void VideoOutput::Render() {
         };
         mpv_render_context_render(render_context_, params);
       });
+      // The ANGLE surface is consumed by the Flutter compositor through a
+      // D3D11 shared handle, so the real present instant is owned by the
+      // compositor, not by this render call. mpv's render API still expects
+      // a swap report to anchor its frame pacing (see mpv_render_context_
+      // report_swap); without it the target display time is estimated from
+      // render completion alone, which lets the rendered frame drift against
+      // the composited scan-out and shows as tearing on some GPU/driver
+      // combinations. Reporting here restores the feedback the render API
+      // documents as required for externally-presented targets.
+      mpv_render_context_report_swap(render_context_);
     }
     // S/W
     if (pixel_buffer_ != nullptr) {

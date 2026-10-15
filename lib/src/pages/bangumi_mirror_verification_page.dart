@@ -22,6 +22,17 @@ bool isBangumiMirrorSubjectResponse(String text) {
   }
 }
 
+/// True when the page is showing Anubis's proof-of-work challenge.
+///
+/// Used only to describe what the user is actually looking at: the API host
+/// normally answers with data and serves no challenge, so the page must not
+/// claim a verification happened when none did.
+bool isBangumiMirrorChallengePage(String text) =>
+    text.contains('anubis') ||
+    text.contains('Techaro') ||
+    text.contains('正在确认你是不是机器人') ||
+    text.contains('Making sure you');
+
 /// Builds only a root-path header for the exact CookieManager query host.
 /// Native APIs on older Android omit metadata; their URL query still enforces
 /// scope, so missing domain never permits copying to a different host.
@@ -118,11 +129,15 @@ class _BangumiMirrorVerificationPageState
   bool _checking = false;
   bool _loading = true;
   bool _apiPageReady = false;
+  bool _challengeVisible = false;
 
   /// The API probe answers with a raw subject JSON document, which reads like
   /// garbage in the WebView. Once that document is confirmed, cover the native
-  /// view with a readable "verified" state; the WebView stays alive underneath
-  /// so CookieManager and the real request probes still work.
+  /// view with a readable state; the WebView stays alive underneath so
+  /// CookieManager and the real request probes still work.
+  ///
+  /// The API host normally serves no challenge, so both "data returned" and
+  /// "challenge being served" are tracked separately and reported honestly.
   Future<void> _inspectApiPage(
     InAppWebViewController controller,
     WebUri? url,
@@ -132,8 +147,13 @@ class _BangumiMirrorVerificationPageState
       source: 'document.body ? document.body.innerText.slice(0, 1048576) : ""',
     );
     if (!mounted || _imageStage || text is! String) return;
-    if (isBangumiMirrorSubjectResponse(text)) {
-      setState(() => _apiPageReady = true);
+    final ready = isBangumiMirrorSubjectResponse(text);
+    final challenged = !ready && isBangumiMirrorChallengePage(text);
+    if (ready != _apiPageReady || challenged != _challengeVisible) {
+      setState(() {
+        _apiPageReady = ready;
+        _challengeVisible = challenged;
+      });
     }
   }
 
@@ -247,8 +267,12 @@ class _BangumiMirrorVerificationPageState
             Padding(
               padding: const EdgeInsets.all(16),
               child: Text(
-                '请等待页面正常完成 Anubis 验证，然后点击“检查并继续”。无需登录账号。'
-                '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启镜像。',
+                _imageStage
+                    ? '请确认页面能显示封面图片，然后点击“检查并开启”。无需登录账号。'
+                          '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启镜像。'
+                    : '镜像 API 通常可直接访问，此时无需任何验证。'
+                          '若页面显示人机验证，请等待其完成后再点击“检查并继续”。'
+                          '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启镜像。',
               ),
             ),
             if (_loading || _checking) const LinearProgressIndicator(),
@@ -318,6 +342,7 @@ class _BangumiMirrorVerificationPageState
                             setState(() {
                               _loading = true;
                               _apiPageReady = false;
+                              _challengeVisible = false;
                             });
                           }
                         },
@@ -359,14 +384,19 @@ class _BangumiMirrorVerificationPageState
                                   ),
                                   const SizedBox(height: 20),
                                   Text(
-                                    'API 页面已通过人机验证',
+                                    _challengeVisible
+                                        ? '请先完成页面上的验证'
+                                        : 'API 已可直接访问',
                                     style: Theme.of(
                                       context,
                                     ).textTheme.titleLarge,
                                   ),
                                   const SizedBox(height: 12),
-                                  const Text(
-                                    '点击“检查并继续”，应用会验证实际 API 请求，\n然后继续测试封面图片。',
+                                  Text(
+                                    _challengeVisible
+                                        ? '页面正在显示人机验证，请等待其完成后点击“检查并继续”。'
+                                        : '镜像 API 未要求人机验证，已返回有效数据。'
+                                              '\n点击“检查并继续”，应用会验证实际 API 请求，然后继续测试封面图片。',
                                     textAlign: TextAlign.center,
                                   ),
                                 ],

@@ -2,6 +2,15 @@
 
 适用：用户报告 RTX 4050 Mobile 偶发疑似撕裂。当前仅完成源码核查，尚无受影响设备日志或可复现的最终屏幕录制，不能确认根因。
 
+## 2026-10-15 更新：呈现反馈补齐
+
+用户确认硬解下撕裂仍然存在。依据 vendored 的 libmpv `render.h`（与上游一致，非过时资料）补上了一处明确的缺失：
+
+- `MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME`（默认启用）说明 `mpv_render_context_render()` 会阻塞到目标显示时刻，`video-timing-offset` 控制提前量；这正是 render API 下的帧步调机制。
+- `mpv_render_context_report_swap()` 文档要求：呈现时机由宿主/外部控制时，宿主应在呈现完成后上报，mpv 才能把帧步调锚定在真实呈现上。
+- 本集成中真实呈现由 Flutter 合成器通过 `kFlutterDesktopGpuSurfaceTypeDxgiSharedHandle` 完成，此前从无任何 swap 上报——mpv 只能按渲染完成时间估计呈现节奏，帧输出相对扫描线漂移，在部分 GPU/驱动组合上表现为撕裂。
+- 现已在 H/W 渲染路径的 `Render()` 完成后调用 `mpv_render_context_report_swap()`（`video_output.cc`）。已通过 Windows MSVC 实际编译验证。效果仍需用户在受影响设备上确认；若撕裂依旧，下一步候选是把 `MISC_SHARED` 升级为 keyed mutex/fence 协议（需与 Flutter 引擎的纹理消费方式配合，属引擎级改动）。
+
 ## 已确认的实现
 
 - `third_party/media_kit_video/windows/video_output.cc` 向 libmpv 设置 `video-sync=audio` 与 `video-timing-offset=0`。

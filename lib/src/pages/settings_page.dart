@@ -324,9 +324,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   contentPadding: EdgeInsets.zero,
                   title: const Text('使用 Bangumi 镜像'),
                   subtitle: const Text(
-                    '默认关闭。手动开启后需在应用内完成 bangumi.vip 人机验证，'
-                    '验证通过后使用镜像 API 与封面；账号登录和收藏仍访问官方。'
-                    '验证可能随网络或有效期失效，无法使用时请重新验证或关闭镜像回退官方。',
+                    '默认关闭。开启时会先直接探测镜像 API 与封面，通过即启用；'
+                    '仅当镜像要求人机验证时才需要在内置页面完成验证。'
+                    '账号登录和收藏始终访问官方；镜像失效时请重新验证或关闭回退官方。',
                   ),
                   value: ref.watch(bangumiMirrorProvider),
                   onChanged: service.busy ? null : _setMirror,
@@ -361,9 +361,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final notifier = ref.read(bangumiMirrorProvider.notifier);
     try {
       if (enabled) {
-        final verified = await BangumiMirrorService.instance.verifyAndEnable(
-          context,
-        );
+        // Probe the mirror directly first: its API and image hosts normally
+        // answer without a challenge, so the WebView step is only needed when
+        // the service is actually serving one.
+        var verified = await BangumiMirrorService.instance.enableDirect();
+        if (!verified && mounted) {
+          verified = await BangumiMirrorService.instance.verifyAndEnable(
+            context,
+          );
+        }
         await notifier.set(verified);
       } else {
         await notifier.set(false);

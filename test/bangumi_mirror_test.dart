@@ -313,6 +313,112 @@ void main() {
     s.dispose();
   });
 
+  /// A service whose backend records calls and can be made to fail a probe.
+  /// Used for the direct (no-WebView) path, which sends no cookies.
+  Future<BangumiMirrorService> directService({
+    required List<String> calls,
+    bool failApi = false,
+    bool failImage = false,
+  }) async {
+    SharedPreferences.setMockInitialValues({'bangumi_mirror': false});
+    final prefs = await SharedPreferences.getInstance();
+    return BangumiMirrorService.withPreferences(prefs)..bindBackend(
+      BangumiMirrorBackend(
+        configure:
+            ({
+              required apiCookie,
+              required imageCookie,
+              required userAgent,
+            }) async {
+              // The direct path must not pretend a challenge was solved.
+              expect(apiCookie, '');
+              expect(imageCookie, '');
+              expect(userAgent, kBangumiMirrorDirectUserAgent);
+              calls.add('configure');
+            },
+        probeApi: () async {
+          calls.add('api');
+          if (failApi) throw Exception('challenge-served');
+          return 'https://lain.bangumi.vip/cover.jpg';
+        },
+        probeImage: (_) async {
+          calls.add('image');
+          if (failImage) throw Exception('challenge-served');
+        },
+        setEnabled: (enabled) async => calls.add('enabled=$enabled'),
+        clear: () async => calls.add('clear'),
+      ),
+    );
+  }
+
+  test('direct enable probes the mirror and needs no challenge', () async {
+    final calls = <String>[];
+    final s = await directService(calls: calls);
+    expect(s.enabled, false);
+    expect(await s.enableDirect(), true);
+    // Both real probes ran, in order, and the mirror was switched on.
+    expect(calls, [
+      'enabled=false',
+      'clear',
+      'configure',
+      'api',
+      'image',
+      'enabled=true',
+    ]);
+    expect(s.enabled, true);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('bangumi_mirror'), true);
+    // The stored proof round-trips with no cookie, so a later restore works.
+    final stored = prefs.getString(BangumiMirrorService.proofPreferenceKey)!;
+    expect(stored, contains('api.bangumi.vip'));
+    expect(stored, contains(kBangumiMirrorDirectUserAgent));
+    s.dispose();
+  });
+
+  test('direct enable leaves the mirror off when either probe fails', () async {
+    for (final failure in ['api', 'image']) {
+      final calls = <String>[];
+      final s = await directService(
+        calls: calls,
+        failApi: failure == 'api',
+        failImage: failure == 'image',
+      );
+      expect(await s.enableDirect(), false, reason: failure);
+      expect(s.enabled, false, reason: failure);
+      expect(calls.contains('enabled=true'), false, reason: failure);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getBool('bangumi_mirror'), false, reason: failure);
+      expect(
+        prefs.getString(BangumiMirrorService.proofPreferenceKey),
+        null,
+        reason: failure,
+      );
+      s.dispose();
+    }
+  });
+
+  test('a direct proof carries no cookie and stays mirror-scoped', () async {
+    final proof = BangumiMirrorHostProof.direct(bangumiMirrorApiHost);
+    expect(proof.cookie, '');
+    expect(proof.valid, true);
+    expect(isAllowedAnubisCookieHeader(proof.cookie), true);
+  });
+
+  test('challenge detection matches the real Anubis page only', () {
+    // The live challenge page contains these markers.
+    expect(
+      isBangumiMirrorChallengePage('Anubis 正在确认你是不是机器人！ 加载中... Techaro'),
+      true,
+    );
+    expect(isBangumiMirrorChallengePage('Making sure you are a human'), true);
+    // A real API document is not a challenge.
+    expect(
+      isBangumiMirrorChallengePage('{"id":1,"name":"Cowboy Bebop"}'),
+      false,
+    );
+    expect(isBangumiMirrorChallengePage(''), false);
+  });
+
   test('API probe readiness needs the real subject document', () {
     // The probe requests subject 1; only that decoded object counts as done.
     expect(
