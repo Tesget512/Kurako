@@ -31,6 +31,8 @@ if-addrs = "0.15"
 quick-xml = "0.41"
 percent-encoding = "2"
 serde-xml-rs = "0.6"
+# Already in the lockfile via rustls; used for unpredictable loopback tokens.
+getrandom = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

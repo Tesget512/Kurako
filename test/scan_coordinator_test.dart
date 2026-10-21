@@ -94,8 +94,10 @@ void main() {
       expect(backend.finishes, 0);
       expect(backend.closes, 1);
       expect(backend.awakeCalls, [true, false]);
+      // Cancelling dismisses the bar immediately; a native call that cannot be
+      // interrupted must not leave the user stuck in a scan they stopped.
       expect(coordinator.state.running, false);
-      expect(coordinator.state.progress?.stage, 'cancelled');
+      expect(coordinator.state.progress, isNull);
       coordinator.dispose();
     },
   );

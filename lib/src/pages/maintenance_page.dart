@@ -14,6 +14,7 @@ import '../services/security_scope.dart';
 import '../state/player_appearance.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
+import 'onboarding_page.dart';
 import 'blacklist_page.dart';
 import 'duplicate_check_page.dart';
 
@@ -53,6 +54,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
         children: [
           _section(context, '下载'),
           _buildDownloadDirRow(),
+          _buildOnboardingRow(),
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.delete_forever_outlined),
@@ -184,14 +186,36 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
               onPressed: _maintenanceBusy
                   ? null
                   : () async {
-                      final picked = await FilePicker.platform
-                          .getDirectoryPath();
-                      if (picked != null && mounted && !_maintenanceBusy) {
-                        // macOS sandbox: keep the picked download folder
-                        // reachable across launches as well.
+                      // macOS: the bookmark must come from the open panel's own
+                      // URL (it carries the powerbox grant); a bookmark built
+                      // from a bare path is refused by the kernel later.
+                      String? picked;
+                      if (Platform.isMacOS) {
                         try {
-                          await SecurityScope.retain(picked);
-                        } catch (_) {}
+                          picked = await SecurityScope.pickAndRetainFolder();
+                        } catch (error) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('选择文件夹失败：$error')),
+                            );
+                          }
+                          return;
+                        }
+                      } else {
+                        picked = await FilePicker.platform.getDirectoryPath();
+                        if (picked != null) {
+                          try {
+                            await SecurityScope.retain(picked);
+                          } catch (error) {
+                            if (mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('无法记住该文件夹的访问权限：$error')),
+                              );
+                            }
+                          }
+                        }
+                      }
+                      if (picked != null && mounted && !_maintenanceBusy) {
                         await ref
                             .read(downloadDirProvider.notifier)
                             .set(picked);
@@ -200,6 +224,25 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             ),
         ],
       ),
+    );
+  }
+
+  /// Reopen the first-run setup so the folder grant can be renewed without
+  /// deleting the source or reinstalling the app.
+  Widget _buildOnboardingRow() {
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.assistant_outlined),
+      title: const Text('重新运行初始设置'),
+      subtitle: const Text('重新确认下载位置与文件夹访问权限'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: _maintenanceBusy
+          ? null
+          : () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const OnboardingPage(standalone: true),
+              ),
+            ),
     );
   }
 

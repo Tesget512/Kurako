@@ -234,6 +234,9 @@ class ScanCoordinator extends StateNotifier<ScanState> {
   }
 
   void _progress(ScanProgress progress) {
+    // A dismissed/cancelled scan keeps running natively until its blocking
+    // call returns; its late progress must not resurrect the UI bar.
+    if (_cancelRequested) return;
     final facts = ScanEventFacts.parse(progress.message);
     _publish(
       ScanState(
@@ -307,8 +310,14 @@ class ScanCoordinator extends StateNotifier<ScanState> {
           _publish(
             ScanState(
               running: true,
+              cancelling: state.cancelling,
               progress: state.progress,
+              // Keep what earlier folders already reported; rebuilding the
+              // state without them blanked the detail dialog mid-scan.
               warnings: [...state.warnings, '${folder.path}：$e'],
+              folders: state.folders,
+              unmatchedTitles: state.unmatchedTitles,
+              matchAttempted: state.matchAttempted,
             ),
           );
           continue;
@@ -343,48 +352,52 @@ class ScanCoordinator extends StateNotifier<ScanState> {
       }
       if (mounted) {
         if (changed) onLibraryChanged();
-        // Keep the accumulated session stats visible after the scan ends: the
-        // detail sheet stays inspectable until the user dismisses the bar.
-        _publish(
-          ScanState(
-            error: error,
-            warnings: state.warnings,
-            folders: state.folders,
-            unmatchedTitles: state.unmatchedTitles,
-            matchAttempted: state.matchAttempted,
-            progress: ScanProgress(
-              stage: _cancelRequested ? 'cancelled' : 'done',
-              current: 0,
-              total: 0,
-              message: _cancelRequested
-                  ? '扫描已停止，已完成的文件夹保留'
-                  : state.progress?.stage == 'warning'
-                  ? state.progress!.message
-                  : state.warnings.isNotEmpty
-                  ? '扫描完成，部分文件夹未能读取'
-                  : '扫描完成',
+        // A dismissed scan must not republish a finished bar: the user asked
+        // for it to disappear while the native call was still unwinding.
+        if (!_cancelRequested) {
+          // Keep the accumulated session stats visible after the scan ends: the
+          // detail sheet stays inspectable until the user dismisses the bar.
+          _publish(
+            ScanState(
+              error: error,
+              warnings: state.warnings,
+              folders: state.folders,
+              unmatchedTitles: state.unmatchedTitles,
+              matchAttempted: state.matchAttempted,
+              progress: ScanProgress(
+                stage: 'done',
+                current: 0,
+                total: 0,
+                message: state.progress?.stage == 'warning'
+                    ? state.progress!.message
+                    : state.warnings.isNotEmpty
+                    ? '扫描完成，部分文件夹未能读取'
+                    : '扫描完成',
+              ),
             ),
-          ),
-        );
+          );
+        }
       }
     }
   }
 
+  /// Stop the scan and hide the inline bar.
+  ///
+  /// A native call already in flight cannot be interrupted (a hung mount can
+  /// block `read_dir` indefinitely), so the UI must not wait for it: the
+  /// request flag is set, the bar is dismissed immediately, and the stale
+  /// scan future discards its own results because `_cancelRequested` is set.
   Future<void> cancel() async {
-    if (!state.running || _cancelRequested) return;
+    if (!state.running) return;
     _cancelRequested = true;
-    _publish(
-      ScanState(
-        running: true,
-        cancelling: true,
-        progress: state.progress,
-        warnings: state.warnings,
-        folders: state.folders,
-        unmatchedTitles: state.unmatchedTitles,
-        matchAttempted: state.matchAttempted,
-      ),
-    );
-    if (_ownsSession) await backend.cancel();
+    if (_ownsSession) {
+      try {
+        await backend.cancel();
+      } catch (_) {
+        // The session may already be gone; dismissal still proceeds.
+      }
+    }
+    state = const ScanState();
   }
 
   void dismiss() {

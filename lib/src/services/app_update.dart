@@ -12,12 +12,18 @@ class AppUpdateAsset {
     required this.size,
     required this.url,
     this.digest,
+    this.sizeKnown = true,
   });
 
   final String name;
   final int size;
   final String url;
   final String? digest;
+
+  /// False when the metadata source does not publish sizes (the non-API
+  /// release page). Such an asset is still offered; the downloader then
+  /// verifies the transfer against the response's own Content-Length.
+  final bool sizeKnown;
 }
 
 class AppUpdateRelease {
@@ -66,7 +72,10 @@ bool isProjectAssetUrl(AppUpdateRelease release, AppUpdateAsset asset) {
   if (uri == null ||
       !RegExp(r'^[A-Za-z0-9.+_-]+$').hasMatch(asset.name) ||
       !asset.name.startsWith('Kurako-') ||
-      asset.size <= 0 ||
+      // A zero size is only acceptable when the source explicitly says the
+      // size is unknown; a published size of 0 is still rejected.
+      (!asset.sizeKnown && asset.size != 0) ||
+      (asset.sizeKnown && asset.size <= 0) ||
       asset.size > 1024 * 1024 * 1024) {
     return false;
   }

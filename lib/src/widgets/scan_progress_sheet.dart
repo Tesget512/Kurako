@@ -41,9 +41,9 @@ class ScanProgressSheet extends ConsumerWidget {
             ),
             IconButton(
               tooltip: state.running ? '停止扫描' : '收起',
-              onPressed: state.cancelling
-                  ? null
-                  : state.running
+              // Never disable this: a native call that cannot be interrupted
+              // must not trap the user in a scan they cannot dismiss.
+              onPressed: state.running
                   ? coordinator.cancel
                   : coordinator.dismiss,
               icon: Icon(state.running ? Icons.stop : Icons.close, size: 20),

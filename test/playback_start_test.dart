@@ -61,4 +61,18 @@ void main() {
       'PROXY 127.0.0.1:7890',
     );
   });
+
+  test('proxy directives require an http(s) scheme and a real port', () {
+    expect(proxyHostPort('http://127.0.0.1:7890'), '127.0.0.1:7890');
+    expect(proxyHostPort('127.0.0.1:7890'), '127.0.0.1:7890');
+    // No port: Dart throws "Invalid proxy configuration" for this directive.
+    expect(proxyHostPort('https://proxy.corp'), isNull);
+    expect(proxyHostPort('proxy.corp'), isNull);
+    // A SOCKS endpoint cannot be used as an HTTP proxy.
+    expect(proxyHostPort('socks5://127.0.0.1:1080'), isNull);
+    expect(proxyHostPort('http://127.0.0.1:0'), isNull);
+    expect(proxyHostPort('http://127.0.0.1:70000'), isNull);
+    expect(proxyHostPort(''), isNull);
+    expect(proxyHostPort(null), isNull);
+  });
 }

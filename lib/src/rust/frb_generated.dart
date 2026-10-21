@@ -3334,11 +3334,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   DownloadProgress dco_decode_download_progress(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 2)
-      throw Exception('unexpected arr length: expect 2 but see ${arr.length}');
+    if (arr.length != 3)
+      throw Exception('unexpected arr length: expect 3 but see ${arr.length}');
     return DownloadProgress(
       bytesDone: dco_decode_i_64(arr[0]),
       bytesTotal: dco_decode_i_64(arr[1]),
+      error: dco_decode_opt_String(arr[2]),
     );
   }
 
@@ -4021,9 +4022,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_bytesDone = sse_decode_i_64(deserializer);
     var var_bytesTotal = sse_decode_i_64(deserializer);
+    var var_error = sse_decode_opt_String(deserializer);
     return DownloadProgress(
       bytesDone: var_bytesDone,
       bytesTotal: var_bytesTotal,
+      error: var_error,
     );
   }
 
@@ -4856,6 +4859,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_64(self.bytesDone, serializer);
     sse_encode_i_64(self.bytesTotal, serializer);
+    sse_encode_opt_String(self.error, serializer);
   }
 
   @protected

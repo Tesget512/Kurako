@@ -187,9 +187,20 @@ class CoverRepository {
   Future<void> _trim(Directory dir, {required String keep}) async {
     final files = <({File file, FileStat stat})>[];
     var size = 0;
+    final staleBefore = DateTime.now().subtract(const Duration(minutes: 10));
     await for (final entity in dir.list(followLinks: false)) {
-      if (entity is! File || entity.path.endsWith('.part')) continue;
+      if (entity is! File) continue;
       final stat = await entity.stat();
+      if (entity.path.endsWith('.part')) {
+        // A crash between write and rename leaves an orphan that is never
+        // counted or deleted; reclaim it once it is clearly abandoned.
+        if (stat.modified.isBefore(staleBefore)) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+        continue;
+      }
       size += stat.size;
       files.add((file: entity, stat: stat));
     }

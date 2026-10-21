@@ -373,14 +373,24 @@ class DownloadEntry {
 }
 
 /// Progress event streamed back to Dart during an SMB download.
+///
+/// FRB delivers a function's `Result` through the task future while the stream
+/// only carries values, so a failure would otherwise reach Dart as a normal
+/// end-of-stream. Errors are therefore encoded as a terminal event: `error` is
+/// set and the byte counters are zero.
 class DownloadProgress {
   final PlatformInt64 bytesDone;
   final PlatformInt64 bytesTotal;
+  final String? error;
 
-  const DownloadProgress({required this.bytesDone, required this.bytesTotal});
+  const DownloadProgress({
+    required this.bytesDone,
+    required this.bytesTotal,
+    this.error,
+  });
 
   @override
-  int get hashCode => bytesDone.hashCode ^ bytesTotal.hashCode;
+  int get hashCode => bytesDone.hashCode ^ bytesTotal.hashCode ^ error.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -388,7 +398,8 @@ class DownloadProgress {
       other is DownloadProgress &&
           runtimeType == other.runtimeType &&
           bytesDone == other.bytesDone &&
-          bytesTotal == other.bytesTotal;
+          bytesTotal == other.bytesTotal &&
+          error == other.error;
 }
 
 /// Files whose size and four sparse content samples match. This is evidence of

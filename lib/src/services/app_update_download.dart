@@ -136,29 +136,38 @@ class AppUpdateDownloader {
       if (response == null || response.statusCode != HttpStatus.ok) {
         throw const HttpException('更新包下载失败');
       }
-      if (response.contentLength >= 0 && response.contentLength != asset.size) {
+      // When the metadata source did not publish a size, fall back to the
+      // response's own Content-Length so the transfer is still bounded and
+      // completeness is still checked.
+      final declared = asset.sizeKnown ? asset.size : response.contentLength;
+      if (declared <= 0) {
+        throw const FormatException('无法确定更新包大小，请稍后重试');
+      }
+      if (asset.sizeKnown &&
+          response.contentLength >= 0 &&
+          response.contentLength != declared) {
         throw const FormatException('更新包大小与发布信息不符');
       }
 
       sink = temporary.openWrite();
       var received = 0;
-      onProgress(0, asset.size);
+      onProgress(0, declared);
       // A per-chunk idle timeout catches a stalled transfer without capping
       // the total time a large package may legitimately take.
       await for (final chunk in response.timeout(const Duration(seconds: 30))) {
         operation.check();
         received += chunk.length;
-        if (received > asset.size) {
+        if (received > declared) {
           throw const FormatException('更新包超过发布大小');
         }
         sink.add(chunk);
         await sink.flush();
-        onProgress(received, asset.size);
+        onProgress(received, declared);
       }
       await sink.close();
       sink = null;
       operation.check();
-      if (received != asset.size) {
+      if (received != declared) {
         throw const FormatException('更新包下载不完整');
       }
       if (asset.digest != null) {

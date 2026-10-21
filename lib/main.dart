@@ -18,6 +18,7 @@ import 'src/app.dart';
 import 'src/state/providers.dart';
 import 'src/services/proxy.dart';
 import 'src/services/media_session.dart';
+import 'src/services/security_scope.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -71,9 +72,25 @@ Future<void> main() async {
 
   // Restore the saved Bangumi token, if any.
   final prefs = await SharedPreferences.getInstance();
+  // The custom download folder needs its security scope while Rust scans it
+  // for records; without it the scan silently finds nothing and the app
+  // re-downloads episodes it already has.
+  var downloadScope = <String>[];
+  final savedDownloadDir = prefs.getString('download_dir') ?? '';
+  if (Platform.isMacOS && savedDownloadDir.isNotEmpty) {
+    try {
+      final scope = await SecurityScope.access(savedDownloadDir);
+      downloadScope = [scope.scopePath];
+    } catch (_) {
+      // Folder moved/unmounted: keep the preference, it can be re-picked.
+    }
+  }
   await rust.setDownloadDirectory(
-    downloadDir: effectiveDownloadDir(prefs.getString('download_dir') ?? ''),
+    downloadDir: effectiveDownloadDir(savedDownloadDir),
   );
+  for (final scopePath in downloadScope) {
+    await SecurityScope.release(scopePath);
+  }
   final token = prefs.getString('bangumi_token');
   if (token != null && token.isNotEmpty) {
     rust.setBangumiToken(token: token);
@@ -107,12 +124,12 @@ Future<void> main() async {
   await (await WebDavCredentials.load()).pushToRust();
 
   // Route cover-image downloads through the same system proxy the Rust HTTP
-  // client uses (Bangumi's CDN is DNS-poisoned in mainland China).
+  // client uses (Bangumi's CDN is DNS-poisoned in mainland China). The
+  // override is installed even when no proxy is detected: it also guarantees
+  // that loopback requests never pick up an environment proxy variable, which
+  // would otherwise intercept the local media server's pre-flight probe.
   final proxy = await rust.systemProxy();
-  final hostPort = proxyHostPort(proxy);
-  if (hostPort != null) {
-    HttpOverrides.global = ProxyHttpOverrides(hostPort);
-  }
+  HttpOverrides.global = ProxyHttpOverrides(proxyHostPort(proxy));
 
   runApp(const ProviderScope(child: AnimeBdApp()));
 }
@@ -148,15 +165,93 @@ Future<Directory> _dataDir() async {
   return dir;
 }
 
-/// iOS downloads belong in the app's Documents container, not App Support:
-/// with file sharing enabled this is visible in Files as Kurako's own folder.
-/// The database remains private in App Support.
+/// Where downloads go by default.
+///
+/// Desktop platforms use the system's own video/movie folder so downloads land
+/// where users expect them and are reachable from Finder/Explorer/file
+/// managers. If that folder cannot be created (permissions, read-only volume)
+/// we fall back to the app container, which always works. iOS keeps its
+/// Files-visible Documents folder; Android is handled by the SAF flow.
 Future<String> _defaultDownloadDir(Directory dataDir) async {
-  if (!Platform.isIOS) return p.join(dataDir.path, 'downloads');
-  final documents = await getApplicationDocumentsDirectory();
-  final downloads = Directory(p.join(documents.path, 'Kurako Downloads'));
-  if (!await downloads.exists()) {
-    await downloads.create(recursive: true);
+  const folderName = 'Kurako Downloads';
+  if (Platform.isIOS) {
+    final documents = await getApplicationDocumentsDirectory();
+    final downloads = Directory(p.join(documents.path, folderName));
+    if (!await downloads.exists()) {
+      await downloads.create(recursive: true);
+    }
+    return downloads.path;
   }
-  return downloads.path;
+  if (Platform.isAndroid) return p.join(dataDir.path, 'downloads');
+  final candidate = await _systemVideosDir();
+  if (candidate != null) {
+    try {
+      final dir = Directory(p.join(candidate, folderName));
+      if (!await dir.exists()) await dir.create(recursive: true);
+      // Inside the sandbox $HOME points at the app container, whose Movies
+      // entry is a symlink to the real one. Resolve it so the UI shows the
+      // path the user actually sees in Finder.
+      return await _realPath(dir.path);
+    } catch (_) {
+      // Fall through to the container directory below.
+    }
+  }
+  return p.join(dataDir.path, 'downloads');
+}
+
+/// Resolve symlinks; the path itself is returned when it cannot be resolved.
+Future<String> _realPath(String path) async {
+  try {
+    return await Directory(path).resolveSymbolicLinks();
+  } catch (_) {
+    return path;
+  }
+}
+
+/// The platform's standard video folder, or null when it cannot be resolved.
+Future<String?> _systemVideosDir() async {
+  if (Platform.isMacOS) {
+    final home = Platform.environment['HOME'];
+    return home == null ? null : p.join(home, 'Movies');
+  }
+  if (Platform.isWindows) {
+    final profile = Platform.environment['USERPROFILE'];
+    return profile == null ? null : p.join(profile, 'Videos');
+  }
+  if (Platform.isLinux) {
+    final xdg = await _xdgUserDir('XDG_VIDEOS_DIR');
+    if (xdg != null) return xdg;
+    final home = Platform.environment['HOME'];
+    return home == null ? null : p.join(home, 'Videos');
+  }
+  return null;
+}
+
+/// Resolve an XDG user directory (e.g. XDG_VIDEOS_DIR) honouring a localized
+/// name such as `~/影片`. Only the standard config file is read; no process is
+/// spawned and a malformed file simply falls back to the caller's default.
+Future<String?> _xdgUserDir(String key) async {
+  final home = Platform.environment['HOME'];
+  if (home == null) return null;
+  final configHome =
+      Platform.environment['XDG_CONFIG_HOME'] ?? p.join(home, '.config');
+  final file = File(p.join(configHome, 'user-dirs.dirs'));
+  try {
+    if (!await file.exists()) return null;
+    final lines = await file.readAsLines();
+    for (final line in lines) {
+      final trimmed = line.trim();
+      if (!trimmed.startsWith('$key=')) continue;
+      var value = trimmed.substring(key.length + 1).trim();
+      if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+        value = value.substring(1, value.length - 1);
+      }
+      value = value.replaceFirst(r'$HOME', home);
+      if (!value.startsWith('/')) return null;
+      return value;
+    }
+  } catch (_) {
+    // Unreadable or malformed config: use the caller's fallback.
+  }
+  return null;
 }

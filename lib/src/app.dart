@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'pages/home_page.dart';
+import 'pages/onboarding_page.dart';
 import 'state/providers.dart';
 import 'state/update_provider.dart';
 import 'widgets/update_banner.dart';
@@ -16,6 +17,20 @@ class AnimeBdApp extends ConsumerStatefulWidget {
 
   @override
   ConsumerState<AnimeBdApp> createState() => _AnimeBdAppState();
+}
+
+/// Shows the first-run setup until it has been completed once.
+///
+/// The setup is what creates the macOS download-folder bookmark; without it
+/// downloads fail on the next launch with no way for the user to grant access.
+class _StartupGate extends ConsumerWidget {
+  const _StartupGate();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final completed = ref.watch(onboardingCompletedProvider);
+    return completed ? const HomePage() : const OnboardingPage();
+  }
 }
 
 class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
@@ -149,7 +164,7 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
           theme: _theme(light, systemFont: systemFont),
           darkTheme: _theme(dark, systemFont: systemFont),
           themeMode: theme.mode.flutterThemeMode,
-          home: const HomePage(),
+          home: const _StartupGate(),
           builder: (context, child) {
             final content = UpdateBannerHost(
               child: child ?? const SizedBox.shrink(),

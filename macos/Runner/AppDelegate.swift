@@ -6,8 +6,10 @@ import os.log
 class AppDelegate: FlutterAppDelegate {
   private var oauthChannel: FlutterMethodChannel?
   private var awaitingOAuth = false
-  // Paths whose security-scoped access is currently started through us.
-  private var openScopePaths: Set<String> = []
+  // Paths whose security-scoped access is currently started through us, with
+  // a count: starting access twice for the same folder must be stopped twice,
+  // or the extension is never fully released before process exit.
+  private var openScopePaths: [String: Int] = [:]
 
   func configureOAuth(messenger: FlutterBinaryMessenger) {
     let channel = FlutterMethodChannel(
@@ -40,7 +42,11 @@ class AppDelegate: FlutterAppDelegate {
       func logScope(_ text: String) {
         // os_log is visible in Console/log show even when flutter stdout is
         // captured by Xcode only — the fastest way to debug sandbox grants.
-        os_log("kurako/scope %{public}@", type: .info, text)
+        // Debug only: callers interpolate user paths, which must not land in a
+        // shipped build's system log.
+        #if DEBUG
+          os_log("kurako/scope %{public}@", type: .info, text)
+        #endif
       }
       switch call.method {
       case "pickFolder":
@@ -54,7 +60,14 @@ class AppDelegate: FlutterAppDelegate {
         dialog.allowsMultipleSelection = false
         dialog.showsHiddenFiles = false
         dialog.message = "选择番剧文件夹（macOS 会记住此位置的访问权限）"
-        guard let window = NSApplication.shared.keyWindow else {
+        // Fall back to any available window: the panel may be requested while
+        // the app is in the background or still setting up its window.
+        guard
+          let window =
+            NSApplication.shared.keyWindow
+            ?? NSApplication.shared.mainWindow
+            ?? NSApplication.shared.windows.first
+        else {
           result(FlutterError(code: "NO_WINDOW", message: "no key window", details: nil))
           return
         }
@@ -121,16 +134,21 @@ class AppDelegate: FlutterAppDelegate {
           result(nil)
           return
         }
-        self.openScopePaths.insert(url.path)
+        self.openScopePaths[url.path, default: 0] += 1
         result(url.path)
       case "stopAccess":
-        guard let path = call.arguments as? String, self.openScopePaths.contains(path) else {
+        guard let path = call.arguments as? String,
+              let count = self.openScopePaths[path] else {
           result(nil)
           return
         }
         URL(fileURLWithPath: path).stopAccessingSecurityScopedResource()
-        self.openScopePaths.remove(path)
-        logScope("stopped path=\(path)")
+        if count <= 1 {
+          self.openScopePaths.removeValue(forKey: path)
+        } else {
+          self.openScopePaths[path] = count - 1
+        }
+        logScope("stopped")
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -156,8 +174,11 @@ class AppDelegate: FlutterAppDelegate {
   override func applicationWillTerminate(_ notification: Notification) {
     // A stopAccess() leak keeps the sandbox extension open until process exit;
     // terminating anyway makes that a non-issue, but pair what we can.
-    for path in openScopePaths {
-      URL(fileURLWithPath: path).stopAccessingSecurityScopedResource()
+    for (path, count) in openScopePaths {
+      let url = URL(fileURLWithPath: path)
+      for _ in 0..<count {
+        url.stopAccessingSecurityScopedResource()
+      }
     }
     openScopePaths.removeAll()
   }

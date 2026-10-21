@@ -188,10 +188,17 @@ pub struct RemoteEntry {
 }
 
 /// Progress event streamed back to Dart during an SMB download.
+///
+/// FRB delivers a function's `Result` through the task future while the stream
+/// only carries values, so a failure would otherwise reach Dart as a normal
+/// end-of-stream. Errors are therefore encoded as a terminal event: `error` is
+/// set and the byte counters are zero.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadProgress {
     pub bytes_done: i64,
     pub bytes_total: i64,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// A completed remote-to-local download, tracked so playback can prefer the

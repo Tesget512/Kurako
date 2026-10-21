@@ -14,7 +14,8 @@ use core_foundation_sys::number::{
     kCFNumberSInt64Type, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
 };
 use core_foundation_sys::string::{
-    __CFString, kCFStringEncodingUTF8, CFStringGetCString, CFStringGetLength, CFStringRef,
+    __CFString, kCFStringEncodingUTF8, CFStringGetCString, CFStringGetLength, CFStringGetTypeID,
+    CFStringRef,
 };
 use std::ffi::{c_char, c_void};
 use std::ptr;
@@ -46,7 +47,9 @@ pub fn system_proxy() -> Option<String> {
     let proxy = read("HTTPS").or_else(|| read("HTTP"));
     unsafe { CFRelease(settings as *mut c_void) };
     let (host, port) = proxy?;
-    if host.is_empty() || port == 0 {
+    // Reject values CFNetwork should never produce but that would otherwise
+    // become an unusable "http://host:-1" string downstream.
+    if host.is_empty() || !(1..=65535).contains(&port) {
         return None;
     }
     let host = if host.contains(':') && !host.starts_with('[') {
@@ -59,8 +62,18 @@ pub fn system_proxy() -> Option<String> {
 
 fn string_value(dict: CFDictionaryRef, key: &str) -> Option<String> {
     let key = CFString::new(key);
+    if key.0.is_null() {
+        return None;
+    }
     let value = unsafe { CFDictionaryGetValue(dict, key.as_CFTypeRef() as *const c_void) };
     if value.is_null() {
+        return None;
+    }
+    // The dictionary holds mixed types; CFStringGetLength on a non-string is
+    // undefined behaviour, so check the type exactly like number_value does.
+    let string_type: CFTypeID = unsafe { CFStringGetTypeID() };
+    let type_id: CFTypeID = unsafe { CFGetTypeID(value as CFTypeRef) };
+    if type_id != string_type {
         return None;
     }
     let string = value as CFStringRef;
@@ -83,6 +96,9 @@ fn string_value(dict: CFDictionaryRef, key: &str) -> Option<String> {
 
 fn number_value(dict: CFDictionaryRef, key: &str) -> Option<i64> {
     let key = CFString::new(key);
+    if key.0.is_null() {
+        return None;
+    }
     let value = unsafe { CFDictionaryGetValue(dict, key.as_CFTypeRef() as *const c_void) };
     if value.is_null() {
         return None;
@@ -115,18 +131,25 @@ impl CFString {
     fn new(text: &str) -> Self {
         // core_foundation_sys does not re-export the create call as a safe
         // helper with our MSRV-aligned feature set; declare the FFI locally.
+        // CFStringCreateWithBytes takes an explicit length, so a Rust &str
+        // needs no NUL terminator (passing one to the C-string variant read
+        // past the allocation).
         extern "C" {
-            fn CFStringCreateWithCString(
+            fn CFStringCreateWithBytes(
                 alloc: *mut c_void,
-                c_str: *const c_char,
+                bytes: *const u8,
+                num_bytes: CFIndex,
                 encoding: u32,
+                is_external_representation: bool,
             ) -> CFStringRef;
         }
         let created = unsafe {
-            CFStringCreateWithCString(
+            CFStringCreateWithBytes(
                 ptr::null_mut(),
-                text.as_ptr() as *const c_char,
+                text.as_ptr(),
+                text.len() as CFIndex,
                 kCFStringEncodingUTF8 as u32,
+                false,
             )
         };
         CFString(created)

@@ -5,6 +5,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../rust/api/update.dart' as rust;
 import '../services/app_update.dart';
 
+/// Map a failed update check to an accurate message. The Rust layer only ever
+/// reports fixed reasons, so matching on those keeps the text honest instead
+/// of blaming the network for a GitHub quota limit.
+String updateFailureMessage(Object error) {
+  if (error is FormatException) return error.message.toString();
+  final text = error.toString();
+  if (text.contains('rate limited')) {
+    return 'GitHub 暂时限制了匿名请求频率，请稍后重试。';
+  }
+  if (text.contains('HTTP 404') || text.contains('no release')) {
+    return '暂时没有可用的正式版本。';
+  }
+  if (text.contains('invalid GitHub release')) {
+    return 'GitHub 返回的版本信息无法识别，请稍后重试。';
+  }
+  return '检查失败，请确认网络或系统代理后重试。';
+}
+
 final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
   return AppUpdateService(
     fetchLatestRelease: () async {
@@ -21,6 +39,9 @@ final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
               size: asset.size.toInt(),
               url: asset.browserDownloadUrl,
               digest: asset.digest,
+              // Rust reports 0 when it resolved the release through the
+              // non-API pages, which do not publish asset sizes.
+              sizeKnown: asset.size.toInt() > 0,
             ),
         ],
       );
@@ -114,9 +135,7 @@ class UpdateCheckNotifier extends StateNotifier<UpdateCheckState> {
           status: UpdateCheckStatus.failed,
           result: state.result,
           dismissedTag: state.dismissedTag,
-          failureMessage: error is FormatException
-              ? error.message.toString()
-              : '检查失败，请确认网络或系统代理后重试。GitHub 也可能暂时限制请求。',
+          failureMessage: updateFailureMessage(error),
         );
       }
     } finally {

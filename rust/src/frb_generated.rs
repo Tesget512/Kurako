@@ -3334,9 +3334,11 @@ impl SseDecode for crate::models::DownloadProgress {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         let mut var_bytesDone = <i64>::sse_decode(deserializer);
         let mut var_bytesTotal = <i64>::sse_decode(deserializer);
+        let mut var_error = <Option<String>>::sse_decode(deserializer);
         return crate::models::DownloadProgress {
             bytes_done: var_bytesDone,
             bytes_total: var_bytesTotal,
+            error: var_error,
         };
     }
 }
@@ -4264,6 +4266,7 @@ impl flutter_rust_bridge::IntoDart for crate::models::DownloadProgress {
         [
             self.bytes_done.into_into_dart().into_dart(),
             self.bytes_total.into_into_dart().into_dart(),
+            self.error.into_into_dart().into_dart(),
         ]
         .into_dart()
     }
@@ -4788,6 +4791,7 @@ impl SseEncode for crate::models::DownloadProgress {
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
         <i64>::sse_encode(self.bytes_done, serializer);
         <i64>::sse_encode(self.bytes_total, serializer);
+        <Option<String>>::sse_encode(self.error, serializer);
     }
 }
 

@@ -104,7 +104,16 @@ async fn prepare_binary(
                 anyhow::bail!("字幕文件超过安全上限");
             }
             let ext = extension(file_name).context("字幕文件没有可识别的扩展名")?;
-            let path = std::path::Path::new(cache_dir).join(format!("{file_name}.{ext}.bin"));
+            // Unique per preparation: two candidates can share a file name
+            // (the video folder and its Subtitles/ subdirectory are both
+            // scanned), and reusing the name made switching subtitles delete
+            // the file mpv had just been handed.
+            let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+            let cache_dir = std::path::Path::new(cache_dir);
+            tokio::fs::create_dir_all(cache_dir)
+                .await
+                .context("创建字幕缓存目录")?;
+            let path = cache_dir.join(format!("subtitle-{id}.{ext}.bin"));
             tokio::fs::write(&path, &bytes)
                 .await
                 .context("写入二进制字幕缓存")?;

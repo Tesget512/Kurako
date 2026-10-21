@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter/material.dart' show Color, ThemeMode;
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/bangumi_mirror.dart';
 import '../services/cover_repository.dart';
+import '../services/security_scope.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 
@@ -356,6 +358,35 @@ final downloadDirProvider = StateNotifierProvider<_StringPrefNotifier, String>((
   return _StringPrefNotifier('download_dir', defaultValue: '');
 });
 
+/// Whether the first-run setup has been completed. The setup exists because
+/// macOS only keeps a folder reachable across launches after a security-scoped
+/// bookmark is created for it, which requires an explicit user pick.
+final onboardingCompletedProvider =
+    StateNotifierProvider<OnboardingCompletedNotifier, bool>((ref) {
+      return OnboardingCompletedNotifier();
+    });
+
+class OnboardingCompletedNotifier extends StateNotifier<bool> {
+  OnboardingCompletedNotifier() : super(false) {
+    _load();
+  }
+
+  static const _key = 'onboarding_completed_v1';
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) state = prefs.getBool(_key) ?? false;
+  }
+
+  /// Marks setup as done and returns the stored value.
+  Future<bool> complete() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_key, true);
+    if (mounted) state = true;
+    return true;
+  }
+}
+
 // ---- Background download manager (silent SMB downloads) ----
 
 /// One tracked download. Lives from the moment it starts until the user
@@ -388,6 +419,7 @@ class DownloadTask {
     int? bytesDone,
     int? bytesTotal,
     String? error,
+    bool clearError = false,
     bool? done,
   }) => DownloadTask(
     sourceUri: sourceUri,
@@ -396,7 +428,7 @@ class DownloadTask {
     animeId: animeId,
     bytesDone: bytesDone ?? this.bytesDone,
     bytesTotal: bytesTotal ?? this.bytesTotal,
-    error: error ?? this.error,
+    error: clearError ? null : (error ?? this.error),
     done: done ?? this.done,
   );
 }
@@ -432,26 +464,65 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
         animeId: animeId,
       ),
     ];
+    unawaited(_runDownload(ep, destDir, animeId));
+  }
+
+  /// macOS: a user-chosen download folder needs its security scope active for
+  /// the whole write, or the first download after a relaunch fails with EPERM.
+  /// The default folder is covered by the app's movies entitlement instead and
+  /// has no bookmark, so a missing bookmark means "use the path as-is" rather
+  /// than a hard failure. The scope is released when the stream ends.
+  Future<void> _runDownload(Episode ep, String destDir, int? animeId) async {
+    ScopedPath? scope;
+    if (Platform.isMacOS) {
+      try {
+        scope = await SecurityScope.access(destDir);
+      } on SecurityScopeException {
+        // No bookmark for this folder (default location or an unmounted
+        // volume): fall through and let the write decide.
+      }
+    }
+    final target = scope?.path ?? destDir;
     final stream = ep.sourceType == 'webdav'
-        ? rust.webdavDownload(remoteUri: ep.filePath, destDir: destDir)
-        : rust.smbDownload(smbUri: ep.filePath, destDir: destDir);
+        ? rust.webdavDownload(remoteUri: ep.filePath, destDir: target)
+        : rust.smbDownload(smbUri: ep.filePath, destDir: target);
     _subs[ep.filePath] = stream.listen(
-      (p) => _update(
-        ep.filePath,
-        (t) => t.copyWith(
-          bytesDone: p.bytesDone.toInt(),
-          bytesTotal: p.bytesTotal.toInt(),
-        ),
-      ),
-      onError: (Object e) =>
-          _update(ep.filePath, (t) => t.copyWith(error: '$e')),
+      (p) {
+        // A failure arrives as a terminal stream event: the generated wrapper
+        // drops the function's Result, so an Err would otherwise look like a
+        // clean end-of-stream and the UI would claim success.
+        final failure = p.error;
+        if (failure != null) {
+          _update(ep.filePath, (t) => t.copyWith(error: failure));
+          return;
+        }
+        _update(
+          ep.filePath,
+          (t) => t.copyWith(
+            bytesDone: p.bytesDone.toInt(),
+            bytesTotal: p.bytesTotal.toInt(),
+          ),
+        );
+      },
+      onError: (Object e) {
+        _update(ep.filePath, (t) => t.copyWith(error: '$e'));
+        _releaseScope(scope);
+      },
       onDone: () {
         _subs.remove(ep.filePath);
+        _releaseScope(scope);
         var completed = false;
         _update(ep.filePath, (t) {
+          // Never claim completion without a recorded error state and a real
+          // transferred size; a zero-byte "success" is not a download.
           final ok = t.error == null && t.bytesTotal > 0;
           completed = ok;
-          return t.copyWith(done: true, bytesDone: ok ? t.bytesTotal : null);
+          return t.copyWith(
+            done: ok,
+            error: ok ? null : (t.error ?? '下载未完成，请重试'),
+            clearError: ok,
+            bytesDone: ok ? t.bytesTotal : null,
+          );
         });
         if (completed) {
           final affectedAnimeId = animeId;
@@ -461,6 +532,10 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
         }
       },
     );
+  }
+
+  void _releaseScope(ScopedPath? scope) {
+    if (scope != null) unawaited(SecurityScope.release(scope.scopePath));
   }
 
   Future<void> cancel(String sourceUri) async {

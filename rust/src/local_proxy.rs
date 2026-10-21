@@ -20,11 +20,11 @@
 use anyhow::{bail, Context, Result};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::SeekFrom;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Mutex;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 /// token -> local file path. Registered by `register_playable`.
@@ -32,7 +32,6 @@ static PLAYABLE: Lazy<Mutex<HashMap<String, PathBuf>>> = Lazy::new(|| Mutex::new
 /// The port the proxy bound to (0 = not started yet).
 static PROXY_PORT: AtomicU16 = AtomicU16::new(0);
 static PROXY_INIT: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-static TOKEN_SEQ: AtomicU64 = AtomicU64::new(1);
 
 /// Dedicated runtime for the accept loop + serve tasks, isolated from the
 /// shared `RT` for the same reason as the SMB proxy: streaming work must never
@@ -63,12 +62,23 @@ pub fn register_playable(path: &str) -> Result<String> {
         bail!("本地视频文件为空");
     }
     let port = ensure_proxy()?;
-    let token = format!("l{}", TOKEN_SEQ.fetch_add(1, Ordering::Relaxed));
+    // Unpredictable token: the listener is loopback-only but unauthenticated,
+    // so a sequential counter would let any local process walk the ids and
+    // stream whatever is currently playing.
+    let token = random_token();
     PLAYABLE
         .lock()
         .unwrap()
         .insert(token.clone(), PathBuf::from(path));
     Ok(format!("http://127.0.0.1:{port}/{token}"))
+}
+
+/// 128 random bits, hex encoded.
+fn random_token() -> String {
+    let mut bytes = [0u8; 16];
+    // OsRng is infallible for this size on every supported platform.
+    let _ = getrandom::getrandom(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Drop a previously registered token (called when playback ends). Tolerates
@@ -116,7 +126,14 @@ fn ensure_proxy() -> Result<u16> {
                     });
                     drop(jh);
                 }
-                Err(_) => {
+                Err(error) => {
+                    // EMFILE/ENFILE and friends are transient: a burst of
+                    // connections must not permanently kill the listener and
+                    // invalidate every URL already handed to mpv.
+                    if is_transient_accept_error(&error) {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        continue;
+                    }
                     PROXY_PORT.store(0, Ordering::Release);
                     break;
                 }
@@ -124,6 +141,17 @@ fn ensure_proxy() -> Result<u16> {
         }
     });
     Ok(port)
+}
+
+fn is_transient_accept_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::OutOfMemory
+    ) || matches!(error.raw_os_error(), Some(24) | Some(23)) // EMFILE, ENFILE
 }
 
 /// Handle one HTTP request: parse the token + optional Range, stream the file.
@@ -142,8 +170,17 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
             return Ok(());
         }
         buf.extend_from_slice(&tmp[..n]);
-        if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16384 {
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
             break;
+        }
+        if buf.len() > 16384 {
+            // Refuse to parse a truncated header block as if it were complete.
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            return Ok(());
         }
     }
     let head = String::from_utf8_lossy(&buf);
@@ -160,18 +197,18 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         .to_string();
     let mut range: Option<ByteRange> = None;
     for line in lines {
-        if let Some(v) = line
-            .strip_prefix("Range:")
-            .or_else(|| line.strip_prefix("range:"))
-        {
-            range = parse_range(v.trim());
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        if name.eq_ignore_ascii_case("range") {
+            range = parse_range(value.trim());
         }
     }
 
     let path = PLAYABLE.lock().unwrap().get(&token).cloned();
     let Some(path) = path else {
         let _ = stream
-            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             .await;
         return Ok(());
     };
@@ -179,14 +216,18 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
     // The scope that makes this open succeed is held by the Dart side for the
     // whole playback. A failure here means the volume went away mid-play —
     // surface it as a clean HTTP error instead of hanging the client.
-    let mut file = match std::fs::File::open(&path) {
+    //
+    // tokio::fs keeps these syscalls off the two worker threads: an external
+    // drive spinning up (or retrying a bad sector) can block for seconds, and
+    // two blocked workers would also stop the accept loop.
+    let mut file = match tokio::fs::File::open(&path).await {
         Ok(file) => file,
         Err(e) => {
             write_http_error(&mut stream, "500 Local Open Failed", &format!("{e:#}")).await;
             return Ok(());
         }
     };
-    let total = match file.metadata() {
+    let total = match file.metadata().await {
         Ok(meta) => meta.len(),
         Err(e) => {
             write_http_error(&mut stream, "500 Local Stat Failed", &format!("{e:#}")).await;
@@ -240,12 +281,12 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
         return Ok(());
     }
 
-    // Stream in chunks from disk. These are blocking std::fs reads on the
-    // dedicated PROXY_RT threads — local disk reads are bounded (no network),
-    // so spawn_blocking per chunk would only add churn.
+    // Stream in chunks from disk. tokio::fs performs the blocking syscall on a
+    // blocking pool thread, so a slow external drive cannot stall the accept
+    // loop or a concurrent probe on the other worker thread.
     const CHUNK: usize = 256 * 1024;
     let mut chunk = vec![0u8; CHUNK];
-    if file.seek(SeekFrom::Start(start)).is_err() {
+    if file.seek(SeekFrom::Start(start)).await.is_err() {
         return Ok(());
     }
     let mut remaining = len;
@@ -256,7 +297,7 @@ async fn serve(mut stream: TcpStream) -> Result<()> {
             break;
         }
         let want = (CHUNK as u64).min(remaining) as usize;
-        let n = match file.read(&mut chunk[..want]) {
+        let n = match file.read(&mut chunk[..want]).await {
             Ok(0) => break,
             Ok(n) => n,
             Err(_) => break,

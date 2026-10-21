@@ -496,6 +496,11 @@ async fn read_response_limited(
 }
 
 fn normalize_relative(path: &str) -> Result<String> {
+    // A percent-decoded href can carry a literal backslash (`%5C`); on Windows
+    // Path::join treats it as a separator, so it would escape the cache dir.
+    if path.contains('\\') {
+        anyhow::bail!("WebDAV 路径不能包含反斜杠");
+    }
     let mut clean = Vec::new();
     for segment in path.trim_matches('/').split('/') {
         if segment.is_empty() || segment == "." {
@@ -841,12 +846,27 @@ async fn handle_proxy_request(mut stream: TcpStream) -> Result<()> {
         .await;
     }
     let total = if expected_status == StatusCode::PARTIAL_CONTENT {
-        total_from_content_range(response.headers().get(CONTENT_RANGE))
-            .context("missing WebDAV Content-Range")?
+        let Some(total) = total_from_content_range(response.headers().get(CONTENT_RANGE)) else {
+            // Answer before the headers are committed; returning Err here
+            // dropped the socket and left the client with an empty reply.
+            return write_proxy_error(
+                &mut stream,
+                "502 Bad Gateway",
+                "WebDAV server omitted Content-Range",
+            )
+            .await;
+        };
+        total
     } else {
-        response
-            .content_length()
-            .context("missing WebDAV Content-Length")?
+        let Some(total) = response.content_length() else {
+            return write_proxy_error(
+                &mut stream,
+                "502 Bad Gateway",
+                "WebDAV server omitted Content-Length",
+            )
+            .await;
+        };
+        total
     };
     let content_range = response
         .headers()
@@ -854,7 +874,7 @@ async fn handle_proxy_request(mut stream: TcpStream) -> Result<()> {
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default()
         .to_string();
-    let content_length = response.content_length().unwrap_or(0);
+    let content_length = response.content_length().unwrap_or(total);
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)

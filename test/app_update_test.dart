@@ -579,6 +579,62 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('更新至 v1.2.0'), findsOneWidget);
   });
+
+  test(
+    'a rate-limited check is reported as a quota limit, not a network fault',
+    () {
+      final limited = updateFailureMessage(
+        StateError('GitHub update request was rate limited'),
+      );
+      expect(limited, contains('限制'));
+      expect(limited, isNot(contains('系统代理')));
+      expect(
+        updateFailureMessage(StateError('GitHub update request failed')),
+        contains('系统代理'),
+      );
+    },
+  );
+
+  test('assets with an unknown size are still offered', () {
+    final release = AppUpdateRelease(
+      tagName: 'v1.2.0',
+      htmlUrl: 'https://github.com/Tesget512/Kurako/releases/tag/v1.2.0',
+      name: 'v1.2.0',
+      assets: [
+        AppUpdateAsset(
+          name: 'Kurako-macOS-1.2.0-universal-adhoc-release.dmg',
+          // The non-API release page does not publish sizes.
+          size: 0,
+          sizeKnown: false,
+          url:
+              'https://github.com/Tesget512/Kurako/releases/download/v1.2.0/'
+              'Kurako-macOS-1.2.0-universal-adhoc-release.dmg',
+        ),
+      ],
+    );
+    expect(
+      compatibleUpdateAssets(
+        release,
+        platform: 'macos',
+        architecture: 'x86_64',
+      ),
+      hasLength(1),
+    );
+    // A published size of 0 is still rejected outright.
+    expect(
+      isProjectAssetUrl(
+        release,
+        AppUpdateAsset(
+          name: 'Kurako-macOS-1.2.0-universal-adhoc-release.dmg',
+          size: 0,
+          url:
+              'https://github.com/Tesget512/Kurako/releases/download/v1.2.0/'
+              'Kurako-macOS-1.2.0-universal-adhoc-release.dmg',
+        ),
+      ),
+      isFalse,
+    );
+  });
 }
 
 Widget bannerBuilder(BuildContext context, Widget? child) =>

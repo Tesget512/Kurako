@@ -211,6 +211,24 @@ class LocalMediaSource extends MediaSource {
   }
 }
 
+/// A downloaded copy may live in a user-chosen folder, which on macOS needs an
+/// active security scope. Holding it for the whole playback keeps seeks and
+/// sidecar reads working; the handle releases it on stop.
+Future<PlayableHandle> _localCopyHandle(String path) async {
+  if (!Platform.isMacOS) return PlayableHandle(localPlaybackUri(path));
+  final ScopedPath scope;
+  try {
+    scope = await SecurityScope.access(path);
+  } on SecurityScopeException {
+    // No bookmark (e.g. the default container folder): play the plain path.
+    return PlayableHandle(localPlaybackUri(path));
+  }
+  return PlayableHandle(
+    localPlaybackUri(scope.path),
+    onRelease: () => SecurityScope.release(scope.scopePath),
+  );
+}
+
 /// Subtitle files next to a local video. Rust applies the same conservative
 /// title + episode recognizer used for SMB streaming and downloaded sidecars.
 Future<List<SubtitleCandidate>> listLocalSubtitles(String videoPath) async {
@@ -397,7 +415,7 @@ class SmbMediaSource extends MediaSource {
     // Prefer a downloaded local copy — instant, no network, seekable.
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
     if (local != null) {
-      return PlayableHandle(localPlaybackUri(local));
+      return _localCopyHandle(local);
     }
     // Windows: play the UNC path directly through the OS SMB redirector, exactly
     // like the external player. Windows keeps ONE persistent authenticated
@@ -494,7 +512,7 @@ class WebDavMediaSource extends MediaSource {
   @override
   Future<PlayableHandle> resolvePlayable(Episode episode) async {
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
-    if (local != null) return PlayableHandle(localPlaybackUri(local));
+    if (local != null) return _localCopyHandle(local);
     final url = await rust.webdavPlayableUrl(remoteUri: episode.filePath);
     if (usesLoopbackProxy) {
       try {

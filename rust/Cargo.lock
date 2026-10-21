@@ -1713,6 +1713,7 @@ dependencies = [
  "encoding_rs",
  "flutter_rust_bridge",
  "futures",
+ "getrandom 0.2.17",
  "if-addrs",
  "once_cell",
  "percent-encoding",

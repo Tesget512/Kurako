@@ -701,6 +701,20 @@ pub fn webdav_proxy_stats() -> u64 {
 
 // ---- SMB downloads ----
 
+/// Report a download failure through the progress stream.
+///
+/// The function's `Result` is delivered through the FRB task future, which the
+/// generated Dart wrapper discards for stream-returning calls; an `Err` would
+/// therefore look like a clean end-of-stream and the UI would report success.
+fn download_error(sink: &StreamSink<DownloadProgress>, message: String) -> String {
+    let _ = sink.add(DownloadProgress {
+        bytes_done: 0,
+        bytes_total: 0,
+        error: Some(message.clone()),
+    });
+    message
+}
+
 /// Download an SMB file to `dest_dir`, streaming progress. On success the
 /// download is recorded so playback prefers the local copy from then on.
 pub fn smb_download(
@@ -715,31 +729,37 @@ pub fn smb_download(
         .ok()
         .flatten();
     if smb::download_was_cancelled(&smb_uri) {
-        return Err("下载已取消".to_string());
+        return Err(download_error(&sink, "下载已取消".to_string()));
     }
     let local = if let Some((path, size)) = existing {
         let _ = sink.add(DownloadProgress {
             bytes_done: size as i64,
             bytes_total: size as i64,
+            error: None,
         });
         path
     } else {
-        RT.block_on(async {
+        match RT.block_on(async {
             smb::download(&smb_uri, &dest_dir, |done, total| {
                 let _ = sink.add(DownloadProgress {
                     bytes_done: done as i64,
                     bytes_total: total as i64,
+                    error: None,
                 });
             })
             .await
-        })
-        .map_err(|e| e.to_string())?
+        }) {
+            Ok(path) => path,
+            Err(error) => {
+                return Err(download_error(&sink, format!("{error:#}")));
+            }
+        }
     };
     let subtitle_result = RT.block_on(async { smb::download_subtitles(&smb_uri, &dest_dir).await });
     if smb::download_was_cancelled(&smb_uri) {
         smb::remove_downloaded_subtitles(&local);
         let _ = std::fs::remove_file(&local);
-        return Err("下载已取消".to_string());
+        return Err(download_error(&sink, "下载已取消".to_string()));
     }
     if let Err(error) = subtitle_result {
         eprintln!("KURAKO could not download sidecar subtitles: {error:#}");
@@ -747,7 +767,9 @@ pub fn smb_download(
     let size = std::fs::metadata(&local)
         .map(|m| m.len() as i64)
         .unwrap_or(0);
-    db::add_download(&smb_uri, &local, size, now_secs()).map_err(|e| e.to_string())?;
+    if let Err(error) = db::add_download(&smb_uri, &local, size, now_secs()) {
+        return Err(download_error(&sink, error.to_string()));
+    }
     Ok(local)
 }
 
@@ -861,26 +883,32 @@ pub fn webdav_download(
         .flatten();
     let reused_existing = existing.is_some();
     if crate::webdav::download_was_cancelled(&remote_uri) {
-        return Err("下载已取消".to_string());
+        return Err(download_error(&sink, "下载已取消".to_string()));
     }
     let local = if let Some((path, size)) = existing {
         let _ = sink.add(DownloadProgress {
             bytes_done: size as i64,
             bytes_total: size as i64,
+            error: None,
         });
         path
     } else {
-        RT.block_on(crate::webdav::download(
+        match RT.block_on(crate::webdav::download(
             &remote_uri,
             &dest_dir,
             |done, total| {
                 let _ = sink.add(DownloadProgress {
                     bytes_done: done as i64,
                     bytes_total: total as i64,
+                    error: None,
                 });
             },
-        ))
-        .map_err(|error| error.to_string())?
+        )) {
+            Ok(path) => path,
+            Err(error) => {
+                return Err(download_error(&sink, error.to_string()));
+            }
+        }
     };
     let subtitles = RT.block_on(crate::webdav::download_subtitles(&remote_uri, &dest_dir));
     if crate::webdav::download_was_cancelled(&remote_uri) {
@@ -888,7 +916,7 @@ pub fn webdav_download(
             smb::remove_downloaded_subtitles(&local);
             let _ = std::fs::remove_file(&local);
         }
-        return Err("下载已取消".to_string());
+        return Err(download_error(&sink, "下载已取消".to_string()));
     }
     if let Err(error) = subtitles {
         eprintln!("KURAKO could not download WebDAV sidecar subtitles: {error:#}");
@@ -896,7 +924,9 @@ pub fn webdav_download(
     let size = std::fs::metadata(&local)
         .map(|metadata| metadata.len() as i64)
         .unwrap_or(0);
-    db::add_download(&remote_uri, &local, size, now_secs()).map_err(|error| error.to_string())?;
+    if let Err(error) = db::add_download(&remote_uri, &local, size, now_secs()) {
+        return Err(download_error(&sink, error.to_string()));
+    }
     Ok(local)
 }
 

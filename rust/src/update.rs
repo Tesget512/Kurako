@@ -7,6 +7,12 @@ use serde::Deserialize;
 use std::time::Duration;
 
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/Tesget512/Kurako/releases/latest";
+/// Non-API fallback. Anonymous API calls are capped at 60/hour per IP, which a
+/// shared proxy exit address exhausts quickly; these pages are ordinary web
+/// traffic and are not counted against that quota.
+const LATEST_RELEASE_PAGE: &str = "https://github.com/Tesget512/Kurako/releases/latest";
+const EXPANDED_ASSETS_PREFIX: &str =
+    "https://github.com/Tesget512/Kurako/releases/expanded_assets/";
 
 /// One downloadable file attached to a release. GitHub supplies a
 /// `sha256:<hex>` digest for uploaded assets, which the downloader checks.
@@ -88,6 +94,19 @@ fn stable_release(release: GithubRelease) -> Result<Option<UpdateRelease>> {
 }
 
 pub async fn check_update() -> Result<Option<UpdateRelease>> {
+    let client = update_client()?;
+    match check_update_via_api(&client).await {
+        Ok(release) => Ok(release),
+        // The API is rate limited or otherwise unavailable; the public release
+        // pages carry the same tag and asset names without touching that quota.
+        Err(api_error) => match check_update_via_pages(&client).await {
+            Ok(release) => Ok(release),
+            Err(_) => Err(api_error),
+        },
+    }
+}
+
+fn update_client() -> Result<reqwest::Client> {
     // A fresh client keeps update checks isolated from Bangumi mirror state,
     // cookies, OAuth tokens and cached proxy settings.
     let mut builder = reqwest::Client::builder()
@@ -98,9 +117,11 @@ pub async fn check_update() -> Result<Option<UpdateRelease>> {
     if let Some(proxy) = crate::bangumi::detect_system_proxy() {
         builder = builder.proxy(reqwest::Proxy::all(proxy).context("invalid system proxy")?);
     }
-    let mut response = builder
-        .build()
-        .context("build update client")?
+    builder.build().context("build update client")
+}
+
+async fn check_update_via_api(client: &reqwest::Client) -> Result<Option<UpdateRelease>> {
+    let mut response = client
         .get(LATEST_RELEASE_API)
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
@@ -112,11 +133,34 @@ pub async fn check_update() -> Result<Option<UpdateRelease>> {
     }
     if !response.status().is_success() {
         // Do not expose response bodies, proxy addresses or environment values.
+        if is_rate_limited(&response) {
+            bail!("GitHub update request was rate limited");
+        }
         bail!(
             "GitHub update request returned HTTP {}",
             response.status().as_u16()
         );
     }
+    let body = read_bounded_body(&mut response).await?;
+    let release = serde_json::from_slice::<GithubRelease>(&body)
+        .context("invalid GitHub release response")?;
+    stable_release(release)
+}
+
+/// Anonymous API quota exhausted: GitHub answers 403 and reports zero remaining.
+fn is_rate_limited(response: &reqwest::Response) -> bool {
+    let remaining = response
+        .headers()
+        .get("x-ratelimit-remaining")
+        .and_then(|value| value.to_str().ok());
+    is_rate_limit_status(response.status(), remaining)
+}
+
+fn is_rate_limit_status(status: StatusCode, remaining: Option<&str>) -> bool {
+    status == StatusCode::FORBIDDEN && remaining.map(str::trim) == Some("0")
+}
+
+async fn read_bounded_body(response: &mut reqwest::Response) -> Result<Vec<u8>> {
     // The release payload is a few KB; bound it so a hijacked or misbehaving
     // endpoint cannot stream an unbounded body into memory.
     let mut body = Vec::new();
@@ -130,9 +174,129 @@ pub async fn check_update() -> Result<Option<UpdateRelease>> {
         }
         body.extend_from_slice(&chunk);
     }
-    let release = serde_json::from_slice::<GithubRelease>(&body)
-        .context("invalid GitHub release response")?;
-    stable_release(release)
+    Ok(body)
+}
+
+/// Resolve the latest stable tag from the `/releases/latest` redirect.
+///
+/// The shared client disables redirects (the API must never be followed
+/// elsewhere), so the 302 is read here and the target is validated before a
+/// second request fetches it.
+async fn check_update_via_pages(client: &reqwest::Client) -> Result<Option<UpdateRelease>> {
+    let response = client
+        .get(LATEST_RELEASE_PAGE)
+        .send()
+        .await
+        .context("GitHub release page request failed")?;
+    let status = response.status();
+    if status == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let location = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string());
+    let tag = if status.is_redirection() {
+        location
+            .as_deref()
+            .and_then(|value| Url::parse(value).ok())
+            .and_then(|url| tag_from_latest_redirect(url.as_str()))
+    } else if status.is_success() {
+        // Some intermediaries follow the redirect themselves.
+        tag_from_latest_redirect(response.url().as_str())
+    } else {
+        None
+    };
+    let Some(tag) = tag else {
+        bail!(
+            "GitHub release page returned HTTP {} without a stable tag",
+            status.as_u16()
+        );
+    };
+    let html_url = format!("https://github.com/Tesget512/Kurako/releases/tag/{tag}");
+    if !is_project_release_url(&html_url) {
+        bail!("GitHub returned invalid release metadata");
+    }
+    let assets = fetch_expanded_assets(client, &tag)
+        .await
+        .unwrap_or_default();
+    Ok(Some(UpdateRelease {
+        name: tag.clone(),
+        tag_name: tag,
+        html_url,
+        assets,
+    }))
+}
+
+/// `/releases/latest` redirects to `/releases/tag/<tag>`. Anything else (a
+/// login page, an error page, an unexpected host) yields no tag.
+fn tag_from_latest_redirect(url: &str) -> Option<String> {
+    let url = Url::parse(url).ok()?;
+    if url.scheme() != "https" || url.host_str() != Some("github.com") {
+        return None;
+    }
+    let segments: Vec<_> = url.path_segments()?.collect();
+    if segments.len() != 5
+        || segments[0] != "Tesget512"
+        || segments[1] != "Kurako"
+        || segments[2] != "releases"
+        || segments[3] != "tag"
+    {
+        return None;
+    }
+    let tag = segments[4];
+    if tag.is_empty() || tag == "." || tag == ".." {
+        return None;
+    }
+    Some(tag.to_string())
+}
+
+async fn fetch_expanded_assets(client: &reqwest::Client, tag: &str) -> Result<Vec<UpdateAsset>> {
+    let url = format!("{EXPANDED_ASSETS_PREFIX}{tag}");
+    let mut response = client
+        .get(&url)
+        .send()
+        .await
+        .context("GitHub asset list request failed")?;
+    if !response.status().is_success() {
+        bail!(
+            "GitHub asset list returned HTTP {}",
+            response.status().as_u16()
+        );
+    }
+    let body = read_bounded_body(&mut response).await?;
+    Ok(parse_expanded_assets(&String::from_utf8_lossy(&body), tag))
+}
+
+/// The expanded-assets fragment lists one anchor per file. Sizes are optional
+/// (they may be rendered client-side), so an unknown size stays 0 and the
+/// downloader falls back to the streamed byte count.
+fn parse_expanded_assets(html: &str, tag: &str) -> Vec<UpdateAsset> {
+    let prefix = format!("/Tesget512/Kurako/releases/download/{tag}/");
+    let mut assets = Vec::new();
+    for fragment in html.split("href=\"").skip(1) {
+        let Some(end) = fragment.find('"') else {
+            continue;
+        };
+        let href = &fragment[..end];
+        let Some(name) = href.strip_prefix(&prefix) else {
+            continue;
+        };
+        if name.is_empty() || name.contains('/') || name.contains('\\') {
+            continue;
+        }
+        if assets.iter().any(|asset: &UpdateAsset| asset.name == name) {
+            continue;
+        }
+        assets.push(UpdateAsset {
+            name: name.to_string(),
+            size: 0,
+            browser_download_url: format!("https://github.com{href}"),
+            digest: None,
+        });
+    }
+    assets
 }
 
 #[cfg(test)]
@@ -229,5 +393,54 @@ mod tests {
         let mut invalid = release(false, false);
         invalid.html_url = "https://example.com".into();
         assert!(stable_release(invalid).is_err());
+    }
+
+    #[test]
+    fn latest_redirect_yields_only_a_stable_tag() {
+        assert_eq!(
+            tag_from_latest_redirect("https://github.com/Tesget512/Kurako/releases/tag/v1.0.2"),
+            Some("v1.0.2".to_string())
+        );
+        for url in [
+            "https://github.com/Tesget512/Kurako/releases/latest",
+            "https://github.com/Tesget512/Kurako/releases/tag/",
+            "https://github.com/Tesget512/Other/releases/tag/v1",
+            "https://github.com.evil.test/Tesget512/Kurako/releases/tag/v1",
+            "http://github.com/Tesget512/Kurako/releases/tag/v1",
+            "https://github.com/login?return_to=%2FTesget512%2FKurako",
+        ] {
+            assert_eq!(tag_from_latest_redirect(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn expanded_assets_extract_names_and_download_urls() {
+        let html = r#"
+            <a href="/Tesget512/Kurako/releases/download/v1.0.2/Kurako-macOS-1.0.2-universal-adhoc-release.dmg" rel="nofollow">x</a>
+            <a href="/Tesget512/Kurako/releases/download/v1.0.2/Kurako-Android-arm64-v8a-1.0.2-release.apk">y</a>
+            <a href="/Tesget512/Kurako/releases/download/v1.0.2/Kurako-Android-arm64-v8a-1.0.2-release.apk">dup</a>
+            <a href="/Tesget512/Kurako/releases/download/v9.9.9/Kurako-other.dmg">wrong tag</a>
+            <a href="/Tesget512/Kurako/releases/download/v1.0.2/../escape.dmg">traversal</a>
+            <a href="/Tesget512/Kurako/archive/v1.0.2.tar.gz">archive</a>
+        "#;
+        let assets = parse_expanded_assets(html, "v1.0.2");
+        assert_eq!(assets.len(), 2, "{assets:?}");
+        assert_eq!(
+            assets[0].browser_download_url,
+            "https://github.com/Tesget512/Kurako/releases/download/v1.0.2/Kurako-macOS-1.0.2-universal-adhoc-release.dmg"
+        );
+        // Unknown size is 0 so the downloader can fall back to streamed bytes.
+        assert_eq!(assets[0].size, 0);
+        assert!(assets[0].digest.is_none());
+    }
+
+    #[test]
+    fn rate_limit_is_detected_from_headers_only() {
+        // Header parsing is exercised by constructing the status/header pair
+        // through a tiny helper rather than a live response.
+        assert!(is_rate_limit_status(StatusCode::FORBIDDEN, Some("0")));
+        assert!(!is_rate_limit_status(StatusCode::FORBIDDEN, Some("12")));
+        assert!(!is_rate_limit_status(StatusCode::FORBIDDEN, None));
+        assert!(!is_rate_limit_status(StatusCode::OK, Some("0")));
     }
 }
