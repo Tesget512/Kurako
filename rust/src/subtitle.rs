@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const MAX_TEXT_SUBTITLE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BINARY_SUBTITLE_BYTES: usize = 64 * 1024 * 1024;
 static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(1);
 
 const TEXT_EXTENSIONS: &[&str] = &[
@@ -36,7 +37,7 @@ pub async fn prepare(
     }
 
     if BINARY_EXTENSIONS.contains(&ext.as_str()) {
-        return prepare_binary(source_uri).await;
+        return prepare_binary(source_uri, file_name, cache_dir).await;
     }
 
     let bytes = if source_uri.starts_with("smb://") {
@@ -54,7 +55,7 @@ pub async fn prepare(
     // Preserve the old binary behavior rather than feeding binary bytes to an
     // encoding detector and creating a replacement-character-heavy text file.
     if ext == "sub" && looks_like_vobsub(&bytes) {
-        return prepare_binary(source_uri).await;
+        return prepare_binary(source_uri, file_name, cache_dir).await;
     }
 
     let text = decode_text(&bytes).context("字幕编码无法可靠识别")?;
@@ -76,7 +77,11 @@ pub async fn prepare(
     })
 }
 
-async fn prepare_binary(source_uri: &str) -> Result<PreparedSubtitle> {
+async fn prepare_binary(
+    source_uri: &str,
+    file_name: &str,
+    cache_dir: &str,
+) -> Result<PreparedSubtitle> {
     let proxy = if source_uri.starts_with("smb://") {
         Some(crate::smb::register_playable(source_uri).await?)
     } else if source_uri.starts_with("http://") || source_uri.starts_with("https://") {
@@ -90,11 +95,26 @@ async fn prepare_binary(source_uri: &str) -> Result<PreparedSubtitle> {
             temporary_path: None,
             proxy_url: Some(url),
         },
-        None => PreparedSubtitle {
-            uri: source_uri.to_string(),
-            temporary_path: None,
-            proxy_url: None,
-        },
+        None => {
+            // Local file: mpv's path-based open() is denied by the macOS
+            // sandbox even inside a started security scope, so stage a copy
+            // in the container cache like text subtitles.
+            let bytes = read_local_limited(source_uri, MAX_BINARY_SUBTITLE_BYTES + 1).await?;
+            if bytes.len() > MAX_BINARY_SUBTITLE_BYTES {
+                anyhow::bail!("字幕文件超过安全上限");
+            }
+            let ext = extension(file_name).context("字幕文件没有可识别的扩展名")?;
+            let path = std::path::Path::new(cache_dir).join(format!("{file_name}.{ext}.bin"));
+            tokio::fs::write(&path, &bytes)
+                .await
+                .context("写入二进制字幕缓存")?;
+            let path = path.to_string_lossy().to_string();
+            PreparedSubtitle {
+                uri: path.clone(),
+                temporary_path: Some(path),
+                proxy_url: None,
+            }
+        }
     })
 }
 

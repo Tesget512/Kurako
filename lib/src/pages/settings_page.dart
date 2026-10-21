@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
@@ -10,6 +11,7 @@ import '../services/bangumi_oauth.dart';
 import '../services/bangumi_mirror.dart';
 import '../services/media_source.dart';
 import '../services/scan_coordinator.dart';
+import '../services/security_scope.dart';
 import '../state/providers.dart';
 import 'about_page.dart';
 import 'appearance_settings_page.dart';
@@ -472,14 +474,38 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // on desktop it's the native folder picker. The source type is recorded so
     // the scanner knows how to enumerate it.
     final source = MediaSource.forNewFolder();
-    final folder = await source.pickFolder();
+    // macOS sandbox: the folder bookmark must be created from the open panel's
+    // own URL (it encodes the powerbox grant), so the panel lives in our
+    // native bridge there. Other platforms keep the plugin picker.
+    String? folder;
+    if (Platform.isMacOS) {
+      try {
+        folder = await SecurityScope.pickAndRetainFolder();
+      } catch (error) {
+        _snack('$error');
+        return;
+      }
+    } else {
+      folder = await source.pickFolder();
+    }
     if (folder == null || !mounted) return;
+    final pickedFolder = folder;
     if (ref.read(scanCoordinatorProvider).running) {
       _snack('扫描正在后台进行，请完成后再添加来源');
       return;
     }
     await _mutateSources(() async {
-      await rust.addLibraryFolder(path: folder, sourceType: source.sourceType);
+      await rust.addLibraryFolder(
+        path: pickedFolder,
+        sourceType: source.sourceType,
+      );
+      if (!Platform.isMacOS) {
+        try {
+          await SecurityScope.retain(pickedFolder);
+        } catch (error) {
+          _snack('文件夹已添加，但访问书签创建失败：$error');
+        }
+      }
     });
   }
 

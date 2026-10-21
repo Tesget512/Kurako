@@ -1003,7 +1003,16 @@ class _EpisodeTile extends ConsumerWidget {
         onSecondaryTapDown: (d) => _showMenu(context, ref, d.globalPosition),
         child: ListTile(
           leading: CircleAvatar(
-            child: Text(episode.episodeNo?.toString() ?? '?'),
+            // 4-digit episode numbers (or any manual value) must shrink to one
+            // line inside the 40px circle instead of soft-wrapping.
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                episode.episodeNo?.toString() ?? '?',
+                maxLines: 1,
+                softWrap: false,
+              ),
+            ),
           ),
           title: Text(
             episode.fileName,

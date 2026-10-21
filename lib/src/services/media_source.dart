@@ -3,12 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:path/path.dart' as p;
 import 'package:saf_util/saf_util.dart';
 import 'package:saf_util/saf_util_platform_interface.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/security_scope.dart';
 import 'external_player.dart' show smbUncPath, ensureUncAuth;
 import 'ios_platform.dart';
 
@@ -62,14 +64,23 @@ abstract class MediaSource {
       Platform.isAndroid ? SafMediaSource() : LocalMediaSource();
 }
 
+String localPlaybackUri(String path, {bool? windows}) =>
+    Uri.file(path, windows: windows ?? Platform.isWindows).toString();
+
 /// A resolved playable URI plus optional cleanup: SAF opens a file descriptor,
 /// SMB registers a proxy token — both must be released after playback.
 class PlayableHandle {
   final String uri;
   final int? fd;
   final bool networkProxy;
+  final Future<void> Function()? onRelease;
   bool _released = false;
-  PlayableHandle(this.uri, {this.fd, this.networkProxy = false});
+  PlayableHandle(
+    this.uri, {
+    this.fd,
+    this.networkProxy = false,
+    this.onRelease,
+  });
 
   Future<void> release() async {
     if (_released) return;
@@ -83,6 +94,12 @@ class PlayableHandle {
     if (networkProxy) {
       try {
         await rust.releaseNetworkUrl(url: uri);
+      } catch (_) {}
+    }
+    final releaseScope = onRelease;
+    if (releaseScope != null) {
+      try {
+        await releaseScope();
       } catch (_) {}
     }
   }
@@ -125,12 +142,72 @@ class LocalMediaSource extends MediaSource {
 
   @override
   Future<PlayableHandle> resolvePlayable(Episode episode) async {
-    return PlayableHandle('file:///${episode.filePath}');
+    var path = episode.filePath;
+    // macOS sandbox: the folder picker's grant does not survive a relaunch;
+    // start the retained security-scoped access before anything reads the
+    // file. The player releases it with the handle.
+    if (Platform.isMacOS) {
+      // The bookmark is per FOLDER, so access() returns that folder as the
+      // scope path. The playable file path must stay the episode's own file —
+      // using the folder here made every previous transport (file, fd://,
+      // loopback HTTP) try to open a directory.
+      final scope = await SecurityScope.access(path);
+      path = scope.path;
+      // Kernel + mpv evidence: even with the scope active, mpv's own
+      // path-based open() is denied (file-read-data on the volume root during
+      // path resolution), and fd:// reaches mpv but its demuxer cannot probe
+      // the descriptor ("Failed to recognize file format"). Serve the bytes
+      // through the same loopback HTTP mechanism SMB/WebDAV already uses:
+      // Rust opens the file (allowed while the scope is held) and mpv
+      // plays a Range-capable http:// URL — no file-system access needed.
+      var stage = 'register';
+      String? url;
+      try {
+        final playableUrl = await rust.localPlayableUrl(path: path);
+        url = playableUrl;
+        stage = 'verify';
+        await _verifyLoopbackStream(playableUrl, sourceName: '本地文件');
+        return PlayableHandle(
+          playableUrl,
+          onRelease: () async {
+            try {
+              await rust.releaseNetworkUrl(url: playableUrl);
+            } catch (_) {}
+            await SecurityScope.release(scope.scopePath);
+          },
+        );
+      } catch (error) {
+        if (kDebugMode) {
+          debugPrint(
+            'kurako/local-playback $stage failed: ${error.runtimeType}',
+          );
+        }
+        if (url != null) {
+          try {
+            await rust.releaseNetworkUrl(url: url);
+          } catch (_) {}
+        }
+        await SecurityScope.release(scope.scopePath);
+        rethrow;
+      }
+    }
+    return PlayableHandle(localPlaybackUri(path));
   }
 
   @override
   Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async {
-    return listLocalSubtitles(episode.filePath);
+    var path = episode.filePath;
+    if (Platform.isMacOS) {
+      // listSubtitles runs while playback access is already active; keep it
+      // that way for standalone reads by pairing a temporary access.
+      final scope = await SecurityScope.access(path);
+      try {
+        return await listLocalSubtitles(scope.path);
+      } finally {
+        await SecurityScope.release(scope.scopePath);
+      }
+    }
+    return listLocalSubtitles(path);
   }
 }
 
@@ -320,7 +397,7 @@ class SmbMediaSource extends MediaSource {
     // Prefer a downloaded local copy — instant, no network, seekable.
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
     if (local != null) {
-      return PlayableHandle('file:///$local');
+      return PlayableHandle(localPlaybackUri(local));
     }
     // Windows: play the UNC path directly through the OS SMB redirector, exactly
     // like the external player. Windows keeps ONE persistent authenticated
@@ -335,15 +412,17 @@ class SmbMediaSource extends MediaSource {
         return PlayableHandle(unc);
       }
     }
-    // Other platforms (Android/macOS/Linux) have no UNC: register with the local
-    // proxy; libmpv plays the http:// URL.
+    // Other platforms (Android/macOS/Linux) have no UNC: register with the
+    // local proxy; libmpv plays the http:// URL.
     final url = await rust.smbPlayableUrl(smbUri: episode.filePath);
-    if (Platform.isIOS) {
-      // Validate the exact loopback route through iOS' own network stack before
-      // giving it to libmpv. This turns the old endless spinner into a concrete
-      // SMB/proxy error and also warms the authenticated SMB session.
+    if (usesLoopbackProxy) {
+      // Validate the exact loopback route through the platform network stack
+      // before handing it to libmpv. This turns "SMB session + proxy + mpv
+      // demux all at once" into "session established during warmup", which is
+      // the difference between a slow first play and an apparently hung one.
+      // Failures surface here as a concrete error instead of an mpv spinner.
       try {
-        await _verifyIosLoopbackStream(url, sourceName: 'SMB');
+        await _verifyLoopbackStream(url, sourceName: 'SMB');
       } catch (_) {
         // smbPlayableUrl already registered the proxy token; no PlayableHandle
         // is ever constructed on this path, so release it here or it leaks.
@@ -415,11 +494,11 @@ class WebDavMediaSource extends MediaSource {
   @override
   Future<PlayableHandle> resolvePlayable(Episode episode) async {
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
-    if (local != null) return PlayableHandle('file:///$local');
+    if (local != null) return PlayableHandle(localPlaybackUri(local));
     final url = await rust.webdavPlayableUrl(remoteUri: episode.filePath);
-    if (Platform.isIOS) {
+    if (usesLoopbackProxy) {
       try {
-        await _verifyIosLoopbackStream(url, sourceName: 'WebDAV');
+        await _verifyLoopbackStream(url, sourceName: 'WebDAV');
       } catch (_) {
         try {
           await rust.releaseNetworkUrl(url: url);
@@ -442,10 +521,17 @@ class WebDavMediaSource extends MediaSource {
   }
 }
 
-/// Fetch one byte through the Rust loopback proxy using URLSession's Dart
-/// equivalent. media_kit otherwise only reports a permanent "loading" state
-/// when iOS cannot connect to 127.0.0.1 or the SMB server rejects the request.
-Future<void> _verifyIosLoopbackStream(
+/// Platforms whose remote playback goes through the Rust loopback HTTP proxy:
+/// iOS and macOS have no UNC path, so libmpv plays `http://127.0.0.1/...`.
+/// Windows plays UNC directly and Android uses SAF file descriptors.
+bool get usesLoopbackProxy => Platform.isIOS || Platform.isMacOS;
+
+/// Fetch one byte through the Rust loopback proxy using the Dart HTTP stack.
+/// media_kit otherwise only reports a permanent "loading" state when the
+/// platform cannot connect to 127.0.0.1 or the SMB server rejects the request.
+/// Also warms the authenticated SMB session, so mpv's first demux reads find
+/// an established connection instead of building one under load.
+Future<void> _verifyLoopbackStream(
   String url, {
   required String sourceName,
 }) async {
@@ -470,7 +556,7 @@ Future<void> _verifyIosLoopbackStream(
       throw HttpException('$sourceName 串流未返回视频数据');
     }
   } on SocketException catch (e) {
-    throw StateError('无法连接 iOS 本机 $sourceName 中转：${e.message}');
+    throw StateError('无法连接本机 $sourceName 中转：${e.message}');
   } on TimeoutException {
     throw StateError('$sourceName 中转连接超时，请检查服务器与网络连接');
   } finally {

@@ -1709,6 +1709,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "chardetng",
+ "core-foundation-sys",
  "encoding_rs",
  "flutter_rust_bridge",
  "futures",

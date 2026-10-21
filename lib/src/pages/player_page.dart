@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +22,7 @@ import '../services/ios_platform.dart';
 import '../services/media_source.dart';
 import '../services/media_session.dart';
 import '../services/playback_metadata.dart';
+import '../services/playback_start.dart';
 import '../state/providers.dart';
 import '../state/player_appearance.dart';
 import '../widgets/player_visuals.dart';
@@ -75,6 +77,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       libass: true,
       libassAndroidFont: 'assets/fonts/LXGWWenKaiGBScreen.ttf',
       libassAndroidFontName: 'LXGW WenKai GB Screen',
+      // The player page surfaces warn/error lines through stream.log; the
+      // default (error-only) hid file-open/demux failures during slow starts.
+      logLevel: MPVLogLevel.warn,
     ),
   );
   // Decoder mode is read once at construction (VideoControllerConfiguration is
@@ -145,6 +150,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   StreamSubscription? _durationSub;
   StreamSubscription? _tracksSub;
   StreamSubscription? _completedSub;
+  StreamSubscription? _logSub;
   // External subtitle files next to the video (auto-loaded; listed in the
   // track sheet so the user can switch between them).
   List<SubtitleCandidate> _extSubs = const [];
@@ -391,19 +397,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     }
   }
 
-  // Bounded retry for a stuck/occupied open (e.g. a file another player just
-  // released is still momentarily locked — commonly hit switching from the
-  // external player back to this one for the same episode). media_kit's
-  // `open()` doesn't throw for a file that never actually loads — it just sits
-  // spinning — so success is confirmed by watching for a real duration within
-  // [_openWatchdog]; a timeout retries after [_openRetryGap], up to
-  // [_maxOpenAttempts], then reports a real error instead of spinning forever.
-  static const int _maxOpenAttempts = 3;
-  static const Duration _openWatchdog = Duration(seconds: 7);
-  static const Duration _openRetryGap = Duration(seconds: 3);
+  static const int _maxOpenAttempts = 2;
+  static const Duration _openRetryGap = Duration(seconds: 2);
 
   Future<void> _openEpisode(int seq, Episode episode) async {
     if (!mounted || seq != _openSeq) return;
+    // Debug-only stage timings: scheme + stage + elapsed only — never file
+    // names, full URIs or proxy tokens, which can carry private paths.
+    final openStopwatch = Stopwatch()..start();
+    void trace(String stage) {
+      if (!kDebugMode) return;
+      final uriScheme = _handle?.uri.split(':').first;
+      debugPrint(
+        'kurako/open[$seq] +${openStopwatch.elapsedMilliseconds}ms $stage'
+        '${uriScheme == null ? '' : ' via=$uriScheme'}',
+      );
+    }
+
+    trace('start');
     _resumed = false;
     _subtitlePreferenceApplied = false;
     _audioPreferenceApplied = false;
@@ -442,8 +453,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           return;
         }
         _handle = handle;
-        await _player.open(Media(handle.uri));
-        if (seq != _openSeq) {
+        trace('resolved');
+        final waiter = PlaybackStartWaiter(_player, _openGeneration, seq);
+        PlaybackStartResult startResult;
+        try {
+          await _player.open(Media(handle.uri));
+          trace('open returned');
+          _acceptPlaybackEvents = mounted && seq == _openSeq;
+          _durationMs = _player.state.duration.inMilliseconds;
+          startResult = await waiter.wait(
+            playbackStartTimeout(
+              remote: handle.networkProxy || handle.uri.startsWith(r'\\'),
+            ),
+          );
+          trace(startResult.name);
+        } finally {
+          await waiter.dispose();
+        }
+        if (seq != _openSeq || !mounted) {
           if (identical(_handle, handle)) _handle = null;
           try {
             await _player.stop();
@@ -451,23 +478,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           await handle.release();
           return;
         }
-        // Player.open has synchronously stopped/reset the previous media before
-        // returning; events arriving from here belong to this generation.
-        _acceptPlaybackEvents = true;
-        final loaded = await _waitForLoadedDuration(_openWatchdog, seq: seq);
-        if (seq != _openSeq) {
-          if (identical(_handle, handle)) _handle = null;
-          try {
-            await _player.stop();
-          } catch (_) {}
-          await handle.release();
-          return;
-        }
-        if (loaded) {
-          await _applyConfiguredSuperResolution(seq);
-          if (seq != _openSeq) return;
-          _loadExternalSubtitles(seq, episode);
-          _loadChapters(seq);
+        if (startResult == PlaybackStartResult.ready) {
+          // The video is playable the moment readiness fires; shaders,
+          // sidecar subtitles and chapters only decorate it. Applying the
+          // shader inline used to block them behind prefs load + shader
+          // extraction + an mpv round-trip, stretching the perceived
+          // startup for seconds. All three paths re-check [seq] internally,
+          // so running them concurrently cannot leak into the next episode.
+          if (mounted && seq == _openSeq) {
+            unawaited(_applyConfiguredSuperResolution(seq));
+            _loadExternalSubtitles(seq, episode);
+            _loadChapters(seq);
+          }
           break;
         }
         _acceptPlaybackEvents = false;
@@ -476,17 +498,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         } catch (_) {}
         if (identical(_handle, handle)) _handle = null;
         await handle.release();
-        if (attempt == _maxOpenAttempts) {
-          if (mounted && seq == _openSeq) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('视频加载超时，可能被其他播放器占用，请稍后重试')),
-            );
-          }
-          break;
+        if (startResult == PlaybackStartResult.failed &&
+            attempt < _maxOpenAttempts) {
+          await Future.delayed(_openRetryGap);
+          if (seq != _openSeq) return;
+          continue;
         }
-        await Future.delayed(_openRetryGap);
-        if (seq != _openSeq) return;
+        if (mounted && seq == _openSeq) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                startResult == PlaybackStartResult.failed
+                    ? '视频加载失败，请检查媒体来源、网络或文件访问权限。'
+                    : '视频加载超时，请检查媒体来源、网络或文件访问权限后重试。',
+              ),
+            ),
+          );
+        }
+        break;
       } catch (e) {
+        trace('failed ${e.runtimeType}');
         if (seq == _openSeq) {
           _acceptPlaybackEvents = false;
           try {
@@ -504,9 +535,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         }
         if (attempt == _maxOpenAttempts) {
           if (mounted && seq == _openSeq) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(SnackBar(content: Text('无法打开视频: $e')));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('无法打开视频，请检查媒体来源、网络或文件访问权限。')),
+            );
           }
           break;
         }
@@ -885,6 +916,19 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         unawaited(_handlePlaybackCompleted());
       }
     });
+    // mpv otherwise reports nothing when a local file never produces a
+    // duration (file-not-found, demux hang...): the wait just times out with
+    // no evidence. Surface warn/error log lines in Debug only; the text can
+    // contain the media path, so print the prefix and level with a trimmed
+    // reason instead of the full line.
+    _logSub = _player.stream.log.listen((entry) {
+      if (!kDebugMode || entry.level != 'warn' && entry.level != 'error') {
+        return;
+      }
+      debugPrint(
+        'kurako/mpv[${entry.level}] ${entry.prefix}: ${entry.text.split('\n').first}',
+      );
+    });
     _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) => _save());
   }
 
@@ -1211,6 +1255,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _durationSub?.cancel();
     _tracksSub?.cancel();
     _completedSub?.cancel();
+    _logSub?.cancel();
     _selectedSubtitle.dispose();
     _episodeIndex.dispose();
     _episodeScrollController?.dispose();

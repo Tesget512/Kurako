@@ -57,6 +57,11 @@ Future<OAuthResult> oauthRefresh({required String refreshToken}) =>
 /// proxy the Rust HTTP client uses.
 Future<String?> systemProxy() => RustLib.instance.api.crateApiSystemProxy();
 
+/// Register a sandboxed local file for loopback playback and return its
+/// `http://127.0.0.1:port/<token>` URL. Released via [release_network_url].
+Future<String> localPlayableUrl({required String path}) =>
+    RustLib.instance.api.crateApiLocalPlayableUrl(path: path);
+
 Future<LibraryFolder> addLibraryFolder({
   required String path,
   required String sourceType,

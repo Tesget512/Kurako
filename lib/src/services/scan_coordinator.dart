@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -5,6 +7,7 @@ import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/media_source.dart';
 import '../services/bangumi_mirror.dart';
+import '../services/security_scope.dart';
 import '../state/providers.dart';
 
 /// Synchronous reservation shared with maintenance/source mutations.
@@ -25,18 +28,91 @@ final scanCoordinatorProvider =
       );
     });
 
+/// Per-folder aggregates parsed from a scan event's `stats:` line.
+class FolderScanStats {
+  final String folderId;
+  final int checked;
+  final int changed;
+  final int removed;
+  const FolderScanStats({
+    required this.folderId,
+    required this.checked,
+    required this.changed,
+    required this.removed,
+  });
+}
+
+/// Parsed structured lines from one scan event's message.
+class ScanEventFacts {
+  final FolderScanStats? stats;
+  final List<String> unmatched;
+  final String? matchAttempted;
+  const ScanEventFacts({
+    this.stats,
+    this.unmatched = const [],
+    this.matchAttempted,
+  });
+
+  /// Lines starting with `stats:` / `unmatched:` / `match-attempted:` are
+  /// structured summary data appended by Rust; everything else is the
+  /// human-readable status line.
+  static ScanEventFacts parse(String message) {
+    FolderScanStats? stats;
+    final unmatched = <String>[];
+    String? matchAttempted;
+    final status = <String>[];
+    for (final line in message.split('\n')) {
+      if (line.startsWith('stats: ')) {
+        final fields = Map.fromEntries(
+          line.substring(7).split('|').map((part) {
+            final kv = part.split('=');
+            return kv.length == 2 ? MapEntry(kv[0], kv[1]) : null;
+          }).nonNulls,
+        );
+        final folderId = fields['folder'];
+        if (folderId != null) {
+          stats = FolderScanStats(
+            folderId: folderId,
+            checked: int.tryParse(fields['checked'] ?? '') ?? 0,
+            changed: int.tryParse(fields['changed'] ?? '') ?? 0,
+            removed: int.tryParse(fields['removed'] ?? '') ?? 0,
+          );
+        }
+      } else if (line.startsWith('unmatched: ')) {
+        final title = line.substring(11).trim();
+        if (title.isNotEmpty) unmatched.add(title);
+      } else if (line.startsWith('match-attempted: ')) {
+        matchAttempted = line.substring(17).trim();
+      } else {
+        status.add(line);
+      }
+    }
+    return ScanEventFacts(
+      stats: stats,
+      unmatched: unmatched,
+      matchAttempted: matchAttempted,
+    );
+  }
+}
+
 class ScanState {
   final bool running;
   final bool cancelling;
   final ScanProgress? progress;
   final String? error;
   final List<String> warnings;
+  final Map<String, FolderScanStats> folders;
+  final List<String> unmatchedTitles;
+  final String? matchAttempted;
   const ScanState({
     this.running = false,
     this.cancelling = false,
     this.progress,
     this.error,
     this.warnings = const [],
+    this.folders = const {},
+    this.unmatchedTitles = const [],
+    this.matchAttempted,
   });
 
   bool get visible => running || progress != null || error != null;
@@ -44,7 +120,11 @@ class ScanState {
       ? '正在停止扫描…'
       : error != null
       ? '扫描失败：$error'
-      : progress?.message ?? '准备扫描…';
+      : (progress?.message.split('\n').first).takeIfNonEmpty() ?? '准备扫描…';
+}
+
+extension _StringX on String? {
+  String? takeIfNonEmpty() => this == null || this!.isEmpty ? null : this;
 }
 
 /// The injectable boundary keeps lifecycle tests independent of FRB/devices.
@@ -90,6 +170,24 @@ class RustScanBackend implements ScanBackend {
     bool Function() isCancelled,
   ) async {
     if (folder.sourceType == 'local') {
+      // macOS sandbox: re-activate the folder's security-scoped access for
+      // the duration of this enumeration (Rust walkdir needs open() too).
+      if (Platform.isMacOS) {
+        try {
+          final scope = await SecurityScope.access(folder.path);
+          try {
+            final batch = await rust.enumerateLocalFolder(
+              folderId: folder.id,
+              incremental: incremental,
+            );
+            return batch.files;
+          } finally {
+            await SecurityScope.release(scope.scopePath);
+          }
+        } on SecurityScopeException catch (error) {
+          throw StateError('无法访问文件夹：${error.message}');
+        }
+      }
       return (await rust.enumerateLocalFolder(
         folderId: folder.id,
         incremental: incremental,
@@ -136,12 +234,23 @@ class ScanCoordinator extends StateNotifier<ScanState> {
   }
 
   void _progress(ScanProgress progress) {
+    final facts = ScanEventFacts.parse(progress.message);
     _publish(
       ScanState(
         running: true,
         cancelling: _cancelRequested,
         progress: progress,
         warnings: state.warnings,
+        folders: facts.stats == null
+            ? state.folders
+            : {...state.folders, facts.stats!.folderId: facts.stats!},
+        unmatchedTitles: facts.unmatched.isEmpty
+            ? state.unmatchedTitles
+            : {
+                for (final title in state.unmatchedTitles) title,
+                ...facts.unmatched,
+              }.toList(),
+        matchAttempted: facts.matchAttempted ?? state.matchAttempted,
       ),
     );
   }
@@ -234,10 +343,15 @@ class ScanCoordinator extends StateNotifier<ScanState> {
       }
       if (mounted) {
         if (changed) onLibraryChanged();
+        // Keep the accumulated session stats visible after the scan ends: the
+        // detail sheet stays inspectable until the user dismisses the bar.
         _publish(
           ScanState(
             error: error,
             warnings: state.warnings,
+            folders: state.folders,
+            unmatchedTitles: state.unmatchedTitles,
+            matchAttempted: state.matchAttempted,
             progress: ScanProgress(
               stage: _cancelRequested ? 'cancelled' : 'done',
               current: 0,
@@ -265,6 +379,9 @@ class ScanCoordinator extends StateNotifier<ScanState> {
         cancelling: true,
         progress: state.progress,
         warnings: state.warnings,
+        folders: state.folders,
+        unmatchedTitles: state.unmatchedTitles,
+        matchAttempted: state.matchAttempted,
       ),
     );
     if (_ownsSession) await backend.cancel();

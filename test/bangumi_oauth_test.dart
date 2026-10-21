@@ -136,7 +136,7 @@ void main() {
     // Unknown/transport failures fall back to a network hint.
     expect(
       bangumiLoginFailureMessage(Exception('oauth token request failed')),
-      contains('网络'),
+      contains('系统代理'),
     );
     // An OAuthException keeps its own precise message.
     expect(

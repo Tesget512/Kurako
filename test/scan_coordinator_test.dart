@@ -61,7 +61,7 @@ class FakeScanBackend implements ScanBackend {
       stage: 'scanning',
       current: 1,
       total: 1,
-      message: 'ok',
+      message: 'ok\nstats: folder=7|checked=10|changed=3|removed=1',
     );
   }
 
@@ -72,7 +72,7 @@ class FakeScanBackend implements ScanBackend {
       stage: 'done',
       current: 1,
       total: 1,
-      message: 'ok',
+      message: '完成\nmatch-attempted: 2/3\nunmatched: 剧场版 A\nunmatched: 剧场版 B',
     );
   }
 }
@@ -137,4 +137,31 @@ void main() {
     expect(backend.closes, 1);
     expect(backend.awakeCalls.last, false);
   });
+
+  test(
+    'structured scan events accumulate per-folder stats and unmatched',
+    () async {
+      final backend = FakeScanBackend();
+      final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+      final run = coordinator.start();
+      await backend.entered.future;
+      backend.enumerated.complete([]);
+      await run;
+      expect(coordinator.state.folders['7']?.checked, 10);
+      expect(coordinator.state.folders['7']?.changed, 3);
+      expect(coordinator.state.folders['7']?.removed, 1);
+      expect(coordinator.state.matchAttempted, '2/3');
+      expect(coordinator.state.unmatchedTitles, ['剧场版 A', '剧场版 B']);
+      // The status bar keeps showing only the human-readable first line; the
+      // coordinator's closing event uses its own summary wording.
+      expect(coordinator.state.label, '扫描完成');
+      // Parsing is side-effect free: the plain event stays a plain event.
+      final plain = ScanEventFacts.parse('检查 10 个视频');
+      expect(plain.stats, isNull);
+      expect(plain.unmatched, isEmpty);
+      coordinator.dismiss();
+      expect(coordinator.state.visible, false);
+      coordinator.dispose();
+    },
+  );
 }

@@ -36,18 +36,7 @@ class ScanProgressSheet extends ConsumerWidget {
               icon: const Icon(Icons.info_outline, size: 20),
               onPressed: () => showDialog<void>(
                 context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('扫描详情'),
-                  content: SingleChildScrollView(
-                    child: Text([state.label, ...state.warnings].join('\n\n')),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('关闭'),
-                    ),
-                  ],
-                ),
+                builder: (_) => const ScanDetailDialog(),
               ),
             ),
             IconButton(
@@ -60,6 +49,73 @@ class ScanProgressSheet extends ConsumerWidget {
               icon: Icon(state.running ? Icons.stop : Icons.close, size: 20),
             ),
           ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Live view of the running (or just-finished) scan session: per-folder file
+/// counts, the match progress and every title that still needs a match.
+/// Watches the coordinator directly, so it keeps updating while open.
+class ScanDetailDialog extends ConsumerWidget {
+  const ScanDetailDialog({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(scanCoordinatorProvider);
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('扫描详情'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            spacing: 12,
+            children: [
+              Text(state.label, style: theme.textTheme.bodyMedium),
+              if (state.matchAttempted != null)
+                Text(
+                  '自动匹配：${state.matchAttempted}',
+                  style: theme.textTheme.bodySmall,
+                ),
+              if (state.folders.isNotEmpty) ...[
+                Text('文件夹', style: theme.textTheme.titleSmall),
+                for (final stats in state.folders.values)
+                  Text(
+                    '文件夹 ${stats.folderId}：检查 ${stats.checked} · '
+                    '新增/变化 ${stats.changed} · 清理 ${stats.removed}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+              ],
+              if (state.warnings.isNotEmpty) ...[
+                Text('警告', style: theme.textTheme.titleSmall),
+                for (final warning in state.warnings)
+                  Text(
+                    warning,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+              ],
+              if (state.unmatchedTitles.isNotEmpty) ...[
+                Text(
+                  '未匹配番剧（${state.unmatchedTitles.length}）',
+                  style: theme.textTheme.titleSmall,
+                ),
+                for (final title in state.unmatchedTitles)
+                  Text('· $title', style: theme.textTheme.bodySmall),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
         ),
       ],
     );

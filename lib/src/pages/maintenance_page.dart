@@ -10,6 +10,7 @@ import '../rust/api.dart' as rust;
 import '../services/scan_coordinator.dart';
 import '../services/configuration_backup.dart';
 import '../services/bangumi_mirror.dart';
+import '../services/security_scope.dart';
 import '../state/player_appearance.dart';
 import '../state/providers.dart';
 import '../widgets/window_caption.dart';
@@ -186,6 +187,11 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
                       final picked = await FilePicker.platform
                           .getDirectoryPath();
                       if (picked != null && mounted && !_maintenanceBusy) {
+                        // macOS sandbox: keep the picked download folder
+                        // reachable across launches as well.
+                        try {
+                          await SecurityScope.retain(picked);
+                        } catch (_) {}
                         await ref
                             .read(downloadDirProvider.notifier)
                             .set(picked);

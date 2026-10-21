@@ -31,12 +31,14 @@ const MethodChannel _desktopOAuthChannel = MethodChannel(
 /// 2. capture Bangumi's `kurako://oauth/callback?code=...` redirect,
 /// 3. exchange the one-time code (valid for 60 seconds) for tokens in Rust.
 ///
-/// Apple/Android use the platform authentication session. Windows/Linux use
-/// the user's default browser and a registered `kurako://` protocol handler,
-/// which keeps the one callback registered for all platforms while sharing the
-/// browser's existing Bangumi login.
+/// iOS/Android use the platform authentication session. Desktop platforms use
+/// the default browser and a registered `kurako://` protocol handler.
 class BangumiOAuth {
-  static Completer<String>? _activeDesktopCallback;
+  static final _desktopSession = DesktopOAuthSession(
+    channel: _desktopOAuthChannel,
+    launch: (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
+    nativeHandshake: Platform.isMacOS,
+  );
 
   /// Runs the full flow and returns the tokens, or throws on error/timeout.
   static Future<OAuthResult> login({
@@ -49,8 +51,8 @@ class BangumiOAuth {
         .toString();
     String callbackUrl;
     try {
-      callbackUrl = Platform.isWindows || Platform.isLinux
-          ? await _authenticateWithDesktopBrowser(authUrl, timeout)
+      callbackUrl = Platform.isWindows || Platform.isLinux || Platform.isMacOS
+          ? await _desktopSession.authenticate(authUrl, state, timeout)
           : await FlutterWebAuth2.authenticate(
               url: authUrl,
               callbackUrlScheme: _kCallbackScheme,
@@ -74,46 +76,73 @@ class BangumiOAuth {
     }
   }
 
-  static Future<String> _authenticateWithDesktopBrowser(
-    String authUrl,
-    Duration timeout,
-  ) async {
-    if (_activeDesktopCallback != null) {
-      throw const OAuthException('已有 Bangumi 授权正在进行，请先在浏览器中完成。');
-    }
-    final callback = Completer<String>();
-    _activeDesktopCallback = callback;
-    _desktopOAuthChannel.setMethodCallHandler((call) async {
-      if (call.method != 'onOAuthCallback' || callback.isCompleted) return;
-      final url = call.arguments;
-      if (url is! String) return;
-      final uri = Uri.tryParse(url);
-      if (uri != null && _isOAuthCallback(uri)) callback.complete(url);
-    });
-    try {
-      final opened = await launchUrl(
-        Uri.parse(authUrl),
-        mode: LaunchMode.externalApplication,
-      );
-      if (!opened) {
-        throw const OAuthException('无法打开系统默认浏览器，请检查桌面默认浏览器设置。');
-      }
-      return await callback.future.timeout(
-        timeout,
-        onTimeout: () => throw const OAuthException('授权超时，请重试'),
-      );
-    } finally {
-      if (identical(_activeDesktopCallback, callback)) {
-        _desktopOAuthChannel.setMethodCallHandler(null);
-        _activeDesktopCallback = null;
-      }
-    }
-  }
-
   static String _newOAuthState() {
     final random = Random.secure();
     final bytes = List<int>.generate(24, (_) => random.nextInt(256));
     return base64UrlEncode(bytes).replaceAll('=', '');
+  }
+}
+
+/// One in-process desktop authorization; callbacks from older attempts are ignored.
+class DesktopOAuthSession {
+  final MethodChannel channel;
+  final Future<bool> Function(Uri) launch;
+  final bool nativeHandshake;
+  Completer<String>? _active;
+
+  DesktopOAuthSession({
+    required this.channel,
+    required this.launch,
+    this.nativeHandshake = false,
+  });
+
+  Future<String> authenticate(
+    String authUrl,
+    String expectedState,
+    Duration timeout,
+  ) async {
+    if (_active != null) {
+      throw const OAuthException('已有 Bangumi 授权正在进行，请先在浏览器中完成。');
+    }
+    final callback = Completer<String>();
+    _active = callback;
+    channel.setMethodCallHandler((call) async {
+      final value = call.arguments;
+      if (call.method != 'onOAuthCallback' ||
+          callback.isCompleted ||
+          value is! String) {
+        return false;
+      }
+      final uri = Uri.tryParse(value);
+      if (uri == null ||
+          !_isOAuthCallback(uri) ||
+          uri.queryParametersAll['state']?.length != 1 ||
+          uri.queryParameters['state'] != expectedState) {
+        return false;
+      }
+      callback.complete(value);
+      return true;
+    });
+    try {
+      if (nativeHandshake) await channel.invokeMethod<void>('beginOAuth');
+      if (!await launch(Uri.parse(authUrl))) {
+        throw const OAuthException('无法打开系统默认浏览器，请检查桌面默认浏览器设置。');
+      }
+      return await callback.future.timeout(
+        timeout,
+        onTimeout: () => throw const OAuthException('授权超时，请重新登录'),
+      );
+    } finally {
+      if (nativeHandshake) {
+        try {
+          await channel.invokeMethod<void>('endOAuth');
+        } catch (_) {}
+      }
+      if (identical(_active, callback)) {
+        channel.setMethodCallHandler(null);
+        _active = null;
+      }
+    }
   }
 }
 
@@ -189,6 +218,11 @@ String bangumiLoginFailureMessage(Object error) {
   }
   if (text.contains('oauth request http')) {
     return 'Bangumi 授权服务返回错误，请稍后重试或检查网络与代理。';
+  }
+  if (text.contains('oauth token request failed') ||
+      text.contains('oauth client initialization') ||
+      text.contains('oauth proxy configuration')) {
+    return '无法连接 Bangumi 授权服务，请检查系统代理是否允许本地应用访问后重试。';
   }
   return '无法连接 Bangumi 授权服务，请检查网络及代理后重试。';
 }

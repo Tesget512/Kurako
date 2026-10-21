@@ -10,6 +10,7 @@ use crate::models::{
 use crate::{bangumi, db, recognize, scan, scan_control, sidecar, smb};
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
+use std::fmt::Write as _;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 
@@ -193,6 +194,24 @@ pub fn oauth_refresh(refresh_token: String) -> Result<OAuthResult, String> {
 /// proxy the Rust HTTP client uses.
 pub fn system_proxy() -> Option<String> {
     bangumi::detect_system_proxy()
+}
+
+// ---- Sandboxed local-file playback (macOS) ----
+//
+// Kernel evidence: with the App Sandbox enabled, even an active
+// security-scoped bookmark lets only THIS process's Rust std::fs reads through
+// (library scanning succeeds), while libmpv's own path-based open() is denied
+// (file-read-data on the volume root during path resolution), and the fd://
+// pseudo-protocol reaches mpv but its demuxer cannot probe the descriptor
+// ("Failed to recognize file format"). The proven mechanism — already used by
+// SMB/WebDAV playback — is a Range-capable loopback HTTP server: Rust opens
+// the file (allowed while the Dart side holds the security scope), mpv plays
+// an http:// URL and needs no file-system access at all.
+
+/// Register a sandboxed local file for loopback playback and return its
+/// `http://127.0.0.1:port/<token>` URL. Released via [release_network_url].
+pub fn local_playable_url(path: String) -> Result<String, String> {
+    crate::local_proxy::register_playable(&path).map_err(|e| format!("{e:#}"))
 }
 
 // ---- Library folders ----
@@ -665,6 +684,7 @@ pub fn prepare_subtitle(
 pub fn release_network_url(url: String) {
     smb::unregister_playable(&url);
     crate::webdav::unregister_playable(&url);
+    crate::local_proxy::unregister_playable(&url);
 }
 
 /// Cumulative bytes streamed by the SMB proxy. Dart polls this once a second
@@ -1028,8 +1048,12 @@ fn process_groups(
         current: changed_count as i64,
         total: changed_count as i64,
         message: format!(
-            "检查 {} 个视频，处理 {changed_count} 个新增/变化文件，清理 {removed} 个失效文件",
-            files.len()
+            // First line stays human-readable; the `stats:` line is parsed by
+            // the Dart scan-detail sheet into per-folder aggregates.
+            "检查 {} 个视频，处理 {changed_count} 个新增/变化文件，清理 {removed} 个失效文件\n\
+             stats: folder={folder_id}|checked={checked}|changed={changed_count}|removed={removed}",
+            files.len(),
+            checked = files.len(),
         ),
     });
     Ok(())
@@ -1133,7 +1157,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
 
     RT.block_on(async {
         use futures::stream::{self, StreamExt};
-        stream::iter(unmatched)
+        stream::iter(unmatched.clone())
             // Bounded concurrency: parallel matching speeds up large scans, but
             // Bangumi rate-limits, and a 429 on the full-title query degrades
             // match quality — 4 is the sweet spot (via the mainland mirror).
@@ -1316,20 +1340,36 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
         } else {
             ""
         };
+        let mut message = format!(
+            "媒体扫描已完成，但{reason}，部分自动匹配与收藏同步未完成{detail}{mirror_help}"
+        );
+        for (_, title) in &unmatched {
+            let _ = writeln!(message, "unmatched: {title}");
+        }
         let _ = sink.add(ScanProgress {
             stage: "warning".to_string(),
             current: done.load(std::sync::atomic::Ordering::Relaxed),
             total: match_total,
-            message: format!(
-                "媒体扫描已完成，但{reason}，部分自动匹配与收藏同步未完成{detail}{mirror_help}"
-            ),
+            message,
         });
     } else {
+        // Structured summary lines for the scan-detail sheet, followed by the
+        // human-readable status line. The Dart coordinator parses lines that
+        // start with "unmatched:" / "match-failed:"; everything else stays the
+        // plain status message.
+        let mut message = String::from("完成");
+        if match_total > 0 {
+            let matched = done.load(std::sync::atomic::Ordering::Relaxed);
+            let _ = writeln!(message, "match-attempted: {matched}/{match_total}");
+            for (_, title) in &unmatched {
+                let _ = writeln!(message, "unmatched: {title}");
+            }
+        }
         let _ = sink.add(ScanProgress {
             stage: "done".to_string(),
             current: match_total,
             total: match_total,
-            message: "完成".to_string(),
+            message,
         });
     }
     Ok(())

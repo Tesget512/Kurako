@@ -388,6 +388,12 @@ pub fn detect_system_proxy() -> Option<String> {
             }
         }
     }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(p) = crate::macos_proxy::system_proxy() {
+            return Some(p);
+        }
+    }
     #[cfg(windows)]
     {
         if let Some(p) = read_windows_proxy() {

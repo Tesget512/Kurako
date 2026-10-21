@@ -7,12 +7,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/bangumi_mirror.dart';
+import '../services/cover_repository.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 
 /// The list of anime in the library.
 final animeListProvider = FutureProvider.autoDispose<List<Anime>>((ref) async {
-  return rust.listAnime();
+  final anime = await rust.listAnime();
+  CoverRepository.instance.warmLibrary(
+    anime.map((item) => item.coverUrl),
+    BangumiMirrorService.instance,
+  );
+  return anime;
 });
 
 /// A single anime's detail (refreshes when invalidated).
@@ -550,6 +556,15 @@ class _MirrorNotifier extends StateNotifier<bool> {
       requestedEnabled: prefs.getBool('bangumi_mirror') ?? false,
     );
     _sync();
+    if (BangumiMirrorService.instance.enabled) {
+      try {
+        final anime = await rust.listAnime();
+        CoverRepository.instance.warmLibrary(
+          anime.map((item) => item.coverUrl),
+          BangumiMirrorService.instance,
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> set(bool value) async {

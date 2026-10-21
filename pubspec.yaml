@@ -87,6 +87,9 @@ dependencies:
   # downloaded file. Already present transitively, now used directly.
   crypto: ^3.0.7
 
+  # Read existing cover files without triggering a network refetch.
+  flutter_cache_manager: ^3.4.1
+
   # Network cover images
   cached_network_image: ^3.4.1
 

@@ -236,6 +236,19 @@ pub fn parse_stem(input: &str) -> ParsedName {
         }
     }
 
+    // A bare 4-digit "episode" in the plausible-year range is almost always the
+    // release year of a movie, not an episode: anitomy only tags the year when
+    // it is bracketed or isolated, so "Movie.Title.2026.1080p" falls through to
+    // its last-number fallback and would otherwise show as "第 2026 话". No
+    // airing show comes near 1900 episodes. An explicit E/EP/第..話 prefix is a
+    // keyword path in anitomy too — its value would arrive with that keyword in
+    // the element value, so first_number alone cannot distinguish; year-style
+    // episode numbers on real shows do not exist yet, so the whole range is
+    // treated as a year.
+    if episode.is_some_and(|ep| (1900..=2100).contains(&ep)) {
+        episode = None;
+    }
+
     // Post-process the title. Flattened all-underscore filenames confuse anitomy
     // (it emits e.g. "Nekomoe kissaten VCB Studio World Dai Star 01Ma10p"), so we
     // strip leading group words, glued episode+tech tokens, and trailing tech.
@@ -531,6 +544,35 @@ pub fn group_key(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn year_in_movie_filename_is_not_episode() {
+        // "Cosmic.Princess.Kaguya.2026.1080p..." — anitomy's last-number
+        // fallback reads the release year as the episode; it must be dropped
+        // so the movie files group as unnumbered specials instead of
+        // "第 2026 话".
+        let p = parse_filename(
+            "Cosmic.Princess.Kaguya.2026.1080p.NF.WEB-DL.DUAL.DDP5.1.H.264-VARYG.mkv",
+        );
+        assert_eq!(p.episode_no, None, "year leaked as episode: {p:?}");
+        assert!(p.title.to_lowercase().contains("kaguya"), "{p:?}");
+        assert_eq!(p.resolution.as_deref(), Some("1080p"));
+        // The bracketed/isolated year case is a real anitomy Year element; the
+        // guard drops it the same way.
+        let bracketed = parse_filename("[Group] Movie Title [2026][1080p].mkv");
+        assert_eq!(bracketed.episode_no, None, "{bracketed:?}");
+    }
+
+    #[test]
+    fn four_digit_non_year_episodes_survive() {
+        // Long-runners are still far below 1900; a real 4-digit episode keeps
+        // its number.
+        let p = parse_filename("[Group] Long Show - 1044 [1080p].mkv");
+        assert_eq!(p.episode_no, Some(1044), "{p:?}");
+        // The scan tests' pre-existing numbers (<=1500) are unaffected.
+        let p2 = parse_filename("Show 07 [1080p].mkv");
+        assert_eq!(p2.episode_no, Some(7), "{p2:?}");
+    }
 
     #[test]
     fn glued_letter_episode_groups() {
