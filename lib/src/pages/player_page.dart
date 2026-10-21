@@ -151,6 +151,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   StreamSubscription? _tracksSub;
   StreamSubscription? _completedSub;
   StreamSubscription? _logSub;
+  StreamSubscription? _errorSub;
+  // A demux/decode error that arrives mid-playback is reported once per open,
+  // and only if playback does not recover on its own within the grace period.
+  Timer? _runtimeErrorTimer;
+  bool _runtimeErrorAlertShown = false;
+  int _positionAtRuntimeError = 0;
   // External subtitle files next to the video (auto-loaded; listed in the
   // track sheet so the user can switch between them).
   List<SubtitleCandidate> _extSubs = const [];
@@ -305,7 +311,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     }
     if (!_isMobile) windowManager.addListener(this);
     _listen();
+    // A back gesture or any other pop we did not initiate still has to restore
+    // the system chrome, and it must happen while the route is animating out —
+    // not in dispose(), which runs only after the previous route has laid out.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final route = ModalRoute.of(context);
+      route?.animation?.addStatusListener(_onRouteStatus);
+      _route = route;
+    });
     unawaited(_initializePlayer());
+  }
+
+  ModalRoute<dynamic>? _route;
+
+  void _onRouteStatus(AnimationStatus status) {
+    if (status == AnimationStatus.reverse) unawaited(_restoreSystemChrome());
   }
 
   Future<void> _initializePlayer() async {
@@ -929,6 +950,35 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         'kurako/mpv[${entry.level}] ${entry.prefix}: ${entry.text.split('\n').first}',
       );
     });
+    // A damaged file on a healthy network fails *after* the start wait has
+    // already succeeded: mpv reports an error and the UI otherwise keeps
+    // showing a frozen frame or a spinner with no explanation. Report it once,
+    // after a short grace period, unless playback moved on by itself.
+    _errorSub = _player.stream.error.listen((message) {
+      if (!mounted || !_acceptPlaybackEvents) return;
+      if (_runtimeErrorAlertShown || _durationMs <= 0) return;
+      _positionAtRuntimeError = _positionMs;
+      _runtimeErrorTimer?.cancel();
+      _runtimeErrorTimer = Timer(playbackErrorGrace, () {
+        if (!mounted || !_acceptPlaybackEvents || _runtimeErrorAlertShown) {
+          return;
+        }
+        // Any progress since the error means it was transient.
+        if (_positionMs != _positionAtRuntimeError) return;
+        _runtimeErrorAlertShown = true;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(playbackErrorNotice(message)),
+            action: SnackBarAction(
+              label: '重试',
+              onPressed: () {
+                if (mounted) _scheduleOpen(debounceRemote: false);
+              },
+            ),
+          ),
+        );
+      });
+    });
     _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) => _save());
   }
 
@@ -941,7 +991,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       return;
     }
     await _save();
-    if (mounted) Navigator.of(context).maybePop();
+    if (mounted) await _leavePlayer();
   }
 
   // ---- Track preference (per anime, remembered) ----
@@ -1136,6 +1186,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _resumed = false;
     _completionHandled = false;
     _acceptPlaybackEvents = false;
+    _runtimeErrorTimer?.cancel();
+    _runtimeErrorAlertShown = false;
     _switchDebounce?.cancel();
     final seq = ++_openSeq;
     _openGeneration.value = seq;
@@ -1256,6 +1308,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _tracksSub?.cancel();
     _completedSub?.cancel();
     _logSub?.cancel();
+    _errorSub?.cancel();
+    _runtimeErrorTimer?.cancel();
     _selectedSubtitle.dispose();
     _episodeIndex.dispose();
     _episodeScrollController?.dispose();
@@ -1282,6 +1336,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       windowManager.setFullScreen(false);
     }
     if (!_isMobile) windowManager.removeListener(this);
+    _route?.animation?.removeStatusListener(_onRouteStatus);
     _fullscreen.dispose();
     super.dispose();
   }
@@ -1366,6 +1421,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
     final dark = Theme.of(context).copyWith(colorScheme: _cs);
 
+    // Every exit (close button, autoplay completion, back gesture) restores the
+    // system bars and orientation *before* the previous route lays out. Doing it
+    // in dispose() ran after the pop, so the detail page was laid out with the
+    // immersive-mode insets and then jumped when the status bar reappeared.
+    // Deliberately not a PopScope with canPop:false — that would disable the
+    // iOS edge-swipe back gesture; the route animation listener below covers it
+    // instead.
     return Theme(
       data: dark,
       child: Scaffold(
@@ -1378,6 +1440,28 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         body: playerBody,
       ),
     );
+  }
+
+  bool _leaving = false;
+
+  /// Restore the system UI, then pop. Awaited so the insets are already correct
+  /// when the previous route performs its first layout.
+  Future<void> _leavePlayer() async {
+    if (_leaving) return;
+    _leaving = true;
+    await _restoreSystemChrome();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _restoreSystemChrome() async {
+    if (!_isMobile) return;
+    try {
+      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      await SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      // The inset change reaches Flutter through the next frame's metrics, so
+      // let that frame land before the pop animation starts.
+      await WidgetsBinding.instance.endOfFrame;
+    } catch (_) {}
   }
 
   /// Show [panel] in the right-side drawer. All secondary menus route here so
@@ -1448,7 +1532,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                     ),
                     IconButton(
                       icon: Icon(Icons.close, color: cs.onSurfaceVariant),
-                      onPressed: () => Navigator.of(context).maybePop(),
+                      onPressed: _leavePlayer,
                     ),
                   ],
                 ),
@@ -2025,7 +2109,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   );
 
   void _popSelf() {
-    if (mounted) Navigator.of(context).maybePop();
+    if (mounted) unawaited(_leavePlayer());
   }
 
   Widget _rateButton() {

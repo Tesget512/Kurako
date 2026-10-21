@@ -106,6 +106,21 @@ const kDefaultMaterialVideoControlsThemeDataFullscreen =
   shiftSubtitlesOnControlsVisibilityChange: false,
 );
 
+/// Applies one vertical-drag sample to the level captured at drag start.
+///
+/// Dragging up (a negative `deltaDy`) raises the level. Deriving each frame from
+/// the start value and the total displacement keeps the value stable: the old
+/// code accumulated onto the *live* value, so a late platform echo could pull
+/// the next frame in the wrong direction and make the level jitter.
+double resolveVerticalGestureValue({
+  required double startValue,
+  required double totalDeltaDy,
+  required double sensitivity,
+}) {
+  if (sensitivity <= 0) return startValue.clamp(0.0, 1.0);
+  return (startValue - totalDeltaDy / sensitivity).clamp(0.0, 1.0);
+}
+
 enum MaterialVerticalGestureKind { brightness, volume }
 
 /// Resolves which OSD a vertical gesture should show.
@@ -622,6 +637,13 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   Offset? _verticalPosition;
   bool _verticalDragging = false;
 
+  /// Level when the drag began; every update is computed from this rather than
+  /// from the previous frame, so platform echoes cannot skew the result.
+  double _verticalStartValue = 0.0;
+
+  /// Sum of `delta.dy` since the drag began (negative = finger moved up).
+  double _verticalDeltaTotal = 0.0;
+
   Offset? _rootPosition(Offset global) {
     final box = _controlsRootKey.currentContext?.findRenderObject();
     return box is RenderBox ? box.globalToLocal(global) : null;
@@ -1092,6 +1114,14 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     // package:screen_brightness
     Future.microtask(() async {
       try {
+        // Every platform plugin defaults to animating a brightness write over
+        // about a second (iOS queues ~100 stepped operations). A gesture emits
+        // a new target every frame, so each write cancelled the previous
+        // animation and the screen only settled once the finger stopped.
+        // Writing the value directly is what makes dragging feel immediate.
+        await ScreenBrightnessPlatform.instance.setAnimate(false);
+      } catch (_) {}
+      try {
         _brightnessValue = await ScreenBrightnessPlatform.instance.application;
         if (!mounted) return;
         _brightnessSubscription = ScreenBrightnessPlatform
@@ -1156,9 +1186,9 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
 
     _brightnessWriteInProgress = true;
     try {
-      // Native brightness writes may be slower than pointer updates. Keep at
-      // most one call in flight and replace queued samples with the newest
-      // target so the platform channel cannot build up a stale backlog.
+      // Keep at most one native call in flight and replace queued samples with
+      // the newest target, so a slow platform channel cannot build up a stale
+      // backlog while the finger keeps moving.
       while (_pendingBrightnessValue != null) {
         final pending = _pendingBrightnessValue!;
         _pendingBrightnessValue = null;
@@ -1506,8 +1536,16 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                               : MaterialVerticalGestureKind
                                                   .volume;
                                           _lastVerticalKind = _verticalKind;
+                                          // The indicator stays where the drag
+                                          // started; following the finger made
+                                          // the level readout slide out from
+                                          // under it.
                                           _verticalPosition = position;
                                           _verticalDragging = true;
+                                          _verticalDeltaTotal = 0.0;
+                                          _verticalStartValue = left
+                                              ? _brightnessValue
+                                              : _volumeValue;
                                           if (left) {
                                             _volumeIndicator = false;
                                             _volumeTimer?.cancel();
@@ -1521,14 +1559,20 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                 onVerticalDragCancel: _endVerticalGesture,
                                 onVerticalDragUpdate: controlsLocked
                                     ? null
-                                    : (e) async {
+                                    : (e) {
                                         if (e.kind == PointerDeviceKind.mouse) {
                                           return;
                                         }
-                                        final delta = e.delta.dy;
                                         if (!_verticalDragging) return;
-                                        setState(() => _verticalPosition =
-                                            _rootPosition(e.globalPosition));
+                                        _verticalDeltaTotal += e.delta.dy;
+                                        final sensitivity = _theme(context)
+                                            .verticalGestureSensitivity;
+                                        final result =
+                                            resolveVerticalGestureValue(
+                                          startValue: _verticalStartValue,
+                                          totalDeltaDy: _verticalDeltaTotal,
+                                          sensitivity: sensitivity,
+                                        );
                                         if (_verticalKind ==
                                             MaterialVerticalGestureKind
                                                 .brightness) {
@@ -1540,29 +1584,16 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                                       .brightnessGesture &&
                                                   _theme(context)
                                                       .gesturesEnabledWhileControlsVisible)) {
-                                            final brightness = _brightnessValue -
-                                                delta /
-                                                    _theme(context)
-                                                        .verticalGestureSensitivity;
-                                            final result =
-                                                brightness.clamp(0.0, 1.0);
                                             setBrightness(result);
                                           }
                                         } else {
                                           // Right side of screen swiped
-
                                           if ((!mount &&
                                                   _theme(context)
                                                       .volumeGesture) ||
                                               (_theme(context).volumeGesture &&
                                                   _theme(context)
                                                       .gesturesEnabledWhileControlsVisible)) {
-                                            final volume = _volumeValue -
-                                                delta /
-                                                    _theme(context)
-                                                        .verticalGestureSensitivity;
-                                            final result =
-                                                volume.clamp(0.0, 1.0);
                                             setVolume(result);
                                           }
                                         }

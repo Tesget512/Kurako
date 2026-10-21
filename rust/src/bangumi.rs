@@ -437,9 +437,9 @@ pub fn detect_system_proxy() -> Option<String> {
             }
         }
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        if let Some(p) = crate::macos_proxy::system_proxy() {
+        if let Some(p) = crate::apple_proxy::system_proxy() {
             return Some(p);
         }
     }

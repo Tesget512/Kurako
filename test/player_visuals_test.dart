@@ -80,6 +80,59 @@ void main() {
     }
   });
 
+  test('vertical drag maps total displacement from the start value', () {
+    // Upward drag (negative dy) raises the level, and the result depends only
+    // on the total displacement — not on how many update events delivered it.
+    expect(
+      resolveVerticalGestureValue(
+        startValue: 0.5,
+        totalDeltaDy: -100,
+        sensitivity: 400,
+      ),
+      closeTo(0.75, 1e-9),
+    );
+    // The same total split across several frames must land on the same value;
+    // accumulating onto the live value used to drift when echoes arrived late.
+    var total = 0.0;
+    for (final step in [-40.0, -30.0, -30.0]) {
+      total += step;
+    }
+    expect(
+      resolveVerticalGestureValue(
+        startValue: 0.5,
+        totalDeltaDy: total,
+        sensitivity: 400,
+      ),
+      closeTo(0.75, 1e-9),
+    );
+    // Dragging past either end clamps instead of wrapping.
+    expect(
+      resolveVerticalGestureValue(
+        startValue: 0.9,
+        totalDeltaDy: -400,
+        sensitivity: 400,
+      ),
+      1.0,
+    );
+    expect(
+      resolveVerticalGestureValue(
+        startValue: 0.1,
+        totalDeltaDy: 400,
+        sensitivity: 400,
+      ),
+      0.0,
+    );
+    // A zero or negative sensitivity must not divide by zero.
+    expect(
+      resolveVerticalGestureValue(
+        startValue: 0.4,
+        totalDeltaDy: -100,
+        sensitivity: 0,
+      ),
+      0.4,
+    );
+  });
+
   test('a finished volume gesture never fades out as the brightness OSD', () {
     // Regression: the OSD stays mounted while it fades out, and by then both
     // indicator flags are cleared. Without the remembered kind it repainted as

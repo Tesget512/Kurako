@@ -6,26 +6,44 @@ import '../state/anime_sort.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../widgets/anime_card.dart';
+import '../widgets/scroll_reveal_app_bar.dart';
 import 'detail_page.dart';
 
 /// Dedicated "追番" page: the user's collected anime, split into tabs by
 /// collection status (在看/想看/搁置/看过/抛弃).
-class CollectionPage extends ConsumerWidget {
+class CollectionPage extends ConsumerStatefulWidget {
   const CollectionPage({super.key});
 
+  @override
+  ConsumerState<CollectionPage> createState() => _CollectionPageState();
+}
+
+class _CollectionPageState extends ConsumerState<CollectionPage> {
   // (collection type value, tab label). Ordered the way a viewer thinks about
   // their backlog: watching → plan → on-hold → done → dropped.
   static const _tabs = [(3, '在看'), (1, '想看'), (4, '搁置'), (2, '看过'), (5, '抛弃')];
 
+  final _reveal = ScrollRevealController();
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void dispose() {
+    _reveal.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final animeAsync = ref.watch(animeListProvider);
     final sort = ref.watch(librarySortProvider);
 
     return DefaultTabController(
       length: _tabs.length,
       child: Scaffold(
-        appBar: AppBar(
+        // Same scroll-driven reveal as the library: covers slide under a
+        // transparent bar and it fades in as they pass.
+        extendBodyBehindAppBar: true,
+        appBar: ScrollRevealAppBar(
+          controller: _reveal,
           title: const Text('追番'),
           bottom: TabBar(
             isScrollable: true,
@@ -46,20 +64,23 @@ class CollectionPage extends ConsumerWidget {
             ],
           ),
         ),
-        body: animeAsync.when(
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (e, _) => Center(child: Text('加载失败: $e')),
-          data: (list) => TabBarView(
-            children: [
-              for (final t in _tabs)
-                _CollectionTab(
-                  items: sortAnime(
-                    list.where((a) => a.collection.toInt() == t.$1).toList(),
-                    sort,
-                    pinCollected: false,
+        body: ScrollRevealListener(
+          controller: _reveal,
+          child: animeAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('加载失败: $e')),
+            data: (list) => TabBarView(
+              children: [
+                for (final t in _tabs)
+                  _CollectionTab(
+                    items: sortAnime(
+                      list.where((a) => a.collection.toInt() == t.$1).toList(),
+                      sort,
+                      pinCollected: false,
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -79,8 +100,10 @@ class _CollectionTab extends StatelessWidget {
       );
     }
     final inset = adaptiveContentInset(context);
+    // The body extends behind the app bar, so the first row has to clear it.
+    final top = MediaQuery.paddingOf(context).top;
     return GridView.builder(
-      padding: EdgeInsets.fromLTRB(inset, 16, inset, 24),
+      padding: EdgeInsets.fromLTRB(inset, top + 16, inset, 24),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 200,
         childAspectRatio: 0.62,

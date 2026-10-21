@@ -32,6 +32,24 @@ void main() {
     expect(playbackStartTimeout(remote: false), const Duration(seconds: 15));
   });
 
+  test('playback errors map to a cause without echoing the path', () {
+    const path = r'/Volumes/Private/番剧 [01].mkv';
+    final cases = {
+      "Failed to open $path": '无法读取视频文件，可能已被移动、删除或访问权限失效。',
+      'Could not open codec.': '视频格式或编码不受支持，无法解码播放。',
+      'HTTP error 503': '网络连接中断，视频流无法继续读取。',
+      'out of memory': '内存不足，无法继续解码这段视频。',
+      'mpv: some unknown failure': '播放过程中出现错误，视频可能已损坏。',
+    };
+    for (final entry in cases.entries) {
+      final notice = playbackErrorNotice(entry.key);
+      expect(notice, entry.value, reason: entry.key);
+      // The raw message can quote the media path, so it must never leak out.
+      expect(notice.contains('番剧'), isFalse);
+      expect(notice.contains('/Volumes'), isFalse);
+    }
+  });
+
   test('system proxy bypasses IPv4, IPv6, and localhost loopback targets', () {
     const proxy = '127.0.0.1:7890';
     for (final host in [

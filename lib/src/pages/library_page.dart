@@ -8,12 +8,20 @@ import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scan_progress_sheet.dart';
+import '../widgets/scroll_reveal_app_bar.dart';
 import '../services/scan_coordinator.dart';
 import 'blacklist_page.dart';
 import 'detail_page.dart';
 
-class LibraryPage extends ConsumerWidget {
+class LibraryPage extends ConsumerStatefulWidget {
   const LibraryPage({super.key});
+
+  @override
+  ConsumerState<LibraryPage> createState() => _LibraryPageState();
+}
+
+class _LibraryPageState extends ConsumerState<LibraryPage> {
+  final _reveal = ScrollRevealController();
 
   static const _sortLabels = {
     LibrarySort.normal: '默认排序',
@@ -25,16 +33,30 @@ class LibraryPage extends ConsumerWidget {
   };
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void dispose() {
+    _reveal.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final animeAsync = ref.watch(animeListProvider);
     final sort = ref.watch(librarySortProvider);
     final grouping = ref.watch(groupingEnabledProvider);
     final pinCollected = ref.watch(pinCollectedProvider);
 
+    final scanning = ref.watch(scanCoordinatorProvider).visible;
+
     return Scaffold(
-      appBar: AppBar(
+      // The bar fades its own surface in as covers scroll underneath, so the
+      // body has to extend behind it.
+      extendBodyBehindAppBar: true,
+      appBar: ScrollRevealAppBar(
+        controller: _reveal,
         title: const Text('番剧库'),
-        bottom: ref.watch(scanCoordinatorProvider).visible
+        // The inline scan row cannot float over artwork.
+        opaque: scanning,
+        bottom: scanning
             ? const PreferredSize(
                 preferredSize: Size.fromHeight(52),
                 child: ScanProgressSheet(),
@@ -98,23 +120,34 @@ class LibraryPage extends ConsumerWidget {
           ),
         ],
       ),
-      body: animeAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('加载失败: $e')),
-        data: (list) {
-          if (list.isEmpty) {
-            return _EmptyState(onScan: () => _startScan(context, ref));
-          }
-          if (!grouping || sort == LibrarySort.normal) {
-            final sorted = sortAnime(list, sort, pinCollected: pinCollected);
-            return _grid(context, ref, sorted);
-          }
-          return _groupedGrid(
-            context,
-            ref,
-            groupAnime(list, sort, pinCollected: pinCollected),
-          );
-        },
+      body: ScrollRevealListener(
+        controller: _reveal,
+        // A context below the Scaffold is required: only there does
+        // MediaQuery report the body padding that includes the app bar height.
+        child: Builder(
+          builder: (bodyContext) => animeAsync.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (e, _) => Center(child: Text('加载失败: $e')),
+            data: (list) {
+              if (list.isEmpty) {
+                return _EmptyState(onScan: () => _startScan(context, ref));
+              }
+              if (!grouping || sort == LibrarySort.normal) {
+                final sorted = sortAnime(
+                  list,
+                  sort,
+                  pinCollected: pinCollected,
+                );
+                return _grid(bodyContext, ref, sorted);
+              }
+              return _groupedGrid(
+                bodyContext,
+                ref,
+                groupAnime(list, sort, pinCollected: pinCollected),
+              );
+            },
+          ),
+        ),
       ),
     );
   }
@@ -164,8 +197,11 @@ class LibraryPage extends ConsumerWidget {
 
   Widget _grid(BuildContext context, WidgetRef ref, List<Anime> list) {
     final inset = adaptiveContentInset(context);
+    // With extendBodyBehindAppBar the body starts at the top edge, and the
+    // scaffold reports the bar's full height here so the first row can clear it.
+    final top = MediaQuery.paddingOf(context).top;
     return GridView.builder(
-      padding: EdgeInsets.fromLTRB(inset, 16, inset, 24),
+      padding: EdgeInsets.fromLTRB(inset, top + 16, inset, 24),
       gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: 200,
         childAspectRatio: 0.62,
@@ -183,11 +219,12 @@ class LibraryPage extends ConsumerWidget {
     List<AnimeSection> sections,
   ) {
     final inset = adaptiveContentInset(context);
+    final top = MediaQuery.paddingOf(context).top;
     return CustomScrollView(
       slivers: [
         for (final section in sections) ...[
           SliverPadding(
-            padding: EdgeInsets.fromLTRB(inset, 20, inset, 8),
+            padding: EdgeInsets.fromLTRB(inset, top + 20, inset, 8),
             sliver: SliverToBoxAdapter(
               child: Row(
                 children: [
