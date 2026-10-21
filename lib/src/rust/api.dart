@@ -23,11 +23,21 @@ Future<PlatformInt64> setDownloadDirectory({required String downloadDir}) =>
 Future<void> setBangumiToken({String? token}) =>
     RustLib.instance.api.crateApiSetBangumiToken(token: token);
 
-/// Route Bangumi API calls through the mainland-reachable mirror
-/// (bgmapi.anibt.net, Soyorin's bangumi-proxy instance) instead of api.bgm.tv.
-/// OAuth always stays on the official domain.
+/// Route Bangumi API calls through the community reverse proxy
+/// (bangumi.vip, Mirrox) instead of api.bgm.tv. Opt-in and verified first.
 Future<void> setBangumiMirror({required bool enabled}) =>
     RustLib.instance.api.crateApiSetBangumiMirror(enabled: enabled);
+
+/// Choose, per feature, whether that traffic may use the reverse proxy.
+/// Both are ignored unless the proxy is enabled and verified. Tokens are
+/// host-independent, so these only decide which host carries the request.
+Future<void> setBangumiRouteOptions({
+  required bool oauthViaMirror,
+  required bool collectionViaMirror,
+}) => RustLib.instance.api.crateApiSetBangumiRouteOptions(
+  oauthViaMirror: oauthViaMirror,
+  collectionViaMirror: collectionViaMirror,
+);
 
 /// Build the browser authorization URL for the login flow. Uses the app's
 /// baked-in client id and registered callback.

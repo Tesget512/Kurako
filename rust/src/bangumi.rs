@@ -8,12 +8,22 @@ const BASE_OFFICIAL: &str = "https://api.bgm.tv";
 /// Public, read-only Bangumi mirror. Account/OAuth traffic always stays official.
 pub const BASE_MIRROR: &str = "https://api.bangumi.vip";
 pub const IMAGE_MIRROR_HOST: &str = "lain.bangumi.vip";
-/// OAuth stays on the official domain: the login flow needs the real site's
-/// cookies and the token endpoint validates the registered redirect URI.
-const OAUTH_BASE: &str = "https://bgm.tv/oauth";
+/// Official OAuth lives on the main site, not the API host.
+const OAUTH_OFFICIAL: &str = "https://bgm.tv/oauth";
+/// The reverse proxy mirrors the site, so its authorization *page* can be used
+/// when the official one is unreachable. Its token endpoint cannot: Anubis
+/// answers every server-side POST there with a challenge page, so the code
+/// exchange always goes to the official endpoint. The token itself is valid on
+/// both hosts, which is why only the page needs a route choice.
+const OAUTH_PAGE_MIRROR: &str = "https://bangumi.vip/oauth";
 
 /// Mirror is opt-in and only becomes enabled after an application-side probe.
 static MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Independent opt-ins. A token obtained either way works on both hosts, so
+/// these only decide which host carries each kind of request.
+static OAUTH_VIA_MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static COLLECTION_VIA_MIRROR: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_mirror(enabled: bool) {
     let guard = MIRROR_VERIFICATION.lock().unwrap();
@@ -23,8 +33,25 @@ pub fn set_mirror(enabled: bool) {
     MIRROR.store(enabled && verified, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Configure which traffic may use the reverse proxy. Both flags are ignored
+/// unless the proxy itself is enabled and verified.
+///
+/// The login flag only affects the authorization *page*; the code exchange is
+/// always official (see `oauth_post`). The collection flag covers the reads and
+/// writes, which is the only way an account request reaches the proxy.
+pub fn set_route_options(oauth_via_mirror: bool, collection_via_mirror: bool) {
+    OAUTH_VIA_MIRROR.store(oauth_via_mirror, std::sync::atomic::Ordering::Relaxed);
+    COLLECTION_VIA_MIRROR.store(collection_via_mirror, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) fn mirror_is_enabled() -> bool {
     MIRROR.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// True only when the proxy is enabled AND the feature opted in.
+fn mirror_route(flag: &std::sync::atomic::AtomicBool) -> bool {
+    MIRROR.load(std::sync::atomic::Ordering::Relaxed)
+        && flag.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn api_base() -> &'static str {
@@ -34,8 +61,28 @@ fn api_base() -> &'static str {
         BASE_OFFICIAL
     }
 }
+
+/// The authorization page the browser opens; the only OAuth URL that may be
+/// routed through the reverse proxy.
+fn oauth_page_base() -> &'static str {
+    if mirror_route(&OAUTH_VIA_MIRROR) {
+        OAUTH_PAGE_MIRROR
+    } else {
+        OAUTH_OFFICIAL
+    }
+}
+
+/// Collections default to the official API; the per-feature opt-in can route
+/// them through the reverse proxy instead.
+fn collection_base() -> &'static str {
+    if mirror_route(&COLLECTION_VIA_MIRROR) {
+        BASE_MIRROR
+    } else {
+        BASE_OFFICIAL
+    }
+}
 const USER_AGENT: &str = "Kurako/1.0";
-const MIRROR_FAILURE: &str = "Bangumi 镜像验证已失效或请求被拦截，请在设置中重新验证或关闭镜像回退官方；请确保 WebView 与应用使用相同网络/代理出口（UA/IP 改变会使验证失效）。";
+const MIRROR_FAILURE: &str = "Bangumi 反向代理验证已失效或请求被拦截，请在设置中重新验证或关闭反向代理回退官方；请确保 WebView 与应用使用相同网络/代理出口（UA/IP 改变会使验证失效）。";
 
 // Deliberately no Debug/Serialize: these are local challenge credentials, not OAuth.
 #[derive(Clone)]
@@ -53,14 +100,14 @@ static MIRROR_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 
 fn validate_challenge_cookie(cookie: &str) -> Result<()> {
     if cookie.len() > 16384 || cookie.contains(['\r', '\n']) {
-        anyhow::bail!("镜像验证 Cookie 无效，请重新验证。");
+        anyhow::bail!("反向代理验证 Cookie 无效，请重新验证。");
     }
     if cookie.is_empty() {
         return Ok(());
     }
     for pair in cookie.split(';') {
         let Some((name, value)) = pair.trim().split_once('=') else {
-            anyhow::bail!("镜像验证 Cookie 无效，请重新验证。");
+            anyhow::bail!("反向代理验证 Cookie 无效，请重新验证。");
         };
         if !matches!(
             name,
@@ -70,7 +117,7 @@ fn validate_challenge_cookie(cookie: &str) -> Result<()> {
                 .bytes()
                 .all(|b| (0x21..=0x7e).contains(&b) && b != b';')
         {
-            anyhow::bail!("镜像验证只允许 Anubis Cookie，不接受账户凭据。");
+            anyhow::bail!("反向代理验证只允许 Anubis Cookie，不接受账户凭据。");
         }
     }
     Ok(())
@@ -87,7 +134,7 @@ pub fn configure_mirror_verification(
         || user_agent.len() > 2048
         || reqwest::header::HeaderValue::from_str(&user_agent).is_err()
     {
-        anyhow::bail!("无法读取有效 WebView User-Agent，请关闭镜像回退官方。");
+        anyhow::bail!("无法读取有效 WebView User-Agent，请关闭反向代理回退官方。");
     }
     let mut guard = MIRROR_VERIFICATION.lock().unwrap();
     MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -172,7 +219,7 @@ pub async fn probe_mirror() -> Result<String> {
         .map_err(|_| anyhow::anyhow!(MIRROR_FAILURE))?
     {
         if body.len().saturating_add(chunk.len()) > 1024 * 1024 {
-            anyhow::bail!("镜像 API 响应超过验证大小限制，未开启镜像。");
+            anyhow::bail!("反向代理 API 响应超过验证大小限制，未开启反向代理。");
         }
         body.extend_from_slice(&chunk);
     }
@@ -184,8 +231,10 @@ pub async fn probe_mirror() -> Result<String> {
     let image = ["large", "common", "medium", "small"]
         .iter()
         .find_map(|key| value["images"][*key].as_str())
-        .ok_or_else(|| anyhow::anyhow!("镜像 API 返回有效条目但无可验证封面，未开启镜像。"))?;
-    let mut url = reqwest::Url::parse(image).context("镜像封面地址无效")?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("反向代理 API 返回有效条目但无可验证封面，未开启反向代理。")
+        })?;
+    let mut url = reqwest::Url::parse(image).context("反向代理封面地址无效")?;
     if !matches!(
         url.host_str(),
         Some("lain.bgm.tv" | "bgmimg.anibt.net" | "lain.bangumi.vip")
@@ -193,16 +242,16 @@ pub async fn probe_mirror() -> Result<String> {
         || url.password().is_some()
         || url.port().is_some()
     {
-        anyhow::bail!("镜像返回未知封面域名，未开启镜像。");
+        anyhow::bail!("反向代理返回未知封面域名，未开启反向代理。");
     }
     url.set_scheme("https")
-        .map_err(|_| anyhow::anyhow!("镜像封面协议无效"))?;
+        .map_err(|_| anyhow::anyhow!("反向代理封面协议无效"))?;
     url.set_host(Some(IMAGE_MIRROR_HOST))?;
     let mut guard = MIRROR_VERIFICATION.lock().unwrap();
     let v = guard
         .as_mut()
         .filter(|v| v.generation == proof.generation)
-        .ok_or_else(|| anyhow::anyhow!("镜像验证配置已改变，请重新开始验证。"))?;
+        .ok_or_else(|| anyhow::anyhow!("反向代理验证配置已改变，请重新开始验证。"))?;
     v.api_verified = true;
     Ok(url.to_string())
 }
@@ -214,14 +263,14 @@ pub async fn probe_mirror_image(image_url: String) -> Result<()> {
         .clone()
         .filter(|v| v.api_verified)
         .ok_or_else(|| anyhow::anyhow!(MIRROR_FAILURE))?;
-    let url = reqwest::Url::parse(&image_url).context("镜像封面地址无效")?;
+    let url = reqwest::Url::parse(&image_url).context("反向代理封面地址无效")?;
     if url.scheme() != "https"
         || url.host_str() != Some(IMAGE_MIRROR_HOST)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
     {
-        anyhow::bail!("镜像封面验证仅允许已确认的镜像域名。");
+        anyhow::bail!("反向代理封面验证仅允许已确认的域名。");
     }
     let c = client()?;
     let mut resp = send_with_backoff(
@@ -246,7 +295,7 @@ pub async fn probe_mirror_image(image_url: String) -> Result<()> {
     {
         bytes = bytes.saturating_add(chunk.len());
         if bytes > 8 * 1024 * 1024 {
-            anyhow::bail!("镜像封面超过验证大小限制，未开启镜像。");
+            anyhow::bail!("反向代理封面超过验证大小限制，未开启反向代理。");
         }
     }
     if bytes == 0 {
@@ -256,7 +305,7 @@ pub async fn probe_mirror_image(image_url: String) -> Result<()> {
     let v = guard
         .as_mut()
         .filter(|v| v.generation == proof.generation && v.api_verified)
-        .ok_or_else(|| anyhow::anyhow!("镜像验证配置已改变，请重新开始验证。"))?;
+        .ok_or_else(|| anyhow::anyhow!("反向代理验证配置已改变，请重新开始验证。"))?;
     v.image_verified = true;
     Ok(())
 }
@@ -299,7 +348,7 @@ async fn current_username() -> Result<String> {
     }
     let client = client()?;
     let resp = send_with_backoff(
-        || auth(client.get(format!("{}/v0/me", BASE_OFFICIAL))),
+        || collection_auth(client.get(format!("{}/v0/me", collection_base()))),
         "bangumi me",
     )
     .await?;
@@ -531,6 +580,32 @@ fn auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     if host.as_deref() != Some("api.bgm.tv") {
         return req;
     }
+    let tok = TOKEN.lock().unwrap().clone();
+    match tok {
+        Some(t) => req.bearer_auth(t),
+        None => req,
+    }
+}
+
+/// Auth for the collection endpoints, which follow their own route choice.
+///
+/// `auth()` keeps the bearer on the official host because public search/subject
+/// traffic can go through the proxy without credentials. Collections are the
+/// one case where the user asked the proxy to carry account requests, so the
+/// bearer follows the route they picked — and only that one host receives it.
+fn collection_auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    // Decide from the actual URL so a concurrent toggle cannot send the bearer
+    // to a host the request was not built for.
+    let host = req
+        .try_clone()
+        .and_then(|r| r.build().ok())
+        .and_then(|r| r.url().host_str().map(str::to_owned));
+    let req = match host.as_deref() {
+        Some("api.bangumi.vip") => mirror_headers(req, false),
+        Some("api.bgm.tv") => req,
+        // Never attach account credentials to any other host.
+        _ => return req,
+    };
     let tok = TOKEN.lock().unwrap().clone();
     match tok {
         Some(t) => req.bearer_auth(t),
@@ -1305,9 +1380,13 @@ pub fn has_token() -> bool {
 // Docs: https://github.com/bangumi/api/blob/master/docs-raw/How-to-Auth.md
 
 /// Build the browser authorization URL for the given app id and callback.
+///
+/// Only this page follows the login route choice. The code exchange afterwards
+/// is always official: see `oauth_post`.
 pub fn authorize_url(client_id: &str, redirect_uri: &str) -> String {
     format!(
-        "{OAUTH_BASE}/authorize?client_id={}&response_type=code&redirect_uri={}",
+        "{}/authorize?client_id={}&response_type=code&redirect_uri={}",
+        oauth_page_base(),
         urlencode(client_id),
         urlencode(redirect_uri),
     )
@@ -1473,6 +1552,13 @@ fn parse_oauth_response(status: reqwest::StatusCode, body: &[u8]) -> Result<serd
 /// method, which turns a valid exchange into an unexplained failure. The token
 /// endpoints also need `Accept: application/json`, otherwise Rails may answer
 /// with HTML that cannot be parsed.
+///
+/// Always posts to the official endpoint, even when the authorization page was
+/// opened through the reverse proxy: Anubis answers a server-side POST on
+/// `bangumi.vip/oauth/*` with a challenge page, so that route can never
+/// exchange a code. A code issued after a proxied authorization is accepted
+/// here because it comes from the same Bangumi account, not from the host that
+/// rendered the form.
 async fn oauth_post(endpoint: &str, params: &[(&str, &str)]) -> Result<serde_json::Value> {
     let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -1485,7 +1571,7 @@ async fn oauth_post(endpoint: &str, params: &[(&str, &str)]) -> Result<serde_jso
     let mut resp = builder
         .build()
         .context("oauth client initialization")?
-        .post(format!("{OAUTH_BASE}/{endpoint}"))
+        .post(format!("{OAUTH_OFFICIAL}/{endpoint}"))
         .header(reqwest::header::ACCEPT, "application/json")
         .form(params)
         .send()
@@ -1612,9 +1698,13 @@ pub async fn all_collections() -> Result<Vec<(i64, i64)>> {
     loop {
         let url = format!(
             "{}/v0/users/{username}/collections?subject_type=2&limit={limit}&offset={offset}",
-            BASE_OFFICIAL
+            collection_base()
         );
-        let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi all_collections").await?;
+        let resp = send_with_backoff(
+            || collection_auth(client.get(&url)),
+            "bangumi all_collections",
+        )
+        .await?;
         let Some(page) = parse_collection_page(resp.status(), &resp.bytes().await?, offset)? else {
             return Ok(out);
         };
@@ -1641,10 +1731,11 @@ pub async fn collection_status(subject_id: i64) -> Result<Option<i64>> {
     let username = current_username().await?;
     let url = format!(
         "{}/v0/users/{username}/collections/{subject_id}",
-        BASE_OFFICIAL
+        collection_base()
     );
     let client = client()?;
-    let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi collection").await?;
+    let resp =
+        send_with_backoff(|| collection_auth(client.get(&url)), "bangumi collection").await?;
     match resp.status().as_u16() {
         404 | 401 | 403 => Ok(None),
         s if (200..300).contains(&s) => {
@@ -1665,11 +1756,11 @@ pub async fn update_collection(subject_id: i64, collection_type: i64) -> Result<
     if !has_token() {
         anyhow::bail!("no token set");
     }
-    let url = format!("{}/v0/users/-/collections/{subject_id}", BASE_OFFICIAL);
+    let url = format!("{}/v0/users/-/collections/{subject_id}", collection_base());
     let body = serde_json::json!({ "type": collection_type });
     let client = client()?;
     let resp = send_with_backoff(
-        || auth(client.post(&url).json(&body)),
+        || collection_auth(client.post(&url).json(&body)),
         "bangumi update_collection",
     )
     .await?;
@@ -1847,13 +1938,88 @@ mod match_tests {
         assert!(v.iter().any(|s| s.eq_ignore_ascii_case("Luck Logic")));
     }
 
+    /// The route flags are process-wide, so any test that flips them has to
+    /// hold this lock; otherwise parallel tests observe each other's choices.
+    /// A failed assertion poisons the lock, so recover the inner guard instead
+    /// of turning one failure into three.
+    static ROUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn route_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        ROUTE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn reset_routes() {
+        set_route_options(false, false);
+        MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
     #[test]
     fn oauth_authorize_url_keeps_encoded_custom_scheme_redirect() {
+        let _guard = route_test_guard();
+        reset_routes();
         let url = authorize_url("client id", "kurako://oauth/callback");
         assert_eq!(
             url,
             "https://bgm.tv/oauth/authorize?client_id=client%20id&response_type=code&redirect_uri=kurako%3A%2F%2Foauth%2Fcallback"
         );
+    }
+
+    #[test]
+    fn oauth_page_route_switches_only_the_authorization_page() {
+        let _guard = route_test_guard();
+        reset_routes();
+        MIRROR.store(true, std::sync::atomic::Ordering::Relaxed);
+        let callback = "kurako://oauth/callback";
+
+        // Both flags off: the page stays official even with the proxy enabled.
+        assert!(authorize_url("id", callback).starts_with("https://bgm.tv/oauth/authorize"));
+
+        set_route_options(true, false);
+        assert!(authorize_url("id", callback).starts_with("https://bangumi.vip/oauth/authorize"));
+        // Login opt-in must not move collections.
+        assert_eq!(collection_base(), BASE_OFFICIAL);
+
+        set_route_options(false, true);
+        assert!(authorize_url("id", callback).starts_with("https://bgm.tv/oauth/authorize"));
+        assert_eq!(collection_base(), BASE_MIRROR);
+
+        // A route flag alone never enables the proxy.
+        MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(authorize_url("id", callback).starts_with("https://bgm.tv/oauth/authorize"));
+        assert_eq!(collection_base(), BASE_OFFICIAL);
+        reset_routes();
+    }
+
+    #[test]
+    fn collection_auth_attaches_bearer_only_to_a_known_host() {
+        let _guard = route_test_guard();
+        reset_routes();
+        set_token(Some("route-test-token".into()));
+        let client = reqwest::Client::new();
+        for host in ["https://api.bangumi.vip", "https://api.bgm.tv"] {
+            let request = collection_auth(client.get(format!("{host}/v0/me")))
+                .build()
+                .unwrap();
+            assert_eq!(
+                request
+                    .headers()
+                    .get(reqwest::header::AUTHORIZATION)
+                    .and_then(|v| v.to_str().ok()),
+                Some("Bearer route-test-token"),
+                "{host} should receive the bearer"
+            );
+        }
+        // Credentials must not follow a route to an unrelated host.
+        let request = collection_auth(client.get("https://example.com/"))
+            .build()
+            .unwrap();
+        assert!(request
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .is_none());
+        set_token(None);
     }
 
     const V0: f64 = 0.55; // full-title v0 hit-0 prior

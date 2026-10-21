@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1029948264;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1823897915;
 
 // Section: executor
 
@@ -1837,6 +1837,45 @@ fn wire__crate__api__set_bangumi_mirror_impl(
                 transform_result_sse::<_, ()>((move || {
                     let output_ok = Result::<_, ()>::Ok({
                         crate::api::set_bangumi_mirror(api_enabled);
+                    })?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__set_bangumi_route_options_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "set_bangumi_route_options",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_oauth_via_mirror = <bool>::sse_decode(&mut deserializer);
+            let api_collection_via_mirror = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok({
+                        crate::api::set_bangumi_route_options(
+                            api_oauth_via_mirror,
+                            api_collection_via_mirror,
+                        );
                     })?;
                     Ok(output_ok)
                 })())
@@ -4049,42 +4088,43 @@ fn pde_ffi_dispatcher_primary_impl(
         51 => wire__crate__api__scan_session_is_cancelled_impl(port, ptr, rust_vec_len, data_len),
         52 => wire__crate__api__search_bangumi_impl(port, ptr, rust_vec_len, data_len),
         53 => wire__crate__api__set_bangumi_mirror_impl(port, ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__set_download_directory_impl(port, ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__smb_cancel_download_impl(port, ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__smb_download_impl(port, ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__smb_list_shares_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__smb_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__smb_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__smb_setup_begin_impl(port, ptr, rust_vec_len, data_len),
-        69 => wire__crate__api__smb_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
-        70 => wire__crate__api__smb_setup_commit_impl(port, ptr, rust_vec_len, data_len),
-        71 => wire__crate__api__smb_setup_list_directories_impl(port, ptr, rust_vec_len, data_len),
-        72 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
-        73 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
-        74 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
-        75 => wire__crate__api__webdav_cancel_download_impl(port, ptr, rust_vec_len, data_len),
-        76 => wire__crate__api__webdav_download_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__webdav_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        78 => wire__crate__api__webdav_list_entries_impl(port, ptr, rust_vec_len, data_len),
-        79 => wire__crate__api__webdav_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        80 => wire__crate__api__webdav_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__webdav_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__webdav_release_impl(port, ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__webdav_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        84 => wire__crate__api__webdav_setup_begin_impl(port, ptr, rust_vec_len, data_len),
-        85 => wire__crate__api__webdav_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
-        86 => wire__crate__api__webdav_setup_commit_impl(port, ptr, rust_vec_len, data_len),
-        87 => wire__crate__api__webdav_setup_list_entries_impl(port, ptr, rust_vec_len, data_len),
-        88 => wire__crate__api__webdav_test_connection_impl(port, ptr, rust_vec_len, data_len),
-        89 => wire__crate__api__webdav_uri_for_relative_impl(port, ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__set_bangumi_route_options_impl(port, ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__set_bangumi_token_impl(port, ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__set_collection_impl(port, ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__set_download_directory_impl(port, ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__set_watched_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__smb_cancel_download_impl(port, ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__smb_connect_impl(port, ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__smb_download_impl(port, ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__smb_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__smb_list_shares_impl(port, ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__smb_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__smb_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__smb_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__smb_release_impl(port, ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__smb_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__smb_setup_begin_impl(port, ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__smb_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__smb_setup_commit_impl(port, ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__smb_setup_list_directories_impl(port, ptr, rust_vec_len, data_len),
+        73 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
+        74 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
+        75 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
+        76 => wire__crate__api__webdav_cancel_download_impl(port, ptr, rust_vec_len, data_len),
+        77 => wire__crate__api__webdav_download_impl(port, ptr, rust_vec_len, data_len),
+        78 => wire__crate__api__webdav_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__webdav_list_entries_impl(port, ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__webdav_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__webdav_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__webdav_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__webdav_release_impl(port, ptr, rust_vec_len, data_len),
+        84 => wire__crate__api__webdav_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__webdav_setup_begin_impl(port, ptr, rust_vec_len, data_len),
+        86 => wire__crate__api__webdav_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
+        87 => wire__crate__api__webdav_setup_commit_impl(port, ptr, rust_vec_len, data_len),
+        88 => wire__crate__api__webdav_setup_list_entries_impl(port, ptr, rust_vec_len, data_len),
+        89 => wire__crate__api__webdav_test_connection_impl(port, ptr, rust_vec_len, data_len),
+        90 => wire__crate__api__webdav_uri_for_relative_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

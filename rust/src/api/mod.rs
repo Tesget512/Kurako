@@ -114,11 +114,17 @@ pub fn set_bangumi_token(token: Option<String>) {
     bangumi::set_token(token);
 }
 
-/// Route Bangumi API calls through the mainland-reachable mirror
-/// (bgmapi.anibt.net, Soyorin's bangumi-proxy instance) instead of api.bgm.tv.
-/// OAuth always stays on the official domain.
+/// Route Bangumi API calls through the community reverse proxy
+/// (bangumi.vip, Mirrox) instead of api.bgm.tv. Opt-in and verified first.
 pub fn set_bangumi_mirror(enabled: bool) {
     bangumi::set_mirror(enabled);
+}
+
+/// Choose, per feature, whether that traffic may use the reverse proxy.
+/// Both are ignored unless the proxy is enabled and verified. Tokens are
+/// host-independent, so these only decide which host carries the request.
+pub fn set_bangumi_route_options(oauth_via_mirror: bool, collection_via_mirror: bool) {
+    bangumi::set_route_options(oauth_via_mirror, collection_via_mirror);
 }
 
 // ---- Bangumi OAuth 2.0 ----
@@ -1366,7 +1372,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
             "Bangumi API 请求失败"
         };
         let mirror_help = if mirror_enabled {
-            "；请到设置重新验证 Bangumi 镜像，或关闭镜像回退官方"
+            "；请到设置重新验证 Bangumi 反向代理，或关闭反向代理回退官方"
         } else {
             ""
         };

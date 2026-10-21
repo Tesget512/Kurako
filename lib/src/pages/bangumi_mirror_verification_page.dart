@@ -67,7 +67,7 @@ BangumiMirrorHostProof collectBangumiMirrorProof({
     }
     if (cookie.path != null && cookie.path != '/') {
       throw const BangumiMirrorException(
-        '验证 Cookie 仅覆盖部分路径，无法用于 API 与封面请求，请关闭镜像回退官方。',
+        '验证 Cookie 仅覆盖部分路径，无法用于 API 与封面请求，请关闭反向代理回退官方。',
       );
     }
     if (cookie.expiresDate != null &&
@@ -96,7 +96,9 @@ BangumiMirrorHostProof collectBangumiMirrorProof({
     expiresAt: expiries.isEmpty ? null : expiries.first,
   );
   if (userAgent.trim().isEmpty) {
-    throw const BangumiMirrorException('当前 WebView 无法读取 User-Agent，请关闭镜像回退官方。');
+    throw const BangumiMirrorException(
+      '当前 WebView 无法读取 User-Agent，请关闭反向代理回退官方。',
+    );
   }
   return proof;
 }
@@ -171,7 +173,7 @@ class _BangumiMirrorVerificationPageState
       final version = await WebViewEnvironment.getAvailableVersion();
       if (version == null || version.isEmpty) {
         throw const BangumiMirrorException(
-          '未找到 Microsoft Edge WebView2 Runtime。请安装后重试，或关闭镜像使用官方服务。',
+          '未找到 Microsoft Edge WebView2 Runtime。请安装后重试，或关闭反向代理使用官方服务。',
         );
       }
       _environment = await WebViewEnvironment.create();
@@ -202,7 +204,7 @@ class _BangumiMirrorVerificationPageState
       );
       if (uaValue is! String || uaValue.trim().isEmpty) {
         throw const BangumiMirrorException(
-          '当前 WebView 无法读取 User-Agent，请关闭镜像回退官方。',
+          '当前 WebView 无法读取 User-Agent，请关闭反向代理回退官方。',
         );
       }
       if (_imageStage && uaValue != _apiUserAgent) {
@@ -226,7 +228,7 @@ class _BangumiMirrorVerificationPageState
             uri?.host != bangumiMirrorImageHost ||
             uri!.userInfo.isNotEmpty ||
             uri.hasPort) {
-          throw const BangumiMirrorException('API 未返回可验证的镜像封面地址，未开启镜像。');
+          throw const BangumiMirrorException('API 未返回可验证的反向代理封面地址，未开启反向代理。');
         }
         if (!mounted) return;
         setState(() {
@@ -260,7 +262,7 @@ class _BangumiMirrorVerificationPageState
       canPop: !_checking,
       child: Scaffold(
         appBar: AppBar(
-          title: Text(_imageStage ? '验证图片镜像（2/2）' : '验证 API 镜像（1/2）'),
+          title: Text(_imageStage ? '验证图片反向代理（2/2）' : '验证 API 反向代理（1/2）'),
         ),
         body: Column(
           children: [
@@ -269,10 +271,10 @@ class _BangumiMirrorVerificationPageState
               child: Text(
                 _imageStage
                     ? '请确认页面能显示封面图片，然后点击“检查并开启”。无需登录账号。'
-                          '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启镜像。'
-                    : '镜像 API 通常可直接访问，此时无需任何验证。'
+                          '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启反向代理。'
+                    : '反向代理 API 通常可直接访问，此时无需任何验证。'
                           '若页面显示人机验证，请等待其完成后再点击“检查并继续”。'
-                          '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启镜像。',
+                          '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启反向代理。',
               ),
             ),
             if (_loading || _checking) const LinearProgressIndicator(),
@@ -299,7 +301,7 @@ class _BangumiMirrorVerificationPageState
                           snapshot.error is BangumiMirrorException
                               ? (snapshot.error as BangumiMirrorException)
                                     .message
-                              : '无法启动内置 WebView。Windows 请检查 WebView2 Runtime；可关闭镜像回退官方。',
+                              : '无法启动内置 WebView。Windows 请检查 WebView2 Runtime；可关闭反向代理回退官方。',
                         ),
                       ),
                     );
@@ -360,7 +362,7 @@ class _BangumiMirrorVerificationPageState
                           if (request.isForMainFrame == true && mounted) {
                             setState(() {
                               _loading = false;
-                              _error = '验证页面加载失败，请检查网络/代理出口，或关闭镜像回退官方。';
+                              _error = '验证页面加载失败，请检查网络/代理出口，或关闭反向代理回退官方。';
                             });
                           }
                         },
@@ -395,7 +397,7 @@ class _BangumiMirrorVerificationPageState
                                   Text(
                                     _challengeVisible
                                         ? '页面正在显示人机验证，请等待其完成后点击“检查并继续”。'
-                                        : '镜像 API 未要求人机验证，已返回有效数据。'
+                                        : '反向代理 API 未要求人机验证，已返回有效数据。'
                                               '\n点击“检查并继续”，应用会验证实际 API 请求，然后继续测试封面图片。',
                                     textAlign: TextAlign.center,
                                   ),

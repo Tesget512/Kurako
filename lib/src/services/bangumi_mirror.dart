@@ -10,7 +10,7 @@ const bangumiMirrorApiHost = 'api.bangumi.vip';
 const bangumiMirrorApiProbe = 'https://$bangumiMirrorApiHost/v0/subjects/1';
 const bangumiMirrorImageHost = 'lain.bangumi.vip';
 const bangumiMirrorFailureMessage =
-    '镜像验证已失效或请求被拦截。请重新验证，或关闭镜像回退官方；'
+    '反向代理验证已失效或请求被拦截。请重新验证，或关闭反向代理回退官方；'
     '请确保 WebView 与应用使用相同网络和代理出口，网络/IP 或 User-Agent 改变会使验证失效。';
 
 /// User-Agent used when probing the mirror directly, without a WebView.
@@ -160,7 +160,7 @@ class BangumiMirrorService extends ChangeNotifier {
   void bindBackend(BangumiMirrorBackend backend) => _backend = backend;
 
   BangumiMirrorBackend get _bound =>
-      _backend ?? (throw const BangumiMirrorException('镜像服务尚未初始化，请稍后重试。'));
+      _backend ?? (throw const BangumiMirrorException('反向代理服务尚未初始化，请稍后重试。'));
 
   Future<SharedPreferences> get _prefs async =>
       _preferences ??= await SharedPreferences.getInstance();
@@ -175,7 +175,7 @@ class BangumiMirrorService extends ChangeNotifier {
             (!image.valid ||
                 image.host != bangumiMirrorImageHost ||
                 image.userAgent != api.userAgent))) {
-      throw const BangumiMirrorException('无法读取有效且一致的镜像验证凭据，请重新验证。');
+      throw const BangumiMirrorException('无法读取有效且一致的反向代理验证凭据，请重新验证。');
     }
     await _bound.configure(
       apiCookie: api.cookie,
@@ -199,7 +199,7 @@ class BangumiMirrorService extends ChangeNotifier {
         return false;
       }
       final raw = (await _prefs).getString(proofPreferenceKey);
-      if (raw == null) throw const BangumiMirrorException('启用镜像前需要在应用内完成验证。');
+      if (raw == null) throw const BangumiMirrorException('启用反向代理前需要在应用内完成验证。');
       final payload = jsonDecode(raw) as Map<String, dynamic>;
       final api = BangumiMirrorHostProof.fromJson(
         payload['api'] as Map<String, dynamic>,
@@ -218,7 +218,7 @@ class BangumiMirrorService extends ChangeNotifier {
       }
       final enabledSaved = await (await _prefs).setBool('bangumi_mirror', true);
       if (!enabledSaved) {
-        throw const BangumiMirrorException('无法保存镜像开关，已回退官方。');
+        throw const BangumiMirrorException('无法保存反向代理开关，已回退官方。');
       }
       if (epoch != _epoch) {
         await _reset();
@@ -318,7 +318,7 @@ class BangumiMirrorService extends ChangeNotifier {
     // through the direct probe; say that plainly instead of implying the mirror
     // is unsupported there.
     if (Platform.isLinux) {
-      _message = '当前网络无法直接访问镜像，而 Linux 不支持内置验证页面，请稍后重试或使用官方服务。';
+      _message = '当前网络无法直接访问反向代理，而 Linux 不支持内置验证页面，请稍后重试或使用官方服务。';
       notifyListeners();
       throw BangumiMirrorException(_message!);
     }
@@ -334,12 +334,12 @@ class BangumiMirrorService extends ChangeNotifier {
           builder: (_) => BangumiMirrorVerificationPage(
             onApiProof: (api) async {
               if (epoch != _epoch) {
-                throw const BangumiMirrorException('镜像验证已取消。');
+                throw const BangumiMirrorException('反向代理验证已取消。');
               }
               await _configure(api, null);
               final imageUrl = await _bound.probeApi();
               if (epoch != _epoch) {
-                throw const BangumiMirrorException('镜像验证已取消。');
+                throw const BangumiMirrorException('反向代理验证已取消。');
               }
               _apiProof = api;
               return imageUrl;
@@ -351,12 +351,12 @@ class BangumiMirrorService extends ChangeNotifier {
                   throw const BangumiMirrorException('请先完成 API 验证。');
                 }
                 if (epoch != _epoch) {
-                  throw const BangumiMirrorException('镜像验证已取消。');
+                  throw const BangumiMirrorException('反向代理验证已取消。');
                 }
                 await _configure(api, image);
                 await _bound.probeImage(imageUrl);
                 if (epoch != _epoch) {
-                  throw const BangumiMirrorException('镜像验证已取消。');
+                  throw const BangumiMirrorException('反向代理验证已取消。');
                 }
                 // Persistence precedes enabling; a failed disk write never leaves
                 // the Rust mirror enabled with no restorable local credentials.
@@ -365,26 +365,26 @@ class BangumiMirrorService extends ChangeNotifier {
                   jsonEncode({'api': api.toJson(), 'image': image.toJson()}),
                 );
                 if (!saved) {
-                  throw const BangumiMirrorException('无法保存镜像验证，请关闭镜像回退官方。');
+                  throw const BangumiMirrorException('无法保存反向代理验证，请关闭反向代理回退官方。');
                 }
                 if (epoch != _epoch) {
-                  throw const BangumiMirrorException('镜像验证已取消。');
+                  throw const BangumiMirrorException('反向代理验证已取消。');
                 }
                 await _bound.setEnabled(true);
                 if (epoch != _epoch) {
                   await _reset();
-                  throw const BangumiMirrorException('镜像验证已取消。');
+                  throw const BangumiMirrorException('反向代理验证已取消。');
                 }
                 final enabledSaved = await (await _prefs).setBool(
                   'bangumi_mirror',
                   true,
                 );
                 if (!enabledSaved) {
-                  throw const BangumiMirrorException('无法保存镜像开关，已回退官方。');
+                  throw const BangumiMirrorException('无法保存反向代理开关，已回退官方。');
                 }
                 if (epoch != _epoch) {
                   await _reset();
-                  throw const BangumiMirrorException('镜像验证已取消。');
+                  throw const BangumiMirrorException('反向代理验证已取消。');
                 }
                 _imageProof = image;
                 _enabled = true;
@@ -461,7 +461,7 @@ class BangumiMirrorService extends ChangeNotifier {
   void reportApiFailure(Object error) {
     if (!_enabled) return;
     // Only classify the marker; never display/log the raw bridge exception.
-    if (error.toString().contains('Bangumi 镜像验证') ||
+    if (error.toString().contains('Bangumi 反向代理验证') ||
         error.toString().contains('bangumi mirror')) {
       reportCoverFailure();
     }

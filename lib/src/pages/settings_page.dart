@@ -324,11 +324,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               children: [
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('使用 Bangumi 镜像'),
-                  subtitle: const Text(
-                    '默认关闭。开启时会先直接探测镜像 API 与封面，通过即启用；'
-                    '仅当镜像要求人机验证时才需要在内置页面完成验证。'
-                    '账号登录和收藏始终访问官方；镜像失效时请重新验证或关闭回退官方。',
+                  title: const Text('使用 Bangumi 反向代理（Mirrox）'),
+                  subtitle: const Text('请求会经第三方转发，非官方服务。'),
+                  secondary: IconButton(
+                    tooltip: '了解更多',
+                    icon: const Icon(Icons.help_outline, size: 20),
+                    onPressed: () => _showMirrorDetails(context),
                   ),
                   value: ref.watch(bangumiMirrorProvider),
                   onChanged: service.busy ? null : _setMirror,
@@ -348,14 +349,90 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     child: TextButton.icon(
                       onPressed: service.busy ? null : () => _setMirror(true),
                       icon: const Icon(Icons.verified_user_outlined),
-                      label: const Text('重新验证镜像'),
+                      label: const Text('重新验证反向代理'),
                     ),
                   ),
+                // Per-feature routing: a token works on either host, so these
+                // only decide which one carries the request.
+                if (ref.watch(bangumiMirrorProvider)) ...[
+                  SwitchListTile(
+                    contentPadding: const EdgeInsets.only(left: 16),
+                    title: const Text('登录走反向代理'),
+                    subtitle: const Text('仅授权页面经反代打开，换取令牌仍走官方'),
+                    value: ref.watch(bangumiOAuthViaMirrorProvider),
+                    onChanged: (value) => ref
+                        .read(bangumiOAuthViaMirrorProvider.notifier)
+                        .set(value),
+                  ),
+                  SwitchListTile(
+                    contentPadding: const EdgeInsets.only(left: 16),
+                    title: const Text('收藏同步走反向代理'),
+                    subtitle: const Text('收藏的读取与修改通过反代完成'),
+                    value: ref.watch(bangumiCollectionViaMirrorProvider),
+                    onChanged: (value) => ref
+                        .read(bangumiCollectionViaMirrorProvider.notifier)
+                        .set(value),
+                  ),
+                ],
               ],
             );
           },
         ),
       ],
+    );
+  }
+
+  /// Full explanation lives here instead of the settings subtitle, which is
+  /// kept to one line.
+  void _showMirrorDetails(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('关于 Bangumi 反向代理'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: const [
+              Text(
+                'Mirrox 是社区维护的反向代理（Rust 编写，MIT 协议，'
+                '作者 Bangumi 账号 sakurairo），并非 Bangumi 官方服务。',
+              ),
+              SizedBox(height: 12),
+              Text(
+                '开启后，API 与封面请求会经由第三方服务器转发，'
+                '对方在技术上可以看到这些请求的内容。'
+                '如果介意，请保持关闭并自行准备网络环境。',
+              ),
+              SizedBox(height: 12),
+              Text(
+                '开启时会先直接探测其 API 与封面，通过即启用；'
+                '只有对方要求人机验证时，才需要在内置页面完成验证。'
+                '验证凭据仅保存在本机，不会进入配置备份。',
+              ),
+              SizedBox(height: 12),
+              Text(
+                '登录与收藏可以分别选择走官方或反向代理。'
+                '登录开关只改变授权页面从哪里打开：反代会对服务端的令牌请求'
+                '下发验证页，因此换取令牌始终由官方完成。'
+                '收藏开关会让读取与修改请求连同令牌一起经反代转发。'
+                '两种方式拿到的令牌是通用的。',
+              ),
+              SizedBox(height: 12),
+              Text(
+                '反向代理失效或验证过期时，重新验证或关闭即可回到官方。'
+                '官方 API 在部分网络环境下无法直接访问，此时反向代理可作为备选。',
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
     );
   }
 

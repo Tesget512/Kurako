@@ -321,7 +321,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             '将替换 ${document.settingCount} 项外观、播放器与使用偏好。\n\n'
             '${document.includesAccountAndSmb ? '文件中的 Bangumi 账号与 SMB 凭证也会覆盖当前值。' : '这是 v1 配置文件，当前账号与 SMB 凭证会保留。'}\n'
             '${document.includesWebDav ? '文件中的 WebDAV 凭证也会覆盖当前值。' : '当前 WebDAV 凭证会保留。'}\n\n'
-            '镜像验证仅在本机有效，导入后需要重新验证。\n\n'
+            '反向代理验证仅在本机有效，导入后需要重新验证。\n\n'
             '下载内容、媒体来源和本机路径都会保留。确定继续吗？',
           ),
           actions: [

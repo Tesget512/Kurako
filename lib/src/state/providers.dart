@@ -631,6 +631,8 @@ class _MirrorNotifier extends StateNotifier<bool> {
       requestedEnabled: prefs.getBool('bangumi_mirror') ?? false,
     );
     _sync();
+    // Push the saved per-feature choices before any request can be made.
+    await _pushRouteOptions(prefs);
     if (BangumiMirrorService.instance.enabled) {
       try {
         final anime = await rust.listAnime();
@@ -640,6 +642,16 @@ class _MirrorNotifier extends StateNotifier<bool> {
         );
       } catch (_) {}
     }
+  }
+
+  static Future<void> _pushRouteOptions(SharedPreferences prefs) async {
+    try {
+      await rust.setBangumiRouteOptions(
+        oauthViaMirror: prefs.getBool('bangumi_oauth_via_mirror') ?? false,
+        collectionViaMirror:
+            prefs.getBool('bangumi_collection_via_mirror') ?? false,
+      );
+    } catch (_) {}
   }
 
   Future<void> set(bool value) async {
@@ -654,6 +666,39 @@ class _MirrorNotifier extends StateNotifier<bool> {
   void dispose() {
     BangumiMirrorService.instance.removeListener(_sync);
     super.dispose();
+  }
+}
+
+/// Whether Bangumi login (OAuth) may go through the reverse proxy.
+/// Independent of the collection choice; a token works on either host.
+final bangumiOAuthViaMirrorProvider =
+    StateNotifierProvider<_RouteFlagNotifier, bool>((ref) {
+      return _RouteFlagNotifier('bangumi_oauth_via_mirror');
+    });
+
+/// Whether collection reads/writes may go through the reverse proxy.
+final bangumiCollectionViaMirrorProvider =
+    StateNotifierProvider<_RouteFlagNotifier, bool>((ref) {
+      return _RouteFlagNotifier('bangumi_collection_via_mirror');
+    });
+
+class _RouteFlagNotifier extends StateNotifier<bool> {
+  _RouteFlagNotifier(this._key) : super(false) {
+    _load();
+  }
+
+  final String _key;
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) state = prefs.getBool(_key) ?? false;
+  }
+
+  Future<void> set(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_key, value);
+    if (mounted) state = value;
+    await _MirrorNotifier._pushRouteOptions(prefs);
   }
 }
 
