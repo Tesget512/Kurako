@@ -58,25 +58,6 @@ Future<OAuthResult> oauthExchangeCode({
   required String state,
 }) => RustLib.instance.api.crateApiOauthExchangeCode(code: code, state: state);
 
-/// Build the same-origin reverse-proxy token request for the Windows WebView.
-///
-/// The caller must only use this after opening and validating the
-/// `bangumi.vip` authorization page. The endpoint is intentionally fixed to
-/// the HTML host; `api.bangumi.vip` is not an OAuth endpoint.
-Future<OAuthWebviewTokenRequest> oauthWebviewTokenRequest({
-  required String code,
-  required String state,
-}) => RustLib.instance.api.crateApiOauthWebviewTokenRequest(
-  code: code,
-  state: state,
-);
-
-/// Parse and validate a token JSON returned by the reverse-proxy WebView.
-Future<OAuthResult> oauthValidateMirrorTokens({required String tokenJson}) =>
-    RustLib.instance.api.crateApiOauthValidateMirrorTokens(
-      tokenJson: tokenJson,
-    );
-
 /// Refresh an access token using a stored refresh token.
 Future<OAuthResult> oauthRefresh({required String refreshToken}) =>
     RustLib.instance.api.crateApiOauthRefresh(refreshToken: refreshToken);
@@ -556,26 +537,4 @@ class OAuthResult {
           refreshToken == other.refreshToken &&
           expiresAt == other.expiresAt &&
           userId == other.userId;
-}
-
-/// Form request executed inside the still-mounted reverse-proxy WebView.
-///
-/// The body contains the authorization code and client secret. It is returned
-/// only to the in-process Dart caller and must never be logged.
-class OAuthWebviewTokenRequest {
-  final String endpoint;
-  final String body;
-
-  const OAuthWebviewTokenRequest({required this.endpoint, required this.body});
-
-  @override
-  int get hashCode => endpoint.hashCode ^ body.hashCode;
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is OAuthWebviewTokenRequest &&
-          runtimeType == other.runtimeType &&
-          endpoint == other.endpoint &&
-          body == other.body;
 }

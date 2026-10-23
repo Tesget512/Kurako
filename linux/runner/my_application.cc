@@ -9,6 +9,7 @@ struct _MyApplication {
   GtkWindow* window;
   FlMethodChannel* oauth_callback_channel;
   gchar* pending_oauth_callback;
+  gboolean awaiting_oauth;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -27,20 +28,62 @@ bool is_oauth_callback(const gchar* uri) {
          g_strcmp0(g_uri_get_path(parsed), "/callback") == 0;
 }
 
+void oauth_callback_response_cb(GObject* source, GAsyncResult* result,
+                                gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  g_autoptr(GError) error = nullptr;
+  g_autoptr(FlMethodResponse) response =
+      fl_method_channel_invoke_method_finish(FL_METHOD_CHANNEL(source), result,
+                                             &error);
+  if (error == nullptr && response != nullptr &&
+      FL_IS_METHOD_SUCCESS_RESPONSE(response)) {
+    FlValue* value = fl_method_success_response_get_result(
+        FL_METHOD_SUCCESS_RESPONSE(response));
+    if (value != nullptr && fl_value_get_type(value) == FL_VALUE_TYPE_BOOL &&
+        fl_value_get_bool(value) && self->awaiting_oauth &&
+        self->window != nullptr) {
+      gtk_window_present(self->window);
+    }
+  }
+  g_object_unref(self);
+}
+
 void dispatch_oauth_callback(MyApplication* self, const gchar* uri) {
   if (!is_oauth_callback(uri)) return;
-  if (self->oauth_callback_channel == nullptr) {
+  if (!self->awaiting_oauth || self->oauth_callback_channel == nullptr) {
     g_free(self->pending_oauth_callback);
     self->pending_oauth_callback = g_strdup(uri);
     return;
   }
+  g_clear_pointer(&self->pending_oauth_callback, g_free);
   g_autoptr(FlValue) arguments = fl_value_new_string(uri);
   fl_method_channel_invoke_method(self->oauth_callback_channel,
                                   "onOAuthCallback", arguments, nullptr,
-                                  nullptr, nullptr);
-  if (self->window != nullptr) {
-    gtk_window_present(self->window);
+                                  oauth_callback_response_cb,
+                                  g_object_ref(self));
+}
+
+void oauth_method_call_cb(FlMethodChannel* channel, FlMethodCall* method_call,
+                          gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  const gchar* method = fl_method_call_get_name(method_call);
+  if (g_strcmp0(method, "beginOAuth") == 0) {
+    self->awaiting_oauth = TRUE;
+    fl_method_call_respond_success(method_call, nullptr, nullptr);
+    if (self->pending_oauth_callback != nullptr) {
+      g_autofree gchar* pending =
+          g_steal_pointer(&self->pending_oauth_callback);
+      dispatch_oauth_callback(self, pending);
+    }
+    return;
   }
+  if (g_strcmp0(method, "endOAuth") == 0) {
+    self->awaiting_oauth = FALSE;
+    g_clear_pointer(&self->pending_oauth_callback, g_free);
+    fl_method_call_respond_success(method_call, nullptr, nullptr);
+    return;
+  }
+  fl_method_call_respond_not_implemented(method_call, nullptr);
 }
 
 }  // namespace
@@ -94,6 +137,8 @@ static void my_application_activate(GApplication* application) {
   self->oauth_callback_channel = fl_method_channel_new(
       fl_engine_get_binary_messenger(fl_view_get_engine(view)),
       kOAuthCallbackChannel, FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      self->oauth_callback_channel, oauth_method_call_cb, self, nullptr);
   if (self->pending_oauth_callback != nullptr) {
     g_autofree gchar* pending = g_steal_pointer(&self->pending_oauth_callback);
     dispatch_oauth_callback(self, pending);
@@ -112,9 +157,6 @@ static void my_application_open(GApplication* application, GFile** files,
   for (gint i = 0; i < n_files; ++i) {
     g_autofree gchar* uri = g_file_get_uri(files[i]);
     dispatch_oauth_callback(self, uri);
-  }
-  if (self->window != nullptr) {
-    gtk_window_present(self->window);
   }
 }
 
@@ -141,6 +183,7 @@ static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_object(&self->oauth_callback_channel);
   g_clear_pointer(&self->pending_oauth_callback, g_free);
+  self->awaiting_oauth = FALSE;
   self->window = nullptr;
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
@@ -157,6 +200,7 @@ static void my_application_init(MyApplication* self) {
   self->window = nullptr;
   self->oauth_callback_channel = nullptr;
   self->pending_oauth_callback = nullptr;
+  self->awaiting_oauth = FALSE;
 }
 
 MyApplication* my_application_new() {

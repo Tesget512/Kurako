@@ -176,6 +176,10 @@ if [[ -z "$DEPENDENCIES" || "$DEPENDENCIES" == "$SHLIB_OUTPUT" ]]; then
   echo "dpkg-shlibdeps did not produce a dependency list." >&2
   exit 1
 fi
+if ! printf '%s' "$DEPENDENCIES" | tr ',' '\n' | sed 's/^ *//' | \
+  grep -qx 'desktop-file-utils'; then
+  DEPENDENCIES="$DEPENDENCIES, desktop-file-utils"
+fi
 INSTALLED_SIZE="$(du -sk "$PACKAGE_ROOT" | awk '{print $1}')"
 cat > "$DEBIAN_DIR/control" <<CONTROL
 Package: kurako

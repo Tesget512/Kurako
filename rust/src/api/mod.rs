@@ -138,15 +138,6 @@ pub struct OAuthResult {
     pub user_id: i64,
 }
 
-/// Form request executed inside the still-mounted reverse-proxy WebView.
-///
-/// The body contains the authorization code and client secret. It is returned
-/// only to the in-process Dart caller and must never be logged.
-pub struct OAuthWebviewTokenRequest {
-    pub endpoint: String,
-    pub body: String,
-}
-
 impl From<bangumi::OAuthToken> for OAuthResult {
     fn from(t: bangumi::OAuthToken) -> Self {
         OAuthResult {
@@ -187,44 +178,6 @@ pub fn oauth_exchange_code(code: String, state: String) -> Result<OAuthResult, S
     })
     .map(Into::into)
     .map_err(|e| format!("{e:#}"))
-}
-
-/// Build the same-origin reverse-proxy token request for the Windows WebView.
-///
-/// The caller must only use this after opening and validating the
-/// `bangumi.vip` authorization page. The endpoint is intentionally fixed to
-/// the HTML host; `api.bangumi.vip` is not an OAuth endpoint.
-pub fn oauth_webview_token_request(
-    code: String,
-    state: String,
-) -> Result<OAuthWebviewTokenRequest, String> {
-    if !bangumi::oauth_mirror_route_enabled() {
-        return Err("oauth mirror disabled".to_string());
-    }
-    if code.trim().is_empty() || state.trim().is_empty() {
-        return Err("oauth request invalid arguments".to_string());
-    }
-    Ok(OAuthWebviewTokenRequest {
-        endpoint: bangumi::OAUTH_MIRROR_TOKEN_URL.to_string(),
-        body: bangumi::oauth_webview_form_body(&code, &state),
-    })
-}
-
-/// Parse and validate a token JSON returned by the reverse-proxy WebView.
-pub fn oauth_validate_mirror_tokens(token_json: String) -> Result<OAuthResult, String> {
-    if !bangumi::oauth_mirror_route_enabled() {
-        return Err("oauth mirror disabled".to_string());
-    }
-    RT.block_on(async {
-        let mut token = bangumi::parse_webview_oauth_token(&token_json)
-            .map_err(|_| anyhow::anyhow!("oauth token invalid response"))?;
-        bangumi::validate_mirror_webview_token(&mut token)
-            .await
-            .map_err(|_| anyhow::anyhow!("oauth token verification failed"))?;
-        Ok::<_, anyhow::Error>(token)
-    })
-    .map(Into::into)
-    .map_err(|e| e.to_string())
 }
 
 /// Refresh an access token using a stored refresh token.

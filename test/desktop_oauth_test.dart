@@ -78,6 +78,53 @@ void main() {
     );
   });
 
+  test(
+    'default desktop path does not call an unsupported native handshake',
+    () async {
+      final methods = <String>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        methods.add(call.method);
+        return null;
+      });
+      final session = DesktopOAuthSession(
+        channel: channel,
+        launch: (_) async {
+          expect(methods, isEmpty);
+          await callback('kurako://oauth/callback?code=c&state=s');
+          return true;
+        },
+      );
+      expect(
+        await session.authenticate(
+          'https://bgm.tv/oauth/authorize',
+          's',
+          const Duration(seconds: 1),
+        ),
+        contains('code=c'),
+      );
+      expect(methods, isEmpty);
+    },
+  );
+
+  test('a repeated callback completes one attempt only', () async {
+    final session = DesktopOAuthSession(
+      channel: channel,
+      launch: (_) async {
+        await callback('kurako://oauth/callback?code=one&state=s');
+        await callback('kurako://oauth/callback?code=two&state=s');
+        return true;
+      },
+    );
+    expect(
+      await session.authenticate(
+        'https://bgm.tv/oauth/authorize',
+        's',
+        const Duration(seconds: 1),
+      ),
+      contains('code=one'),
+    );
+  });
+
   test('timeout and single flight do not consume a later attempt', () async {
     final session = DesktopOAuthSession(
       channel: channel,
@@ -105,5 +152,21 @@ void main() {
     await callback('kurako://oauth/callback?code=old&state=first');
     await callback('kurako://oauth/callback?code=c&state=next');
     expect(await next, contains('state=next'));
+  });
+
+  test('timeout covers a browser launch that never returns', () async {
+    final never = Completer<bool>();
+    final session = DesktopOAuthSession(
+      channel: channel,
+      launch: (_) => never.future,
+    );
+    await expectLater(
+      session.authenticate(
+        'https://bgm.tv',
+        's',
+        const Duration(milliseconds: 10),
+      ),
+      throwsA(isA<OAuthException>()),
+    );
   });
 }

@@ -10,7 +10,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/api.dart' show OAuthResult;
-import 'windows_bangumi_auth.dart';
 
 /// Callback address registered in the Bangumi developer console. Kept in sync
 /// with Rust's `OAUTH_REDIRECT_URI`.
@@ -32,17 +31,13 @@ const MethodChannel _desktopOAuthChannel = MethodChannel(
 /// 2. capture Bangumi's `kurako://oauth/callback?code=...` redirect,
 /// 3. exchange the one-time code (valid for 60 seconds) for tokens in Rust.
 ///
-/// iOS/Android use the platform authentication session. macOS/Linux use the
-/// default browser and the registered `kurako://` protocol handler. Windows
-/// uses Kurako's independent native WebView window.
+/// iOS/Android use the platform authentication session. Desktop platforms use
+/// the default browser and a registered `kurako://` protocol handler.
 class BangumiOAuth {
   static final _desktopSession = DesktopOAuthSession(
     channel: _desktopOAuthChannel,
     launch: (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
-    nativeHandshake: Platform.isMacOS,
-  );
-  static final _windowsAuth = WindowsBangumiAuth.production(
-    parseCallback: parseBangumiOAuthCode,
+    nativeHandshake: Platform.isMacOS || Platform.isLinux,
   );
 
   /// Runs the full flow and returns the tokens, or throws on error/timeout.
@@ -51,28 +46,12 @@ class BangumiOAuth {
   }) async {
     final state = _newOAuthState();
     final authUri = Uri.parse(await rust.oauthAuthorizeUrl());
-    final authorizeUri = authUri.replace(
-      queryParameters: {...authUri.queryParameters, 'state': state},
-    );
-    if (Platform.isWindows) {
-      try {
-        return await _windowsAuth.login(
-          authorizeUri: authorizeUri,
-          state: state,
-          timeout: timeout,
-        );
-      } on WindowsBangumiAuthException catch (error) {
-        throw OAuthException(error.message);
-      } on OAuthException {
-        rethrow;
-      } catch (error) {
-        throw OAuthException(bangumiLoginFailureMessage(error));
-      }
-    }
-    final authUrl = authorizeUri.toString();
+    final authUrl = authUri
+        .replace(queryParameters: {...authUri.queryParameters, 'state': state})
+        .toString();
     String callbackUrl;
     try {
-      callbackUrl = Platform.isLinux || Platform.isMacOS
+      callbackUrl = Platform.isWindows || Platform.isLinux || Platform.isMacOS
           ? await _desktopSession.authenticate(authUrl, state, timeout)
           : await FlutterWebAuth2.authenticate(
               url: authUrl,
@@ -145,18 +124,22 @@ class DesktopOAuthSession {
       return true;
     });
     try {
-      if (nativeHandshake) await channel.invokeMethod<void>('beginOAuth');
-      if (!await launch(Uri.parse(authUrl))) {
-        throw const OAuthException('无法打开系统默认浏览器，请检查桌面默认浏览器设置。');
-      }
-      return await callback.future.timeout(
+      return await () async {
+        if (nativeHandshake) await channel.invokeMethod<void>('beginOAuth');
+        if (!await launch(Uri.parse(authUrl))) {
+          throw const OAuthException('无法打开系统默认浏览器，请检查桌面默认浏览器设置。');
+        }
+        return await callback.future;
+      }().timeout(
         timeout,
         onTimeout: () => throw const OAuthException('授权超时，请重新登录'),
       );
     } finally {
       if (nativeHandshake) {
         try {
-          await channel.invokeMethod<void>('endOAuth');
+          await channel
+              .invokeMethod<void>('endOAuth')
+              .timeout(const Duration(seconds: 3));
         } catch (_) {}
       }
       if (identical(_active, callback)) {

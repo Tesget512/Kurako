@@ -73,6 +73,7 @@ ad-hoc 签名不包含开发者身份，也不能进行 Apple 公证；它与 Ap
 
 - iOS/iPadOS 默认下载目录为 Files 可见的 App Documents `Kurako Downloads`。
 - SMB 外部播放先下载到本地，再交给系统分享面板或外部播放器。
-- Bangumi OAuth 使用系统认证会话和唯一回调 `kurako://oauth/callback`。
+- iOS/iPadOS 使用系统认证会话；macOS 使用系统默认浏览器。两者统一通过
+  `kurako://oauth/callback` 返回应用。
 - iPad 展示分享等 popover 控制器时必须设置锚点。
 - Flutter 在 Apple 平台依赖 Metal 渲染；不保证在没有可用 Metal 的 macOS 主机上正常显示界面。

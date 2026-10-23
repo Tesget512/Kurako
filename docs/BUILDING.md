@@ -71,6 +71,11 @@ Linux 上的 Bangumi HTTP/OAuth 请求优先读取 `HTTPS_PROXY`、`HTTP_PROXY`�
 
 `script/Build-KurakoLinuxDeb.sh` 复用同架构已构建的 Release bundle，不重新编译应用。脚本将 bundle 安装到 `/opt/kurako/`，创建 `/usr/bin/kurako` 命令入口，安装 desktop、AppStream 与 hicolor 图标元数据，并对包根中的全部 ELF 使用 `dpkg-shlibdeps` 推导实际运行时依赖；任何外部共享库无法解析都会使打包失败。Flutter 插件若携带构建机绝对 RUNPATH，脚本只在包副本中修正为 `$ORIGIN`，不会污染原始 Release bundle；成包后再次扫描，任何残留绝对 ELF RPATH/RUNPATH 都会使打包失败。输出为 `dist/out/Kurako-Linux-<version>-<arch>.deb`。在 Debian/Ubuntu 系统中可使用 `sudo apt install ./dist/out/Kurako-Linux-<version>-<arch>.deb` 安装，使 APT 同时验证并补齐依赖。
 
+DEB 显式依赖 `desktop-file-utils`，以便安装时刷新
+`x-scheme-handler/kurako` 的 MIME handler 数据库。Bangumi 登录使用系统默认
+浏览器，授权完成后由 `kurako://oauth/callback` 回到应用；不会在 Linux
+应用内另建 WebView 登录窗口。
+
 DEB 的 `/usr/bin/kurako` 是薄启动包装器。默认仅在 DMI 识别为 VirtualBox 时设置 `LIBGL_ALWAYS_SOFTWARE=1`，规避无 3D 虚拟显卡缺失 OpenGL framebuffer blit 导致的 Flutter 引擎中止；实体 Linux 不受影响。可用 `KURAKO_SOFTWARE_RENDERING=1` 显式强制软件渲染，或用 `KURAKO_SOFTWARE_RENDERING=0` 禁止 VirtualBox 自动回退。Flutter 3.38+ 与旧版 `media_kit_video` Linux `FlTextureGL` 输出存在上下文兼容问题，可表现为蓝屏或 Mesa/Flutter 绘制崩溃，因此 Linux 播放器改用稳定的像素缓冲纹理输出。“自动/硬件解码”仍向 libmpv 请求 `auto-copy`，使支持的实体机可继续使用 VAAPI/VDPAU 解码后复制帧；最终是否启用硬件解码以播放器信息中的 `hwdec-current` 为准。Windows、macOS 与移动端配置不变。
 
 Linux 初始窗口为 1440×900，最小尺寸为 960×640；GTK Runner 与 Dart `window_manager` 两层保持一致，避免插件初始化前后尺寸跳变或首次启动过小。

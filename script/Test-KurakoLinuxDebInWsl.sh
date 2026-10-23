@@ -61,6 +61,11 @@ if [[ "$PACKAGE_ARCH" != "$(dpkg --print-architecture)" ]]; then
   echo "Package architecture $PACKAGE_ARCH does not match WSL architecture $(dpkg --print-architecture)." >&2
   exit 1
 fi
+if ! dpkg-deb -f "$DEB_PATH" Depends | tr ',' '\n' | sed 's/^ *//' | \
+  grep -qx 'desktop-file-utils'; then
+  echo "Missing desktop-file-utils dependency for kurako:// registration." >&2
+  exit 1
+fi
 
 WORK_DIR="$(mktemp -d -t kurako-deb-wsl.XXXXXXXX)"
 trap 'rm -rf "$WORK_DIR"' EXIT
