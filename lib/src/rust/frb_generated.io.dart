@@ -162,6 +162,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   OAuthResult dco_decode_o_auth_result(dynamic raw);
 
   @protected
+  OAuthWebviewTokenRequest dco_decode_o_auth_webview_token_request(dynamic raw);
+
+  @protected
   String? dco_decode_opt_String(dynamic raw);
 
   @protected
@@ -397,6 +400,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   OAuthResult sse_decode_o_auth_result(SseDeserializer deserializer);
+
+  @protected
+  OAuthWebviewTokenRequest sse_decode_o_auth_webview_token_request(
+    SseDeserializer deserializer,
+  );
 
   @protected
   String? sse_decode_opt_String(SseDeserializer deserializer);
@@ -694,6 +702,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_o_auth_result(OAuthResult self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_o_auth_webview_token_request(
+    OAuthWebviewTokenRequest self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_opt_String(String? self, SseSerializer serializer);

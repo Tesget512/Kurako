@@ -35,3 +35,10 @@ Flutter packages and Rust crates not individually listed here retain the
 license declared in their package metadata and upstream source repository.
 The vendored media_kit_video source retains its upstream MIT license at
 third_party/media_kit_video/LICENSE in the Kurako source tree.
+
+desktop_webview_window 0.3.2 (Apache License 2.0)
+Copyright the desktop_webview_window contributors.
+Vendored under third_party/desktop_webview_window with Kurako's minimal
+logging-redaction and popup-cancellation patch documented in
+third_party/desktop_webview_window/KURAKO_PATCH.md.
+License text: third_party/desktop_webview_window/LICENSE.

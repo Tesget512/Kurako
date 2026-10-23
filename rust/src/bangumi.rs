@@ -5,17 +5,19 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
 const BASE_OFFICIAL: &str = "https://api.bgm.tv";
-/// Public, read-only Bangumi mirror. Account/OAuth traffic always stays official.
+/// Public Bangumi reverse proxy. Account traffic is opt-in and verified.
 pub const BASE_MIRROR: &str = "https://api.bangumi.vip";
 pub const IMAGE_MIRROR_HOST: &str = "lain.bangumi.vip";
 /// Official OAuth lives on the main site, not the API host.
 const OAUTH_OFFICIAL: &str = "https://bgm.tv/oauth";
-/// The reverse proxy mirrors the site, so its authorization *page* can be used
-/// when the official one is unreachable. Its token endpoint cannot: Anubis
-/// answers every server-side POST there with a challenge page, so the code
-/// exchange always goes to the official endpoint. The token itself is valid on
-/// both hosts, which is why only the page needs a route choice.
+/// The reverse proxy mirrors the site, so its authorization page can be used
+/// when the official one is unreachable. Its token endpoint is protected by
+/// Anubis for server-side POSTs; Windows therefore performs that exchange
+/// inside the still-mounted `bangumi.vip` WebView. Other platforms keep using
+/// the official token endpoint.
 const OAUTH_PAGE_MIRROR: &str = "https://bangumi.vip/oauth";
+pub(crate) const OAUTH_MIRROR_TOKEN_URL: &str = "https://bangumi.vip/oauth/access_token";
+const OAUTH_MIRROR_ME_URL: &str = "https://api.bangumi.vip/v0/me";
 
 /// Mirror is opt-in and only becomes enabled after an application-side probe.
 static MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -36,9 +38,9 @@ pub fn set_mirror(enabled: bool) {
 /// Configure which traffic may use the reverse proxy. Both flags are ignored
 /// unless the proxy itself is enabled and verified.
 ///
-/// The login flag only affects the authorization *page*; the code exchange is
-/// always official (see `oauth_post`). The collection flag covers the reads and
-/// writes, which is the only way an account request reaches the proxy.
+/// The login flag selects the authorization page and enables the Windows
+/// same-origin exchange path; server-side exchanges remain official (see
+/// `oauth_post`). The collection flag covers reads and writes.
 pub fn set_route_options(oauth_via_mirror: bool, collection_via_mirror: bool) {
     OAUTH_VIA_MIRROR.store(oauth_via_mirror, std::sync::atomic::Ordering::Relaxed);
     COLLECTION_VIA_MIRROR.store(collection_via_mirror, std::sync::atomic::Ordering::Relaxed);
@@ -52,6 +54,10 @@ pub(crate) fn mirror_is_enabled() -> bool {
 fn mirror_route(flag: &std::sync::atomic::AtomicBool) -> bool {
     MIRROR.load(std::sync::atomic::Ordering::Relaxed)
         && flag.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn oauth_mirror_route_enabled() -> bool {
+    mirror_route(&OAUTH_VIA_MIRROR)
 }
 
 fn api_base() -> &'static str {
@@ -883,6 +889,22 @@ fn urlencode(s: &str) -> String {
     out
 }
 
+/// Form body for the in-page reverse-proxy exchange.
+///
+/// The Windows WebView executes this request from the already verified
+/// `bangumi.vip` document so Anubis cookies and the page origin are preserved.
+/// The body contains credentials and must never be logged.
+pub(crate) fn oauth_webview_form_body(code: &str, state: &str) -> String {
+    format!(
+        "grant_type=authorization_code&client_id={}&client_secret={}&code={}&redirect_uri={}&state={}",
+        urlencode(OAUTH_CLIENT_ID),
+        urlencode(OAUTH_CLIENT_SECRET),
+        urlencode(code),
+        urlencode(OAUTH_REDIRECT_URI),
+        urlencode(state),
+    )
+}
+
 /// Generate progressively looser keyword variants from a raw title, so a title
 /// like "Hina Logi from Luck & Logic" also tries "Hina Logi from Luck Logic",
 /// "Hina Logi", "Luck Logic", etc. Ordered most-specific first, de-duplicated.
@@ -1374,15 +1396,16 @@ pub fn has_token() -> bool {
 // ---- OAuth 2.0 (authorization code flow) ----
 //
 // Bangumi's OAuth endpoints live on the main site (bgm.tv/oauth), not the API
-// host. Flow: open `authorize_url()` in a browser, user approves, Bangumi
+// host. Flow: open `authorize_url()` in the platform's login surface, user approves, Bangumi
 // redirects to the registered callback with `?code=...`, then we exchange the
 // code for an access + refresh token via `exchange_code()`.
 // Docs: https://github.com/bangumi/api/blob/master/docs-raw/How-to-Auth.md
 
 /// Build the browser authorization URL for the given app id and callback.
 ///
-/// Only this page follows the login route choice. The code exchange afterwards
-/// is always official: see `oauth_post`.
+/// Only this page follows the login route choice. Server-side exchanges use
+/// the official endpoint; the Windows reverse-proxy WebView has a dedicated
+/// same-origin exchange described in `oauth_webview_form_body`.
 pub fn authorize_url(client_id: &str, redirect_uri: &str) -> String {
     format!(
         "{}/authorize?client_id={}&response_type=code&redirect_uri={}",
@@ -1543,6 +1566,83 @@ fn parse_oauth_response(status: reqwest::StatusCode, body: &[u8]) -> Result<serd
         anyhow::bail!("oauth request http {}", status.as_u16());
     }
     Ok(value)
+}
+
+/// Parse the JSON returned by the reverse proxy's in-page token exchange.
+///
+/// This function accepts already-read JSON only; the caller is responsible for
+/// enforcing the HTTP status and JSON content type before calling it.
+pub(crate) fn parse_webview_oauth_token(json: &str) -> Result<OAuthToken> {
+    if json.len() > 64 * 1024 {
+        anyhow::bail!("oauth response too large");
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(json).map_err(|_| anyhow::anyhow!("oauth response invalid JSON"))?;
+    let raw: RawOAuthToken = serde_json::from_value(value)
+        .map_err(|_| anyhow::anyhow!("oauth response invalid fields"))?;
+    raw.into_token()
+}
+
+/// Validate a token obtained through the reverse proxy against its API host.
+///
+/// Mirrox replaces upstream 4xx/5xx responses with HTML, so only a 200 JSON
+/// response can be accepted. The body is bounded and never logged.
+pub(crate) async fn validate_mirror_webview_token(token: &mut OAuthToken) -> Result<()> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(std::time::Duration::from_secs(15))
+        .timeout(std::time::Duration::from_secs(30));
+    if let Some(proxy) = detect_system_proxy() {
+        builder = builder.proxy(reqwest::Proxy::all(proxy).context("oauth proxy configuration")?);
+    }
+    let mut resp = builder
+        .build()
+        .context("oauth client initialization")?
+        .get(OAUTH_MIRROR_ME_URL)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(&token.access_token)
+        .send()
+        .await
+        .map_err(|_| anyhow::anyhow!("oauth token request failed"))?;
+    if resp.status() != reqwest::StatusCode::OK
+        || !resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(is_json_content_type)
+    {
+        anyhow::bail!("oauth token verification failed");
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| anyhow::anyhow!("oauth token request failed"))?
+    {
+        if body.len().saturating_add(chunk.len()) > 64 * 1024 {
+            anyhow::bail!("oauth response too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let value: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| anyhow::anyhow!("oauth response invalid JSON"))?;
+    let id = value["id"]
+        .as_i64()
+        .or_else(|| value["id"].as_str().and_then(|value| value.parse().ok()))
+        .filter(|value| *value > 0)
+        .context("oauth token verification failed")?;
+    if token.user_id > 0 && token.user_id != id {
+        anyhow::bail!("oauth token verification failed");
+    }
+    token.user_id = id;
+    Ok(())
+}
+
+fn is_json_content_type(value: &str) -> bool {
+    let media_type = value.split(';').next().unwrap_or_default().trim();
+    media_type.eq_ignore_ascii_case("application/json")
+        || media_type.to_ascii_lowercase().ends_with("+json")
 }
 
 /// POST to the OAuth endpoints with a dedicated client.
@@ -2326,6 +2426,55 @@ mod oauth_tests {
             .unwrap_err()
             .to_string();
         assert_eq!(err, "oauth request http 502");
+    }
+
+    #[test]
+    fn webview_form_encodes_code_state_and_redirect() {
+        let body = oauth_webview_form_body("code with space", "state+value");
+        assert!(body.contains("grant_type=authorization_code"));
+        assert!(body.contains("code=code%20with%20space"));
+        assert!(body.contains("state=state%2Bvalue"));
+        assert!(body.contains("redirect_uri=kurako%3A%2F%2Foauth%2Fcallback"));
+        assert!(!body.contains("code with space"));
+        assert!(!body.contains("state+value"));
+    }
+
+    #[test]
+    fn webview_token_json_uses_the_same_strict_parser() {
+        let token = parse_webview_oauth_token(
+            r#"{"access_token":"a","refresh_token":"r","expires_in":120,
+                "token_type":"Bearer","user_id":"42"}"#,
+        )
+        .unwrap();
+        assert_eq!(token.user_id, 42);
+        assert_eq!(token.expires_in, 120);
+
+        let err = match parse_webview_oauth_token("<html>Anubis</html>") {
+            Ok(_) => panic!("HTML must not parse as a token"),
+            Err(error) => error.to_string(),
+        };
+        assert_eq!(err, "oauth response invalid JSON");
+        assert!(!err.contains("Anubis"));
+    }
+
+    #[test]
+    fn webview_validation_accepts_only_json_media_types() {
+        assert!(is_json_content_type("application/json"));
+        assert!(is_json_content_type("Application/JSON; charset=utf-8"));
+        assert!(is_json_content_type("application/problem+json"));
+        assert!(!is_json_content_type("application/jsonp"));
+        assert!(!is_json_content_type("application/json-evil"));
+        assert!(!is_json_content_type("text/html"));
+    }
+
+    #[test]
+    fn webview_token_json_is_bounded_before_parsing() {
+        let oversized = "x".repeat(64 * 1024 + 1);
+        let err = match parse_webview_oauth_token(&oversized) {
+            Ok(_) => panic!("oversized token JSON must be rejected"),
+            Err(error) => error.to_string(),
+        };
+        assert_eq!(err, "oauth response too large");
     }
 
     #[test]

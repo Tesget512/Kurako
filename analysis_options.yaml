@@ -16,6 +16,7 @@ analyzer:
     - macos/Pods/**
     - rust_builder/**
     - third_party/flutter_inappwebview_android/**
+    - third_party/desktop_webview_window/example/**
     # Local-only AI notes and rollback backups; never part of the build.
     - to codex/**
 

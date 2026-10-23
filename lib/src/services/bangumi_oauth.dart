@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/api.dart' show OAuthResult;
+import 'windows_bangumi_auth.dart';
 
 /// Callback address registered in the Bangumi developer console. Kept in sync
 /// with Rust's `OAUTH_REDIRECT_URI`.
@@ -31,13 +32,17 @@ const MethodChannel _desktopOAuthChannel = MethodChannel(
 /// 2. capture Bangumi's `kurako://oauth/callback?code=...` redirect,
 /// 3. exchange the one-time code (valid for 60 seconds) for tokens in Rust.
 ///
-/// iOS/Android use the platform authentication session. Desktop platforms use
-/// the default browser and a registered `kurako://` protocol handler.
+/// iOS/Android use the platform authentication session. macOS/Linux use the
+/// default browser and the registered `kurako://` protocol handler. Windows
+/// uses Kurako's independent native WebView window.
 class BangumiOAuth {
   static final _desktopSession = DesktopOAuthSession(
     channel: _desktopOAuthChannel,
     launch: (uri) => launchUrl(uri, mode: LaunchMode.externalApplication),
     nativeHandshake: Platform.isMacOS,
+  );
+  static final _windowsAuth = WindowsBangumiAuth.production(
+    parseCallback: parseBangumiOAuthCode,
   );
 
   /// Runs the full flow and returns the tokens, or throws on error/timeout.
@@ -46,12 +51,28 @@ class BangumiOAuth {
   }) async {
     final state = _newOAuthState();
     final authUri = Uri.parse(await rust.oauthAuthorizeUrl());
-    final authUrl = authUri
-        .replace(queryParameters: {...authUri.queryParameters, 'state': state})
-        .toString();
+    final authorizeUri = authUri.replace(
+      queryParameters: {...authUri.queryParameters, 'state': state},
+    );
+    if (Platform.isWindows) {
+      try {
+        return await _windowsAuth.login(
+          authorizeUri: authorizeUri,
+          state: state,
+          timeout: timeout,
+        );
+      } on WindowsBangumiAuthException catch (error) {
+        throw OAuthException(error.message);
+      } on OAuthException {
+        rethrow;
+      } catch (error) {
+        throw OAuthException(bangumiLoginFailureMessage(error));
+      }
+    }
+    final authUrl = authorizeUri.toString();
     String callbackUrl;
     try {
-      callbackUrl = Platform.isWindows || Platform.isLinux || Platform.isMacOS
+      callbackUrl = Platform.isLinux || Platform.isMacOS
           ? await _desktopSession.authenticate(authUrl, state, timeout)
           : await FlutterWebAuth2.authenticate(
               url: authUrl,

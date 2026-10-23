@@ -75,7 +75,7 @@ dependencies:
   # loopback HTTP server waiting in the background.
   flutter_web_auth_2: ^5.0.0
   flutter_inappwebview: 6.1.5
-  desktop_webview_window: 0.3.0
+  desktop_webview_window: 0.3.2
 
   # App data directory
   path_provider: ^2.1.5
@@ -118,6 +118,8 @@ dependencies:
 dependency_overrides:
   flutter_inappwebview_android:
     path: third_party/flutter_inappwebview_android
+  desktop_webview_window:
+    path: third_party/desktop_webview_window
 
 dev_dependencies:
   flutter_test:
