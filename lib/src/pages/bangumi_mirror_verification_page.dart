@@ -1,18 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../services/bangumi_mirror.dart';
+import '../services/bangumi_mirror_web_host.dart';
+import '../services/bangumi_mirror_web_host_factory.dart';
 
 /// True when the API probe page is showing the actual subject JSON rather than
 /// the Anubis challenge.
-///
-/// The probe deliberately requests subject `1`; the challenge page is HTML, so
-/// a decoded object with `id == 1` and a string `name` means verification
-/// really finished. This only inspects text already rendered in the WebView —
-/// no credentials are read or injected.
 bool isBangumiMirrorSubjectResponse(String text) {
   try {
     final value = jsonDecode(text);
@@ -23,10 +19,6 @@ bool isBangumiMirrorSubjectResponse(String text) {
 }
 
 /// True when the page is showing Anubis's proof-of-work challenge.
-///
-/// Used only to describe what the user is actually looking at: the API host
-/// normally answers with data and serves no challenge, so the page must not
-/// claim a verification happened when none did.
 bool isBangumiMirrorChallengePage(String text) =>
     text.contains('anubis') ||
     text.contains('Techaro') ||
@@ -34,12 +26,10 @@ bool isBangumiMirrorChallengePage(String text) =>
     text.contains('Making sure you');
 
 /// Builds only a root-path header for the exact CookieManager query host.
-/// Native APIs on older Android omit metadata; their URL query still enforces
-/// scope, so missing domain never permits copying to a different host.
 BangumiMirrorHostProof collectBangumiMirrorProof({
   required Uri queriedUri,
   required String userAgent,
-  required List<Cookie> cookies,
+  required List<MirrorCookie> cookies,
   int? nowMilliseconds,
 }) {
   if (!{
@@ -52,17 +42,15 @@ BangumiMirrorHostProof collectBangumiMirrorProof({
     throw const BangumiMirrorException('不允许读取此域名的验证凭据。');
   }
   final now = nowMilliseconds ?? DateTime.now().millisecondsSinceEpoch;
-  final accepted = <Cookie>[];
+  final accepted = <MirrorCookie>[];
   for (final cookie in cookies) {
-    if (!bangumiAnubisCookieNames.contains(cookie.name)) continue;
+    if (!isBangumiAnubisCookieName(cookie.name)) continue;
     final domain = cookie.domain;
     if (domain != null && domain.isNotEmpty) {
-      // Explicit dot means a parent-domain cookie. Without it, conservatively
-      // require exact host; never expand host-only proof to sibling domains.
-      final fits = domain.startsWith('.')
-          ? queriedUri.host == domain.substring(1) ||
-                queriedUri.host.endsWith(domain)
-          : queriedUri.host == domain;
+      final normalized = domain.startsWith('.') ? domain.substring(1) : domain;
+      final fits =
+          queriedUri.host == normalized ||
+          queriedUri.host.endsWith('.$normalized');
       if (!fits) continue;
     }
     if (cookie.path != null && cookie.path != '/') {
@@ -70,21 +58,20 @@ BangumiMirrorHostProof collectBangumiMirrorProof({
         '验证 Cookie 仅覆盖部分路径，无法用于 API 与封面请求，请关闭反向代理回退官方。',
       );
     }
-    if (cookie.expiresDate != null &&
-        cookie.expiresDate! > 0 &&
-        cookie.expiresDate! <= now) {
+    if (cookie.expiresAt != null &&
+        cookie.expiresAt! > 0 &&
+        cookie.expiresAt! <= now) {
       continue;
     }
     accepted.add(cookie);
   }
-  // Preserve native ordering for same-name cookies. Reject header injection.
   final header = accepted.map((c) => '${c.name}=${c.value}').join('; ');
   if (!isAllowedAnubisCookieHeader(header)) {
     throw const BangumiMirrorException('读取的验证 Cookie 无效，请重新验证。');
   }
   final expiries =
       accepted
-          .map((c) => c.expiresDate)
+          .map((c) => c.expiresAt)
           .whereType<int>()
           .where((e) => e > 0)
           .toList()
@@ -107,11 +94,15 @@ class BangumiMirrorVerificationPage extends StatefulWidget {
   final Future<String> Function(BangumiMirrorHostProof api) onApiProof;
   final Future<void> Function(BangumiMirrorHostProof image, String imageUrl)
   onImageProof;
+  final MirrorWebHostFactory? hostFactory;
+  final Duration loadTimeout;
 
   const BangumiMirrorVerificationPage({
     super.key,
     required this.onApiProof,
     required this.onImageProof,
+    this.hostFactory,
+    this.loadTimeout = const Duration(seconds: 20),
   });
 
   @override
@@ -121,34 +112,156 @@ class BangumiMirrorVerificationPage extends StatefulWidget {
 
 class _BangumiMirrorVerificationPageState
     extends State<BangumiMirrorVerificationPage> {
-  InAppWebViewController? _controller;
-  WebViewEnvironment? _environment;
-  late final Future<void> _initialization;
+  MirrorWebHost? _host;
+  late final Future<MirrorWebHost> _initialization;
+  Timer? _loadWatchdog;
   String _url = bangumiMirrorApiProbe;
   String? _apiUserAgent;
-  String? _error;
+  String? _loadError;
+  String? _actionError;
   bool _imageStage = false;
   bool _checking = false;
   bool _loading = true;
   bool _apiPageReady = false;
   bool _challengeVisible = false;
+  bool _disposed = false;
+  int _generation = 0;
 
-  /// The API probe answers with a raw subject JSON document, which reads like
-  /// garbage in the WebView. Once that document is confirmed, cover the native
-  /// view with a readable state; the WebView stays alive underneath so
-  /// CookieManager and the real request probes still work.
-  ///
-  /// The API host normally serves no challenge, so both "data returned" and
-  /// "challenge being served" are tracked separately and reported honestly.
-  Future<void> _inspectApiPage(
-    InAppWebViewController controller,
-    WebUri? url,
-  ) async {
-    if (_imageStage || url?.host != bangumiMirrorApiHost) return;
-    final text = await controller.evaluateJavascript(
-      source: 'document.body ? document.body.innerText.slice(0, 1048576) : ""',
+  @override
+  void initState() {
+    super.initState();
+    _initialization = _initialize();
+  }
+
+  Future<MirrorWebHost> _initialize() async {
+    final factory = widget.hostFactory ?? defaultBangumiMirrorWebHostFactory();
+    final host = await factory(
+      initialUri: Uri.parse(_url),
+      onLoadStart: _onLoadStart,
+      onLoadStop: _onLoadStop,
+      onError: _onHostError,
+      onNavigationBlocked: _onNavigationBlocked,
     );
-    if (!mounted || _imageStage || text is! String) return;
+    if (_disposed) {
+      await host.dispose();
+      return host;
+    }
+    _host = host;
+    await _load(host, Uri.parse(_url));
+    return host;
+  }
+
+  Future<void> _load(MirrorWebHost host, Uri uri) async {
+    final generation = ++_generation;
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _loadError = null;
+        _actionError = null;
+        _apiPageReady = false;
+        _challengeVisible = false;
+      });
+    }
+    _startWatchdog(generation);
+    try {
+      await host.load(uri, generation: generation);
+    } catch (error) {
+      if (!mounted || _disposed || generation != _generation) return;
+      _loadWatchdog?.cancel();
+      setState(() {
+        _loading = false;
+        _actionError = error is BangumiMirrorException
+            ? error.message
+            : bangumiMirrorFailureMessage;
+      });
+      rethrow;
+    }
+  }
+
+  void _startWatchdog(int generation) {
+    _loadWatchdog?.cancel();
+    _loadWatchdog = Timer(widget.loadTimeout, () {
+      if (!mounted || _disposed || generation != _generation || !_loading) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _apiPageReady = false;
+        _challengeVisible = false;
+        _loadError = mirrorWebLoadErrorMessage(
+          const MirrorWebLoadError(kind: MirrorWebLoadFailureKind.timeout),
+        );
+      });
+    });
+  }
+
+  void _onLoadStart(int generation, Uri? uri) {
+    if (!mounted || _disposed || generation != _generation) return;
+    _startWatchdog(generation);
+    setState(() {
+      _loading = true;
+      _loadError = null;
+      _actionError = null;
+      _apiPageReady = false;
+      _challengeVisible = false;
+    });
+  }
+
+  void _onLoadStop(int generation, Uri? uri) {
+    if (!mounted || _disposed || generation != _generation) return;
+    _loadWatchdog?.cancel();
+    setState(() => _loading = false);
+    unawaited(_inspectApiPageSafely());
+  }
+
+  void _onHostError(int generation, MirrorWebLoadError error) {
+    if (!mounted || _disposed || generation != _generation) return;
+    _loadWatchdog?.cancel();
+    setState(() {
+      _loading = false;
+      _apiPageReady = false;
+      _challengeVisible = false;
+      _loadError = mirrorWebLoadErrorMessage(error);
+    });
+  }
+
+  void _onNavigationBlocked(int generation, Uri uri) {
+    if (generation != _generation) return;
+    _onHostError(
+      generation,
+      MirrorWebLoadError(
+        kind: MirrorWebLoadFailureKind.blockedNavigation,
+        uri: uri,
+      ),
+    );
+  }
+
+  Future<void> _inspectApiPageSafely() async {
+    try {
+      await _inspectApiPage();
+    } catch (_) {}
+  }
+
+  Future<void> _inspectApiPage() async {
+    if (_imageStage || _disposed) return;
+    final host = _host;
+    if (host == null) return;
+    final current = await host.currentUri();
+    if (!mounted ||
+        _disposed ||
+        _imageStage ||
+        current?.host != bangumiMirrorApiHost) {
+      return;
+    }
+    final text = await host.pageTextValue();
+    if (!mounted || _disposed || _imageStage) return;
+    if (text == null || text.trim().isEmpty) {
+      _onHostError(
+        _generation,
+        const MirrorWebLoadError(kind: MirrorWebLoadFailureKind.emptyDocument),
+      );
+      return;
+    }
     final ready = isBangumiMirrorSubjectResponse(text);
     final challenged = !ready && isBangumiMirrorChallengePage(text);
     if (ready != _apiPageReady || challenged != _challengeVisible) {
@@ -160,49 +273,30 @@ class _BangumiMirrorVerificationPageState
   }
 
   @override
-  void initState() {
-    super.initState();
-    _initialization = _initialize();
-  }
-
-  Future<void> _initialize() async {
-    if (Platform.isLinux) {
-      throw const BangumiMirrorException('Linux WebView 暂不支持安全验证，请使用官方服务。');
-    }
-    if (Platform.isWindows) {
-      final version = await WebViewEnvironment.getAvailableVersion();
-      if (version == null || version.isEmpty) {
-        throw const BangumiMirrorException(
-          '未找到 Microsoft Edge WebView2 Runtime。请安装后重试，或关闭反向代理使用官方服务。',
-        );
-      }
-      _environment = await WebViewEnvironment.create();
-    }
-  }
-
-  @override
   void dispose() {
-    _environment?.dispose();
+    _disposed = true;
+    _loadWatchdog?.cancel();
+    final host = _host;
+    _host = null;
+    if (host != null) unawaited(host.dispose());
     super.dispose();
   }
 
   Future<void> _check() async {
-    final controller = _controller;
-    if (_checking || controller == null) return;
+    final host = _host;
+    if (_checking || _loading || _loadError != null || host == null) return;
     setState(() {
       _checking = true;
-      _error = null;
+      _actionError = null;
     });
     try {
-      final current = await controller.getUrl();
+      final current = await host.currentUri();
       final expected = Uri.parse(_url);
       if (current?.scheme != 'https' || current?.host != expected.host) {
         throw const BangumiMirrorException('验证页面已离开目标域名，请重新加载。');
       }
-      final uaValue = await controller.evaluateJavascript(
-        source: 'navigator.userAgent',
-      );
-      if (uaValue is! String || uaValue.trim().isEmpty) {
+      final uaValue = await host.userAgent();
+      if (uaValue == null || uaValue.trim().isEmpty) {
         throw const BangumiMirrorException(
           '当前 WebView 无法读取 User-Agent，请关闭反向代理回退官方。',
         );
@@ -210,9 +304,7 @@ class _BangumiMirrorVerificationPageState
       if (_imageStage && uaValue != _apiUserAgent) {
         throw const BangumiMirrorException('两个验证域名的 User-Agent 不一致，请重新开始验证。');
       }
-      final cookies = await CookieManager.instance(
-        webViewEnvironment: _environment,
-      ).getCookies(url: WebUri(_url), webViewController: controller);
+      final cookies = await host.cookies(expected);
       final proof = collectBangumiMirrorProof(
         queriedUri: expected,
         userAgent: uaValue,
@@ -235,14 +327,16 @@ class _BangumiMirrorVerificationPageState
           _apiUserAgent = uaValue;
           _imageStage = true;
           _url = imageUrl;
-          _loading = true;
+          _actionError = null;
+          _apiPageReady = false;
+          _challengeVisible = false;
         });
-        await controller.loadUrl(urlRequest: URLRequest(url: WebUri(imageUrl)));
+        await _load(host, uri);
       }
     } catch (error) {
       if (mounted) {
         setState(() {
-          _error = error is BangumiMirrorException
+          _actionError = error is BangumiMirrorException
               ? error.message
               : bangumiMirrorFailureMessage;
         });
@@ -278,19 +372,19 @@ class _BangumiMirrorVerificationPageState
               ),
             ),
             if (_loading || _checking) const LinearProgressIndicator(),
-            if (_error != null)
+            if (_loadError != null || _actionError != null)
               Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 16,
                   vertical: 8,
                 ),
                 child: Text(
-                  _error!,
+                  _loadError ?? _actionError!,
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
             Expanded(
-              child: FutureBuilder<void>(
+              child: FutureBuilder<MirrorWebHost>(
                 future: _initialization,
                 builder: (context, snapshot) {
                   if (snapshot.hasError) {
@@ -301,7 +395,7 @@ class _BangumiMirrorVerificationPageState
                           snapshot.error is BangumiMirrorException
                               ? (snapshot.error as BangumiMirrorException)
                                     .message
-                              : '无法启动内置 WebView。Windows 请检查 WebView2 Runtime；可关闭反向代理回退官方。',
+                              : '无法启动内置 WebView。请检查系统 WebView 组件或关闭反向代理回退官方。',
                         ),
                       ),
                     );
@@ -309,65 +403,18 @@ class _BangumiMirrorVerificationPageState
                   if (snapshot.connectionState != ConnectionState.done) {
                     return const Center(child: CircularProgressIndicator());
                   }
+                  final host = snapshot.data!;
+                  final showWebHost =
+                      _loadError == null &&
+                      (!_apiPageReady || host.supportsFlutterOverlay);
                   return Stack(
                     fit: StackFit.expand,
                     children: [
-                      InAppWebView(
-                        webViewEnvironment: _environment,
-                        initialUrlRequest: URLRequest(url: WebUri(_url)),
-                        initialSettings: InAppWebViewSettings(
-                          javaScriptEnabled: true,
-                          useShouldOverrideUrlLoading: true,
-                          javaScriptCanOpenWindowsAutomatically: false,
-                          supportMultipleWindows: false,
-                          // Use platform CookieManager, including native HttpOnly access.
-                          sharedCookiesEnabled: true,
+                      if (showWebHost)
+                        KeyedSubtree(
+                          key: const Key('mirror-web-host'),
+                          child: host.build(context),
                         ),
-                        onWebViewCreated: (controller) {
-                          _controller = controller;
-                          if (mounted) setState(() {});
-                        },
-                        shouldOverrideUrlLoading: (_, navigation) async {
-                          final uri = navigation.request.url;
-                          final expected = Uri.parse(_url);
-                          return uri?.scheme == 'https' &&
-                                  uri?.host == expected.host &&
-                                  uri!.userInfo.isEmpty &&
-                                  !uri.hasPort &&
-                                  !uri.path.contains('/login') &&
-                                  !uri.path.contains('/oauth')
-                              ? NavigationActionPolicy.ALLOW
-                              : NavigationActionPolicy.CANCEL;
-                        },
-                        onLoadStart: (_, _) {
-                          if (mounted) {
-                            setState(() {
-                              _loading = true;
-                              _apiPageReady = false;
-                              _challengeVisible = false;
-                            });
-                          }
-                        },
-                        onLoadStop: (controller, url) async {
-                          if (mounted) {
-                            setState(() => _loading = false);
-                          }
-                          try {
-                            await _inspectApiPage(controller, url);
-                          } catch (_) {
-                            // A manual check still verifies cookies and real requests.
-                          }
-                        },
-                        onReceivedError: (_, request, _) {
-                          if (request.isForMainFrame == true && mounted) {
-                            setState(() {
-                              _loading = false;
-                              _error = '验证页面加载失败，请检查网络/代理出口，或关闭反向代理回退官方。';
-                            });
-                          }
-                        },
-                      ),
-                      // Only covers the raw API document, never the challenge.
                       if (_apiPageReady && !_imageStage)
                         ColoredBox(
                           color: Theme.of(context).colorScheme.surface,
@@ -427,7 +474,11 @@ class _BangumiMirrorVerificationPageState
                       child: const Text('取消并回退官方'),
                     ),
                     FilledButton(
-                      onPressed: _checking || _controller == null
+                      onPressed:
+                          _checking ||
+                              _loading ||
+                              _host == null ||
+                              _loadError != null
                           ? null
                           : _check,
                       child: Text(

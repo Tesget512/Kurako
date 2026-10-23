@@ -1218,6 +1218,22 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.1.1"
+  webview_all_linux:
+    dependency: "direct main"
+    description:
+      name: webview_all_linux
+      sha256: "093fc7ecfd20dc5ecf95b7b9542565539db817fdf2f56b488164f58a0a824110"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.4.5"
+  webview_platform_interface:
+    dependency: "direct main"
+    description:
+      name: webview_platform_interface
+      sha256: "90f31a3649a60291f52c00228338f6635eb03122002fdbab8d5ac2aeba0d38a1"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.4.5"
   win32:
     dependency: transitive
     description:

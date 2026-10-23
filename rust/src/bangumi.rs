@@ -109,10 +109,8 @@ fn validate_challenge_cookie(cookie: &str) -> Result<()> {
         let Some((name, value)) = pair.trim().split_once('=') else {
             anyhow::bail!("反向代理验证 Cookie 无效，请重新验证。");
         };
-        if !matches!(
-            name,
-            "techaro.lol-anubis-auth" | "techaro.lol-anubis-cookie-verification"
-        ) || value.is_empty()
+        if !is_anubis_cookie_name(name)
+            || value.is_empty()
             || !value
                 .bytes()
                 .all(|b| (0x21..=0x7e).contains(&b) && b != b';')
@@ -121,6 +119,23 @@ fn validate_challenge_cookie(cookie: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_anubis_cookie_name(name: &str) -> bool {
+    const BASES: [&str; 2] = [
+        "techaro.lol-anubis-auth",
+        "techaro.lol-anubis-cookie-verification",
+    ];
+    BASES.iter().any(|base| {
+        name == *base
+            || name.strip_prefix(base).is_some_and(|suffix| {
+                suffix.len() == 9
+                    && suffix.starts_with('-')
+                    && suffix[1..]
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+    })
 }
 
 pub fn configure_mirror_verification(
@@ -195,6 +210,23 @@ fn mirror_headers(req: reqwest::RequestBuilder, image: bool) -> reqwest::Request
     }
 }
 
+fn mirror_image_url(image: &str) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(image).context("反向代理封面地址无效")?;
+    if !matches!(
+        url.host_str(),
+        Some("lain.bgm.tv" | "bgmimg.anibt.net" | "lain.bangumi.vip" | "lain.bangumi.lat")
+    ) || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        anyhow::bail!("反向代理返回未知封面域名，未开启反向代理。");
+    }
+    url.set_scheme("https")
+        .map_err(|_| anyhow::anyhow!("反向代理封面协议无效"))?;
+    url.set_host(Some(IMAGE_MIRROR_HOST))?;
+    Ok(url)
+}
+
 /// Force the mirror regardless of the preference, without OAuth credentials.
 /// Returns a validated image probe URL from this actual subject response.
 pub async fn probe_mirror() -> Result<String> {
@@ -234,19 +266,7 @@ pub async fn probe_mirror() -> Result<String> {
         .ok_or_else(|| {
             anyhow::anyhow!("反向代理 API 返回有效条目但无可验证封面，未开启反向代理。")
         })?;
-    let mut url = reqwest::Url::parse(image).context("反向代理封面地址无效")?;
-    if !matches!(
-        url.host_str(),
-        Some("lain.bgm.tv" | "bgmimg.anibt.net" | "lain.bangumi.vip")
-    ) || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-    {
-        anyhow::bail!("反向代理返回未知封面域名，未开启反向代理。");
-    }
-    url.set_scheme("https")
-        .map_err(|_| anyhow::anyhow!("反向代理封面协议无效"))?;
-    url.set_host(Some(IMAGE_MIRROR_HOST))?;
+    let url = mirror_image_url(image)?;
     let mut guard = MIRROR_VERIFICATION.lock().unwrap();
     let v = guard
         .as_mut()
@@ -1846,6 +1866,23 @@ mod match_tests {
                 .is_err()
         );
         assert!(validate_challenge_cookie("techaro.lol-anubis-auth=").is_err());
+        assert!(validate_challenge_cookie(
+            "techaro.lol-anubis-auth-8702d140=proof; \
+             techaro.lol-anubis-cookie-verification-0a1b2c3d=ok"
+        )
+        .is_ok());
+        assert!(validate_challenge_cookie("techaro.lol-anubis-auth-zzzzzzzz=proof").is_err());
+        assert!(validate_challenge_cookie("techaro.lol-anubis-auth-8702d1400=proof").is_err());
+    }
+
+    #[test]
+    fn live_mirror_image_alias_is_rewritten_to_verified_host() {
+        let url = mirror_image_url("https://lain.bangumi.lat/pic/cover/l/test.jpg").unwrap();
+        assert_eq!(url.scheme(), "https");
+        assert_eq!(url.host_str(), Some(IMAGE_MIRROR_HOST));
+        assert_eq!(url.path(), "/pic/cover/l/test.jpg");
+        assert!(mirror_image_url("https://lain.bangumi.lat.evil.test/test.jpg").is_err());
+        assert!(mirror_image_url("https://lain.bangumi.lat:444/test.jpg").is_err());
     }
 
     #[test]

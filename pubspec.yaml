@@ -76,6 +76,11 @@ dependencies:
   flutter_web_auth_2: ^5.0.0
   flutter_inappwebview: 6.1.5
   desktop_webview_window: 0.3.0
+  # Linux-only WebKitGTK host for reverse-proxy verification. The root
+  # webview_all package is intentionally not used so mobile/desktop platforms
+  # keep their existing flutter_inappwebview host.
+  webview_all_linux: 1.4.5
+  webview_platform_interface: 1.4.5
 
   # App data directory
   path_provider: ^2.1.5

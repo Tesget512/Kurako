@@ -1,10 +1,10 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../pages/bangumi_mirror_verification_page.dart';
+import 'bangumi_mirror_web_host.dart';
 
 const bangumiMirrorApiHost = 'api.bangumi.vip';
 const bangumiMirrorApiProbe = 'https://$bangumiMirrorApiHost/v0/subjects/1';
@@ -20,12 +20,30 @@ const bangumiMirrorFailureMessage =
 /// no browser session at all.
 const kBangumiMirrorDirectUserAgent = 'Kurako/1.0';
 
-/// These are the only challenge cookies accepted. Account cookies never leave
-/// the WebView, and document.cookie is deliberately not used for HttpOnly data.
+/// These are the only challenge cookie bases accepted. Account cookies never
+/// leave the WebView, and document.cookie is deliberately not used for
+/// HttpOnly data.
 const bangumiAnubisCookieNames = {
   'techaro.lol-anubis-auth',
   'techaro.lol-anubis-cookie-verification',
 };
+
+final _anubisCookieSuffix = RegExp(r'^[0-9a-f]{8}$');
+
+/// Anubis v1.27+ adds an eight-character hexadecimal suffix derived from its
+/// cookie settings by default. Older deployments and manually configured
+/// servers still use the unsuffixed base name.
+bool isBangumiAnubisCookieName(String name) {
+  for (final base in bangumiAnubisCookieNames) {
+    if (name == base) return true;
+    if (name.length == base.length + 9 &&
+        name.startsWith('$base-') &&
+        _anubisCookieSuffix.hasMatch(name.substring(base.length + 1))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /// A header scoped to the exact host for which native CookieManager was queried.
 /// Unknown metadata (older Android WebView) never broadens that scope.
@@ -82,7 +100,7 @@ bool isAllowedAnubisCookieHeader(String header) {
     if (split < 1) return false;
     final name = pair.trim().substring(0, split);
     final value = pair.trim().substring(split + 1);
-    return bangumiAnubisCookieNames.contains(name) &&
+    return isBangumiAnubisCookieName(name) &&
         value.isNotEmpty &&
         value.codeUnits.every((c) => c >= 0x21 && c <= 0x7e && c != 0x3b);
   });
@@ -97,6 +115,7 @@ String normalizeBangumiCoverUrl(String raw, {required bool mirror}) {
   if (!{
     'lain.bgm.tv',
     'bgmimg.anibt.net',
+    'lain.bangumi.lat',
     bangumiMirrorImageHost,
   }.contains(uri.host)) {
     return raw;
@@ -311,17 +330,11 @@ class BangumiMirrorService extends ChangeNotifier {
     }
   }
 
-  Future<bool> verifyAndEnable(BuildContext context) async {
+  Future<bool> verifyAndEnable(
+    BuildContext context, {
+    MirrorWebHostFactory? hostFactory,
+  }) async {
     if (_busy) return false;
-    // The WebView fallback needs a working in-app browser. flutter_inappwebview
-    // has no Linux implementation, so on Linux the mirror can only be enabled
-    // through the direct probe; say that plainly instead of implying the mirror
-    // is unsupported there.
-    if (Platform.isLinux) {
-      _message = '当前网络无法直接访问反向代理，而 Linux 不支持内置验证页面，请稍后重试或使用官方服务。';
-      notifyListeners();
-      throw BangumiMirrorException(_message!);
-    }
     _busy = true;
     final epoch = ++_epoch;
     _message = null;
@@ -332,6 +345,7 @@ class BangumiMirrorService extends ChangeNotifier {
       final result = await Navigator.of(context).push<bool>(
         MaterialPageRoute(
           builder: (_) => BangumiMirrorVerificationPage(
+            hostFactory: hostFactory,
             onApiProof: (api) async {
               if (epoch != _epoch) {
                 throw const BangumiMirrorException('反向代理验证已取消。');

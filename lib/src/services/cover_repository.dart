@@ -252,7 +252,12 @@ class CoverRepository {
     Uri uri,
     Map<String, String> headers,
   ) async {
-    const hosts = {'lain.bgm.tv', 'bgmimg.anibt.net', bangumiMirrorImageHost};
+    const hosts = {
+      'lain.bgm.tv',
+      'bgmimg.anibt.net',
+      'lain.bangumi.lat',
+      bangumiMirrorImageHost,
+    };
     if (uri.scheme != 'https' ||
         !hosts.contains(uri.host) ||
         uri.hasPort ||

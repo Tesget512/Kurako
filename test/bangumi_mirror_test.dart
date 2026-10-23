@@ -1,13 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:kurako/src/pages/bangumi_mirror_verification_page.dart';
 import 'package:kurako/src/services/bangumi_mirror.dart';
+import 'package:kurako/src/services/bangumi_mirror_web_host.dart';
 import 'package:kurako/src/state/providers.dart';
 
 void main() {
@@ -40,6 +40,7 @@ void main() {
     for (final host in [
       'lain.bgm.tv',
       'bgmimg.anibt.net',
+      'lain.bangumi.lat',
       'lain.bangumi.vip',
     ]) {
       expect(
@@ -71,40 +72,40 @@ void main() {
       userAgent: 'Browser-UA',
       nowMilliseconds: 100,
       cookies: [
-        Cookie(
+        MirrorCookie(
           name: 'account_session',
           value: 'never-store',
           domain: '.bangumi.vip',
           path: '/',
         ),
-        Cookie(
+        MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'host-proof',
           domain: 'api.bangumi.vip',
           path: '/',
-          isHttpOnly: true,
+          httpOnly: true,
         ),
-        Cookie(
+        MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'other-host',
-          domain: 'bangumi.vip',
+          domain: 'lain.bangumi.vip',
           path: '/',
         ),
-        Cookie(
+        MirrorCookie(
           name: 'techaro.lol-anubis-cookie-verification',
           value: 'parent-proof',
           domain: '.bangumi.vip',
           path: '/',
-          expiresDate: 10000,
+          expiresAt: 10000,
         ),
-        Cookie(
+        MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'expired',
           domain: '.bangumi.vip',
           path: '/',
-          expiresDate: 99,
+          expiresAt: 99,
         ),
-        Cookie(
+        MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'evil',
           domain: '.vip.evil.test',
@@ -120,11 +121,52 @@ void main() {
     expect(proof.host, 'api.bangumi.vip');
   });
 
+  test('Anubis dynamic cookie suffixes and parent domains are accepted', () {
+    final proof = collectBangumiMirrorProof(
+      queriedUri: Uri.parse(bangumiMirrorApiProbe),
+      userAgent: 'Browser-UA',
+      cookies: [
+        MirrorCookie(
+          name: 'techaro.lol-anubis-auth-8702d140',
+          value: 'auth-proof',
+          domain: 'bangumi.vip',
+          path: '/',
+        ),
+        MirrorCookie(
+          name: 'techaro.lol-anubis-cookie-verification-0a1b2c3d',
+          value: 'challenge-proof',
+          domain: '.bangumi.vip',
+          path: '/',
+        ),
+      ],
+    );
+
+    expect(
+      proof.cookie,
+      'techaro.lol-anubis-auth-8702d140=auth-proof; '
+      'techaro.lol-anubis-cookie-verification-0a1b2c3d=challenge-proof',
+    );
+    expect(
+      isAllowedAnubisCookieHeader(
+        'techaro.lol-anubis-auth-8702d140=auth-proof',
+      ),
+      true,
+    );
+    expect(
+      isAllowedAnubisCookieHeader(
+        'techaro.lol-anubis-auth-zzzzzzzz=auth-proof',
+      ),
+      false,
+    );
+  });
+
   test('older Android missing metadata stays scoped to queried host', () {
     final proof = collectBangumiMirrorProof(
       queriedUri: Uri.parse('https://lain.bangumi.vip/cover.jpg'),
       userAgent: 'Browser-UA',
-      cookies: [Cookie(name: 'techaro.lol-anubis-auth', value: 'native-only')],
+      cookies: [
+        MirrorCookie(name: 'techaro.lol-anubis-auth', value: 'native-only'),
+      ],
     );
     expect(proof.host, 'lain.bangumi.vip');
     expect(proof.cookie, 'techaro.lol-anubis-auth=native-only');
@@ -153,7 +195,11 @@ void main() {
           queriedUri: Uri.parse(bangumiMirrorApiProbe),
           userAgent: 'Browser-UA',
           cookies: [
-            Cookie(name: 'techaro.lol-anubis-auth', value: 'abc', path: '/v0'),
+            MirrorCookie(
+              name: 'techaro.lol-anubis-auth',
+              value: 'abc',
+              path: '/v0',
+            ),
           ],
         ),
         throwsA(isA<BangumiMirrorException>()),
