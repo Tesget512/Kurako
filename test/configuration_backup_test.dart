@@ -32,6 +32,12 @@ void main() {
       'bangumi_token': 'secret-access-token',
       'bangumi_refresh_token': 'secret-refresh-token',
       'bangumi_token_expires_at': 1782604800,
+      // Personal-token session keys: these must never reach the export —
+      // the credential lives in the secure store, and the backup must not
+      // even reveal that this machine used one.
+      'bangumi_auth_kind': 'personalAccessToken',
+      'bangumi_user_id': 42,
+      'bangumi_username': 'synthetic-user',
       'smb_host': '192.0.2.1',
       'smb_share': 'Anime',
       'smb_user': 'private-user',
@@ -45,6 +51,18 @@ void main() {
       'external_player_path': '/private/player',
       'sub_pref_42': 7,
     });
+  });
+
+  test('a personal-token session never reaches the export', () async {
+    final source = await ConfigurationBackupDocument.exportJson();
+    // Whole-document checks: no key or value may leak the personal-token
+    // session (its token itself never leaves the secure store).
+    expect(source, isNot(contains('personalAccessToken')));
+    expect(source, isNot(contains('synthetic-user')));
+    expect(source, isNot(contains('bangumi_auth_kind')));
+    final root = jsonDecode(source) as Map<String, dynamic>;
+    final account = root['account'] as Map<String, dynamic>;
+    expect(account.keys, unorderedEquals(['accessToken', 'refreshToken', 'expiresAt']));
   });
 
   test(

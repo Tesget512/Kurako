@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'pages/home_page.dart';
 import 'pages/onboarding_page.dart';
+import 'services/secure_storage_probe.dart';
 import 'state/providers.dart';
 import 'state/update_provider.dart';
 import 'widgets/update_banner.dart';
@@ -52,6 +53,7 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
       ref.read(bangumiMirrorProvider);
       unawaited(ref.read(settingsProvider.notifier).ensureFreshBangumiToken());
       unawaited(ref.read(updateCheckProvider.notifier).checkAtStartup());
+      if (kSecureStorageProbeEnabled) launchSecureStorageProbe();
     });
   }
 
@@ -171,9 +173,17 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
           themeMode: theme.mode.flutterThemeMode,
           home: const _StartupGate(),
           builder: (context, child) {
-            final content = UpdateBannerHost(
+            Widget content = UpdateBannerHost(
               child: child ?? const SizedBox.shrink(),
             );
+            if (kSecureStorageProbeEnabled) {
+              content = Column(
+                children: [
+                  const SecureStorageProbeBanner(),
+                  Expanded(child: content),
+                ],
+              );
+            }
             if (scalePercent == 100) return content;
             // UI scale: render at logical size / f then scale up — vector
             // rendering keeps text crisp at any percentage.

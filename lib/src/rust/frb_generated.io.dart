@@ -182,6 +182,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UpdateRelease? dco_decode_opt_box_autoadd_update_release(dynamic raw);
 
   @protected
+  PersonalTokenProfile dco_decode_personal_token_profile(dynamic raw);
+
+  @protected
   PreparedSubtitle dco_decode_prepared_subtitle(dynamic raw);
 
   @protected
@@ -417,6 +420,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UpdateRelease? sse_decode_opt_box_autoadd_update_release(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  PersonalTokenProfile sse_decode_personal_token_profile(
     SseDeserializer deserializer,
   );
 
@@ -719,6 +727,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_update_release(
     UpdateRelease? self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_personal_token_profile(
+    PersonalTokenProfile self,
     SseSerializer serializer,
   );
 

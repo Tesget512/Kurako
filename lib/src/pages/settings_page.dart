@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show Int64List;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/bangumi_credentials.dart';
 import '../services/bangumi_oauth.dart';
 import '../services/bangumi_mirror.dart';
 import '../services/media_source.dart';
@@ -244,7 +246,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     title: const Text('已登录 Bangumi'),
                     subtitle: Text(
                       [
-                        _expiryLabel(settings.bangumiTokenExpiresAt),
+                        switch (settings.bangumiAuthKind) {
+                          BangumiAuthKind.personalAccessToken =>
+                            settings.bangumiUsername.isEmpty
+                                ? '登录方式：个人访问令牌'
+                                : '登录方式：个人访问令牌（${settings.bangumiUsername}）',
+                          BangumiAuthKind.oauth =>
+                            settings.bangumiUsername.isEmpty
+                                ? '登录方式：浏览器授权'
+                                : '登录方式：浏览器授权（${settings.bangumiUsername}）',
+                        },
+                        _expiryLabel(settings),
                         switch (renewal.status) {
                           BangumiRefreshStatus.refreshing => '正在续期…',
                           BangumiRefreshStatus.success => '续期成功',
@@ -263,23 +275,28 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                     spacing: 8,
                     runSpacing: 4,
                     children: [
-                      FilledButton.tonalIcon(
-                        icon: Icon(needsLogin ? Icons.login : Icons.refresh),
-                        label: Text(
-                          needsLogin
-                              ? (_loggingIn ? '等待浏览器授权…' : '重新登录')
-                              : (refreshing
-                                    ? '正在续期…'
-                                    : (failed ? '重试续期' : '立即续期')),
+                      // Renewal is an OAuth concept; a personal token has no
+                      // refresh flow, so only logout/sync apply there.
+                      if (settings.bangumiAuthKind ==
+                          BangumiAuthKind.oauth) ...[
+                        FilledButton.tonalIcon(
+                          icon: Icon(needsLogin ? Icons.login : Icons.refresh),
+                          label: Text(
+                            needsLogin
+                                ? (_loggingIn ? '等待浏览器授权…' : '重新登录')
+                                : (refreshing
+                                      ? '正在续期…'
+                                      : (failed ? '重试续期' : '立即续期')),
+                          ),
+                          onPressed: _loggingIn || refreshing
+                              ? null
+                              : (needsLogin
+                                    ? _login
+                                    : () => ref
+                                          .read(settingsProvider.notifier)
+                                          .ensureFreshBangumiToken(force: true)),
                         ),
-                        onPressed: _loggingIn || refreshing
-                            ? null
-                            : (needsLogin
-                                  ? _login
-                                  : () => ref
-                                        .read(settingsProvider.notifier)
-                                        .ensureFreshBangumiToken(force: true)),
-                      ),
+                      ],
                       TextButton(
                         onPressed: _loggingIn ? null : _logout,
                         child: const Text('退出登录'),
@@ -306,6 +323,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 : const Icon(Icons.login),
             label: Text(_loggingIn ? '等待浏览器授权…' : '使用 Bangumi 账号登录'),
             onPressed: _loggingIn ? null : _login,
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            icon: const Icon(Icons.vpn_key_outlined),
+            label: const Text('使用个人访问令牌登录（备用）'),
+            onPressed: _loggingIn ? null : _showPersonalTokenDialog,
           ),
         ],
         if (settings.isLoggedIn) ...[
@@ -472,7 +495,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         '${two(local.hour)}:${two(local.minute)}';
   }
 
-  String _expiryLabel(int expiresAt) {
+  String _expiryLabel(Settings settings) {
+    if (settings.bangumiAuthKind == BangumiAuthKind.personalAccessToken) {
+      return '令牌有效期应用无法查询，失效后需在官网重新生成';
+    }
+    final expiresAt = settings.bangumiTokenExpiresAt;
     if (expiresAt <= 0) return '令牌有效期未知，可尝试立即续期';
     final expiry = DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000);
     final remaining = expiry.difference(DateTime.now());
@@ -492,6 +519,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         accessToken: result.accessToken,
         refreshToken: result.refreshToken,
         expiresAt: result.expiresAt,
+        userId: result.userId,
       );
       _snack('登录成功，正在同步收藏…');
       final synced = await _syncCollections(silent: true);
@@ -508,6 +536,116 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     await ref.read(settingsProvider.notifier).logout();
     ref.invalidate(animeListProvider);
     _snack('已退出登录');
+  }
+
+  /// Personal-access-token login: the user creates the token on Bangumi's
+  /// official page themselves; Kurako only validates it against `/v0/me` and
+  /// stores it in the system secure store. No Bangumi password is ever
+  /// entered here.
+  Future<void> _showPersonalTokenDialog() async {
+    final controller = TextEditingController();
+    var busy = false;
+    final viaMirror = ref.read(bangumiCollectionViaMirrorProvider);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('使用个人访问令牌登录'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '个人访问令牌需要在 Bangumi 官网页面自行创建：打开下面的官方页面，'
+                  '按网站提示生成并复制令牌，再粘贴到这里。'
+                  '此方式不经过应用内登录页。',
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: const Text('打开 Bangumi 官方令牌页面'),
+                    onPressed: () => launchUrl(
+                      Uri.parse('https://next.bgm.tv/demo/access-token'),
+                      mode: LaunchMode.externalApplication,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: controller,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  decoration: const InputDecoration(
+                    labelText: '粘贴个人访问令牌',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '令牌只保存在本机系统安全存储中，不会写入配置备份。'
+                  '个人令牌没有自动续期，有效期由官网选项决定，应用无法查询；'
+                  '失效后需要重新生成并粘贴。',
+                  style: TextStyle(fontSize: 12),
+                ),
+                if (viaMirror) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    '注意：当前“收藏同步走反向代理”已开启，该令牌会随请求经第三方'
+                    '反向代理服务器转发，对方在技术上可以看到令牌。介意请先关闭该开关。',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: busy ? null : () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setDialogState(() => busy = true);
+                      try {
+                        await ref
+                            .read(settingsProvider.notifier)
+                            .loginWithPersonalAccessToken(controller.text);
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop(true);
+                        }
+                      } catch (error) {
+                        _snack(personalAccessTokenFailureMessage(error));
+                      } finally {
+                        setDialogState(() => busy = false);
+                      }
+                    },
+              child: busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('验证并登录'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed == true && mounted) {
+      ref.invalidate(animeListProvider);
+      _snack('个人令牌登录成功，正在同步收藏…');
+      final synced = await _syncCollections(silent: true);
+      _snack(synced ? '登录并同步完成' : '登录成功，但收藏同步失败，可稍后重试同步。');
+    }
   }
 
   /// Returns whether the collection sync actually completed, so the caller

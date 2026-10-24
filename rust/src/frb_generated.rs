@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 894763360;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 337715341;
 
 // Section: executor
 
@@ -2764,6 +2764,39 @@ fn wire__crate__api__update_progress_impl(
         },
     )
 }
+fn wire__crate__api__validate_personal_access_token_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "validate_personal_access_token",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_token = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, String>((move || {
+                    let output_ok = crate::api::validate_personal_access_token(api_token)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__verify_smb_server_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -4033,6 +4066,18 @@ impl SseDecode for Option<crate::update::UpdateRelease> {
     }
 }
 
+impl SseDecode for crate::api::PersonalTokenProfile {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_userId = <i64>::sse_decode(deserializer);
+        let mut var_username = <String>::sse_decode(deserializer);
+        return crate::api::PersonalTokenProfile {
+            user_id: var_userId,
+            username: var_username,
+        };
+    }
+}
+
 impl SseDecode for crate::models::PreparedSubtitle {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -4336,23 +4381,26 @@ fn pde_ffi_dispatcher_primary_impl(
         77 => wire__crate__api__sync_collections_impl(port, ptr, rust_vec_len, data_len),
         78 => wire__crate__api__system_proxy_impl(port, ptr, rust_vec_len, data_len),
         79 => wire__crate__api__update_progress_impl(port, ptr, rust_vec_len, data_len),
-        80 => wire__crate__api__verify_smb_server_impl(port, ptr, rust_vec_len, data_len),
-        81 => wire__crate__api__webdav_cancel_download_impl(port, ptr, rust_vec_len, data_len),
-        82 => wire__crate__api__webdav_download_impl(port, ptr, rust_vec_len, data_len),
-        83 => wire__crate__api__webdav_download_to_fd_impl(port, ptr, rust_vec_len, data_len),
-        84 => wire__crate__api__webdav_enumerate_impl(port, ptr, rust_vec_len, data_len),
-        85 => wire__crate__api__webdav_list_entries_impl(port, ptr, rust_vec_len, data_len),
-        86 => wire__crate__api__webdav_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
-        87 => wire__crate__api__webdav_playable_url_impl(port, ptr, rust_vec_len, data_len),
-        88 => wire__crate__api__webdav_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
-        89 => wire__crate__api__webdav_release_impl(port, ptr, rust_vec_len, data_len),
-        90 => wire__crate__api__webdav_set_credentials_impl(port, ptr, rust_vec_len, data_len),
-        91 => wire__crate__api__webdav_setup_begin_impl(port, ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__webdav_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__webdav_setup_commit_impl(port, ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__webdav_setup_list_entries_impl(port, ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__webdav_test_connection_impl(port, ptr, rust_vec_len, data_len),
-        96 => wire__crate__api__webdav_uri_for_relative_impl(port, ptr, rust_vec_len, data_len),
+        80 => {
+            wire__crate__api__validate_personal_access_token_impl(port, ptr, rust_vec_len, data_len)
+        }
+        81 => wire__crate__api__verify_smb_server_impl(port, ptr, rust_vec_len, data_len),
+        82 => wire__crate__api__webdav_cancel_download_impl(port, ptr, rust_vec_len, data_len),
+        83 => wire__crate__api__webdav_download_impl(port, ptr, rust_vec_len, data_len),
+        84 => wire__crate__api__webdav_download_to_fd_impl(port, ptr, rust_vec_len, data_len),
+        85 => wire__crate__api__webdav_enumerate_impl(port, ptr, rust_vec_len, data_len),
+        86 => wire__crate__api__webdav_list_entries_impl(port, ptr, rust_vec_len, data_len),
+        87 => wire__crate__api__webdav_list_subtitles_impl(port, ptr, rust_vec_len, data_len),
+        88 => wire__crate__api__webdav_playable_url_impl(port, ptr, rust_vec_len, data_len),
+        89 => wire__crate__api__webdav_proxy_stats_impl(port, ptr, rust_vec_len, data_len),
+        90 => wire__crate__api__webdav_release_impl(port, ptr, rust_vec_len, data_len),
+        91 => wire__crate__api__webdav_set_credentials_impl(port, ptr, rust_vec_len, data_len),
+        92 => wire__crate__api__webdav_setup_begin_impl(port, ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__webdav_setup_cancel_impl(port, ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__webdav_setup_commit_impl(port, ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__webdav_setup_list_entries_impl(port, ptr, rust_vec_len, data_len),
+        96 => wire__crate__api__webdav_test_connection_impl(port, ptr, rust_vec_len, data_len),
+        97 => wire__crate__api__webdav_uri_for_relative_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4688,6 +4736,27 @@ impl flutter_rust_bridge::IntoDart for crate::api::OAuthResult {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::OAuthResult {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::OAuthResult> for crate::api::OAuthResult {
     fn into_into_dart(self) -> crate::api::OAuthResult {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::PersonalTokenProfile {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.user_id.into_into_dart().into_dart(),
+            self.username.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive
+    for crate::api::PersonalTokenProfile
+{
+}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::PersonalTokenProfile>
+    for crate::api::PersonalTokenProfile
+{
+    fn into_into_dart(self) -> crate::api::PersonalTokenProfile {
         self
     }
 }
@@ -5390,6 +5459,14 @@ impl SseEncode for Option<crate::update::UpdateRelease> {
         if let Some(value) = self {
             <crate::update::UpdateRelease>::sse_encode(value, serializer);
         }
+    }
+}
+
+impl SseEncode for crate::api::PersonalTokenProfile {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i64>::sse_encode(self.user_id, serializer);
+        <String>::sse_encode(self.username, serializer);
     }
 }
 

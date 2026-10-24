@@ -14,5 +14,7 @@ pub mod scan_control;
 pub mod sidecar;
 pub mod smb;
 pub mod subtitle;
+#[cfg(test)]
+pub(crate) mod test_http;
 pub mod update;
 pub mod webdav;

@@ -105,6 +105,14 @@ dependencies:
   # Local settings persistence
   shared_preferences: ^2.3.4
 
+  # Secure credential storage for the Bangumi personal access token login.
+  # Keychain (Apple), Keystore (Android), DPAPI (Windows) and libsecret/
+  # Secret Service (Linux). Pinned to the 10.x stable line: 11.x needs
+  # win32 ^6, which conflicts with package_info_plus 9.x (win32 ^5).
+  # No plaintext fallback: if the platform store is unavailable the PAT login
+  # path fails with an explicit error.
+  flutter_secure_storage: ^10.3.4
+
   # Material You / Monet dynamic color (Android 12+)
   dynamic_color: ^1.7.0
 

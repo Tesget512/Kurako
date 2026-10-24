@@ -4,6 +4,12 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+	<!-- flutter_secure_storage: Keychain Sharing capability. The empty
+	     array uses the app's default keychain group; no App Group (and no
+	     paid program) is required. Without this a sandboxed SecItemAdd is
+	     rejected with errSecMissingEntitlement. -->
+	<key>keychain-access-groups</key>
+	<array/>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.network.server</key>

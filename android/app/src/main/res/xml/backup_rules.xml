@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The secure-store entry for the Bangumi personal access token must never
+     ride along with Android Auto Backup: its encryption key lives in the
+     Android Keystore and does not restore, so a restored copy can only ever
+     be an unreadable blob. Exclude it instead of shipping dead ciphertext. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="FlutterSecureStorage.xml" />
+</full-backup-content>

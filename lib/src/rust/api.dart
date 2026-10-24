@@ -62,6 +62,14 @@ Future<OAuthResult> oauthExchangeCode({
 Future<OAuthResult> oauthRefresh({required String refreshToken}) =>
     RustLib.instance.api.crateApiOauthRefresh(refreshToken: refreshToken);
 
+/// Validate a pasted personal access token via `/v0/me` on the selected API
+/// host. This is the whole check: a personal token has no refresh flow, no
+/// queryable expiry and no client binding. The token is sent to exactly one
+/// host and never appears in the fixed error strings.
+Future<PersonalTokenProfile> validatePersonalAccessToken({
+  required String token,
+}) => RustLib.instance.api.crateApiValidatePersonalAccessToken(token: token);
+
 /// The detected system HTTP proxy (e.g. "http://127.0.0.1:7890"), or None.
 /// The Flutter side uses this to route cover-image requests through the same
 /// proxy the Rust HTTP client uses.
@@ -581,4 +589,23 @@ class OAuthResult {
           refreshToken == other.refreshToken &&
           expiresAt == other.expiresAt &&
           userId == other.userId;
+}
+
+/// The identity a personal access token was proven to carry. Carries no token.
+class PersonalTokenProfile {
+  final PlatformInt64 userId;
+  final String username;
+
+  const PersonalTokenProfile({required this.userId, required this.username});
+
+  @override
+  int get hashCode => userId.hashCode ^ username.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PersonalTokenProfile &&
+          runtimeType == other.runtimeType &&
+          userId == other.userId &&
+          username == other.username;
 }

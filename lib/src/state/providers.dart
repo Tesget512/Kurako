@@ -7,7 +7,9 @@ import 'package:flutter/material.dart' show Color, ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/bangumi_credentials.dart';
 import '../services/bangumi_mirror.dart';
+import '../services/bangumi_oauth.dart' show OAuthException;
 import '../services/cover_repository.dart';
 import '../services/download_storage.dart';
 import '../services/security_scope.dart';
@@ -1117,6 +1119,16 @@ class Settings {
   // Persisted OAuth session.
   final String bangumiRefreshToken;
   final int bangumiTokenExpiresAt; // Unix seconds; 0 = none.
+  /// Which credential is active. A personal access token is not an OAuth
+  /// session: no refresh token, no queryable expiry, nothing auto-renews it.
+  final BangumiAuthKind bangumiAuthKind;
+  /// Display-only identity of the logged-in account (both kinds fill it when
+  /// known). Not a secret; safe for the settings card.
+  final int bangumiUserId;
+  final String bangumiUsername;
+  /// Whether a personal-token credential was actually restored from the
+  /// secure store this session. Runtime state, never persisted here.
+  final bool personalTokenActive;
   /// `off` or `anime4k-lite`. Applied the next time a video is opened.
   final String superResolutionMode;
   final bool autoResumePlayback;
@@ -1132,6 +1144,10 @@ class Settings {
     this.bangumiToken = '',
     this.bangumiRefreshToken = '',
     this.bangumiTokenExpiresAt = 0,
+    this.bangumiAuthKind = BangumiAuthKind.oauth,
+    this.bangumiUserId = 0,
+    this.bangumiUsername = '',
+    this.personalTokenActive = false,
     this.superResolutionMode = 'off',
     this.autoResumePlayback = true,
     this.autoPlayNext = true,
@@ -1141,7 +1157,10 @@ class Settings {
     this.gestureSeekDurationSec = 10,
   });
 
-  bool get isLoggedIn => bangumiToken.isNotEmpty;
+  bool get isLoggedIn => switch (bangumiAuthKind) {
+    BangumiAuthKind.oauth => bangumiToken.isNotEmpty,
+    BangumiAuthKind.personalAccessToken => personalTokenActive,
+  };
 
   Settings copyWith({
     bool? useExternalPlayer,
@@ -1149,6 +1168,10 @@ class Settings {
     String? bangumiToken,
     String? bangumiRefreshToken,
     int? bangumiTokenExpiresAt,
+    BangumiAuthKind? bangumiAuthKind,
+    int? bangumiUserId,
+    String? bangumiUsername,
+    bool? personalTokenActive,
     String? superResolutionMode,
     bool? autoResumePlayback,
     bool? autoPlayNext,
@@ -1164,6 +1187,10 @@ class Settings {
       bangumiRefreshToken: bangumiRefreshToken ?? this.bangumiRefreshToken,
       bangumiTokenExpiresAt:
           bangumiTokenExpiresAt ?? this.bangumiTokenExpiresAt,
+      bangumiAuthKind: bangumiAuthKind ?? this.bangumiAuthKind,
+      bangumiUserId: bangumiUserId ?? this.bangumiUserId,
+      bangumiUsername: bangumiUsername ?? this.bangumiUsername,
+      personalTokenActive: personalTokenActive ?? this.personalTokenActive,
       superResolutionMode: superResolutionMode ?? this.superResolutionMode,
       autoResumePlayback: autoResumePlayback ?? this.autoResumePlayback,
       autoPlayNext: autoPlayNext ?? this.autoPlayNext,
@@ -1232,13 +1259,38 @@ final bangumiRefreshBackendProvider = Provider<BangumiRefreshBackend>(
   (ref) => const RustBangumiRefreshBackend(),
 );
 
+/// Tests replace this boundary without initializing Rust.
+abstract class BangumiPersonalTokenBackend {
+  /// Validate a personal token via `/v0/me`; returns the identity only.
+  Future<({int userId, String username})> validate(String token);
+}
+
+class RustBangumiPersonalTokenBackend implements BangumiPersonalTokenBackend {
+  const RustBangumiPersonalTokenBackend();
+
+  @override
+  Future<({int userId, String username})> validate(String token) async {
+    final profile = await rust.validatePersonalAccessToken(token: token);
+    return (userId: profile.userId, username: profile.username);
+  }
+}
+
+final bangumiPersonalTokenBackendProvider =
+    Provider<BangumiPersonalTokenBackend>(
+      (ref) => const RustBangumiPersonalTokenBackend(),
+    );
+
 class SettingsNotifier extends StateNotifier<Settings> {
   SettingsNotifier({
     BangumiRefreshBackend? refreshBackend,
+    BangumiPersonalTokenBackend? personalTokenBackend,
+    this.credentialStore,
     this.onRefreshStateChanged,
     DateTime Function()? now,
     Future<void> Function(Duration)? wait,
   }) : _refreshBackend = refreshBackend ?? const RustBangumiRefreshBackend(),
+       _personalTokenBackend =
+           personalTokenBackend ?? const RustBangumiPersonalTokenBackend(),
        _now = now ?? DateTime.now,
        _wait = wait ?? Future<void>.delayed,
        super(const Settings()) {
@@ -1248,6 +1300,8 @@ class SettingsNotifier extends StateNotifier<Settings> {
   }
 
   final BangumiRefreshBackend _refreshBackend;
+  final BangumiPersonalTokenBackend _personalTokenBackend;
+  final BangumiCredentialStore? credentialStore;
   final void Function(BangumiRefreshState)? onRefreshStateChanged;
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
@@ -1285,12 +1339,18 @@ class SettingsNotifier extends StateNotifier<Settings> {
       await prefs.setBool('media_session_enabled', true);
     }
     if (_disposed) return;
+    final authKind = BangumiAuthKind.fromPersisted(
+      prefs.getString('bangumi_auth_kind'),
+    );
     state = Settings(
       useExternalPlayer: prefs.getBool('use_external_player') ?? false,
       externalPlayerPath: prefs.getString('external_player_path') ?? '',
       bangumiToken: prefs.getString('bangumi_token') ?? '',
       bangumiRefreshToken: prefs.getString('bangumi_refresh_token') ?? '',
       bangumiTokenExpiresAt: prefs.getInt('bangumi_token_expires_at') ?? 0,
+      bangumiAuthKind: authKind,
+      bangumiUserId: prefs.getInt('bangumi_user_id') ?? 0,
+      bangumiUsername: prefs.getString('bangumi_username') ?? '',
       superResolutionMode: _normalizeSuperResolutionMode(
         prefs.getString('super_resolution_mode') ?? 'off',
       ),
@@ -1309,11 +1369,34 @@ class SettingsNotifier extends StateNotifier<Settings> {
           ? null
           : DateTime.fromMillisecondsSinceEpoch(lastSuccess),
     );
-    if (state.bangumiToken.isNotEmpty) {
-      try {
-        await _refreshBackend.setAccessToken(state.bangumiToken);
-      } catch (_) {
-        // Runtime setup errors are not safe to display or log verbatim.
+    // A personal-token session is restored from the secure store. When the
+    // store is unreadable or the token is gone there is no fallback: the app
+    // starts logged out and the user pastes a token again.
+    var personalTokenActive = false;
+    String? personalToken;
+    if (authKind == BangumiAuthKind.personalAccessToken) {
+      final store = credentialStore;
+      if (store != null) {
+        try {
+          personalToken = await store.readPersonalToken();
+        } catch (_) {
+          // Runtime storage errors are not safe to display or log verbatim.
+        }
+      }
+      personalTokenActive = personalToken != null && personalToken.isNotEmpty;
+    }
+    if (_disposed) return;
+    state = state.copyWith(personalTokenActive: personalTokenActive);
+    if (state.isLoggedIn) {
+      final runtimeToken = authKind == BangumiAuthKind.personalAccessToken
+          ? personalToken
+          : state.bangumiToken;
+      if (runtimeToken != null && runtimeToken.isNotEmpty) {
+        try {
+          await _refreshBackend.setAccessToken(runtimeToken);
+        } catch (_) {
+          // Runtime setup errors are not safe to display or log verbatim.
+        }
       }
     }
     if (!_disposed) _startRefreshTimer();
@@ -1471,6 +1554,7 @@ class SettingsNotifier extends StateNotifier<Settings> {
     required String accessToken,
     required String refreshToken,
     required int expiresAt,
+    int userId = 0,
   }) {
     final generation = ++_sessionGeneration;
     _loginInProgress = false;
@@ -1484,7 +1568,68 @@ class SettingsNotifier extends StateNotifier<Settings> {
         accessToken: accessToken,
         refreshToken: refreshToken,
         expiresAt: expiresAt,
+        userId: userId,
       );
+    });
+  }
+
+  /// Validate and activate a pasted personal access token.
+  ///
+  /// Nothing is overwritten until `/v0/me` has confirmed the token: a
+  /// rejected or unreadable token leaves the previous session untouched. The
+  /// token is stored in the platform secure store only.
+  Future<void> loginWithPersonalAccessToken(String token) async {
+    final trimmed = token.trim();
+    if (trimmed.isEmpty) {
+      throw const OAuthException('personal token empty');
+    }
+    final store = credentialStore;
+    if (store == null) {
+      throw const OAuthException('secure storage unavailable');
+    }
+    final profile = await _personalTokenBackend.validate(trimmed);
+    await store.writePersonalToken(trimmed);
+    final generation = ++_sessionGeneration;
+    _loginInProgress = false;
+    _refreshing = null;
+    return _queueSessionWrite(() async {
+      await ready;
+      if (!_isCurrent(generation)) return;
+      final prefs = await SharedPreferences.getInstance();
+      if (!_isCurrent(generation)) return;
+      // An OAuth session and a personal token are never merged: the previous
+      // session's keys all go away first.
+      for (final key in const [
+        'bangumi_token',
+        'bangumi_refresh_token',
+        'bangumi_token_expires_at',
+        'bangumi_refresh_last_success',
+      ]) {
+        await prefs.remove(key);
+        if (!_isCurrent(generation)) return;
+      }
+      await prefs.setString(
+        'bangumi_auth_kind',
+        BangumiAuthKind.personalAccessToken.persistedValue,
+      );
+      if (!_isCurrent(generation)) return;
+      await prefs.setInt('bangumi_user_id', profile.userId);
+      if (!_isCurrent(generation)) return;
+      await prefs.setString('bangumi_username', profile.username);
+      if (!_isCurrent(generation)) return;
+      await _refreshBackend.setAccessToken(trimmed);
+      if (!_isCurrent(generation)) return;
+      refreshState = const BangumiRefreshState();
+      state = state.copyWith(
+        bangumiToken: '',
+        bangumiRefreshToken: '',
+        bangumiTokenExpiresAt: 0,
+        bangumiAuthKind: BangumiAuthKind.personalAccessToken,
+        bangumiUserId: profile.userId,
+        bangumiUsername: profile.username,
+        personalTokenActive: true,
+      );
+      _publishRefresh(BangumiRefreshStatus.ready);
     });
   }
 
@@ -1500,6 +1645,7 @@ class SettingsNotifier extends StateNotifier<Settings> {
     required String accessToken,
     required String refreshToken,
     required int expiresAt,
+    int userId = 0,
     DateTime? lastSuccess,
   }) async {
     final prefs = await SharedPreferences.getInstance();
@@ -1510,6 +1656,15 @@ class SettingsNotifier extends StateNotifier<Settings> {
     if (!_isCurrent(generation)) return;
     await prefs.setInt('bangumi_token_expires_at', expiresAt);
     if (!_isCurrent(generation)) return;
+    await prefs.setString(
+      'bangumi_auth_kind',
+      BangumiAuthKind.oauth.persistedValue,
+    );
+    if (!_isCurrent(generation)) return;
+    if (userId > 0) {
+      await prefs.setInt('bangumi_user_id', userId);
+      if (!_isCurrent(generation)) return;
+    }
     if (lastSuccess == null) {
       await prefs.remove('bangumi_refresh_last_success');
     } else {
@@ -1527,6 +1682,9 @@ class SettingsNotifier extends StateNotifier<Settings> {
       bangumiToken: accessToken,
       bangumiRefreshToken: refreshToken,
       bangumiTokenExpiresAt: expiresAt,
+      bangumiAuthKind: BangumiAuthKind.oauth,
+      bangumiUserId: userId > 0 ? userId : state.bangumiUserId,
+      personalTokenActive: false,
     );
     _publishRefresh(
       lastSuccess == null
@@ -1541,9 +1699,18 @@ class SettingsNotifier extends StateNotifier<Settings> {
     final generation = ++_sessionGeneration;
     _loginInProgress = false;
     _refreshing = null;
+    final kind = state.bangumiAuthKind;
     return _queueSessionWrite(() async {
       await ready;
       if (!_isCurrent(generation)) return;
+      if (kind == BangumiAuthKind.personalAccessToken) {
+        // A failed secure-store delete must not trap the user in a logged-in
+        // state: the kind flag below already keeps the leftover token from
+        // being restored or used.
+        try {
+          await credentialStore?.deletePersonalToken();
+        } catch (_) {}
+      }
       final prefs = await SharedPreferences.getInstance();
       if (!_isCurrent(generation)) return;
       for (final key in const [
@@ -1551,6 +1718,9 @@ class SettingsNotifier extends StateNotifier<Settings> {
         'bangumi_refresh_token',
         'bangumi_token_expires_at',
         'bangumi_refresh_last_success',
+        'bangumi_auth_kind',
+        'bangumi_user_id',
+        'bangumi_username',
       ]) {
         await prefs.remove(key);
         if (!_isCurrent(generation)) return;
@@ -1561,6 +1731,10 @@ class SettingsNotifier extends StateNotifier<Settings> {
         bangumiToken: '',
         bangumiRefreshToken: '',
         bangumiTokenExpiresAt: 0,
+        bangumiAuthKind: BangumiAuthKind.oauth,
+        bangumiUserId: 0,
+        bangumiUsername: '',
+        personalTokenActive: false,
       );
       refreshState = const BangumiRefreshState();
       _publishRefresh(BangumiRefreshStatus.ready);
@@ -1612,6 +1786,11 @@ class SettingsNotifier extends StateNotifier<Settings> {
     required int generation,
   }) async {
     if (!_isCurrent(generation) || !state.isLoggedIn) return;
+    // A personal access token has no refresh flow at all. It lives until it
+    // is rejected; the UI shows its expiry as unknown.
+    if (state.bangumiAuthKind == BangumiAuthKind.personalAccessToken) {
+      return;
+    }
     final refreshToken = state.bangumiRefreshToken;
     final expiresAt = state.bangumiTokenExpiresAt;
     final now = _now().millisecondsSinceEpoch ~/ 1000;
@@ -1677,6 +1856,7 @@ final settingsProvider = StateNotifierProvider<SettingsNotifier, Settings>((
 ) {
   return SettingsNotifier(
     refreshBackend: ref.read(bangumiRefreshBackendProvider),
+    credentialStore: SecureStorageBangumiCredentialStore(),
     onRefreshStateChanged: ref
         .read(bangumiRefreshStateProvider.notifier)
         .update,
@@ -1697,6 +1877,13 @@ Future<void> resetPersistedAppSettings() async {
   decodeModeStartupValue = 'auto';
   await rust.setBangumiToken(token: null);
   await rust.setBangumiMirror(enabled: false);
+  // The personal access token lives outside SharedPreferences: clear the
+  // secure store too so a settings reset really logs the account out.
+  try {
+    await SecureStorageBangumiCredentialStore().deletePersonalToken();
+  } catch (_) {
+    // An unavailable store holds nothing to clear.
+  }
   await rust.smbSetCredentials(host: '', share: '', user: '', password: '');
   await rust.webdavSetCredentials(
     baseUrl: '',

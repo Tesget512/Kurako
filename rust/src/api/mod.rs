@@ -201,6 +201,27 @@ pub fn oauth_refresh(refresh_token: String) -> Result<OAuthResult, String> {
     .map_err(|e| format!("{e:#}"))
 }
 
+// ---- Bangumi personal access token (manual backup login path) ----
+
+/// The identity a personal access token was proven to carry. Carries no token.
+pub struct PersonalTokenProfile {
+    pub user_id: i64,
+    pub username: String,
+}
+
+/// Validate a pasted personal access token via `/v0/me` on the selected API
+/// host. This is the whole check: a personal token has no refresh flow, no
+/// queryable expiry and no client binding. The token is sent to exactly one
+/// host and never appears in the fixed error strings.
+pub fn validate_personal_access_token(token: String) -> Result<PersonalTokenProfile, String> {
+    RT.block_on(async { bangumi::validate_personal_access_token(&token).await })
+        .map(|p| PersonalTokenProfile {
+            user_id: p.user_id,
+            username: p.username,
+        })
+        .map_err(|e| e.to_string())
+}
+
 /// The detected system HTTP proxy (e.g. "http://127.0.0.1:7890"), or None.
 /// The Flutter side uses this to route cover-image requests through the same
 /// proxy the Rust HTTP client uses.

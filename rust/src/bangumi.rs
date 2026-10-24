@@ -2001,13 +2001,13 @@ mod match_tests {
     /// of turning one failure into three.
     static ROUTE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn route_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    pub(crate) fn route_test_guard() -> std::sync::MutexGuard<'static, ()> {
         ROUTE_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn reset_routes() {
+    pub(crate) fn reset_routes() {
         set_route_options(false, false);
         MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
     }
@@ -2486,5 +2486,295 @@ mod oauth_tests {
             .unwrap();
         assert_eq!(parsed.data.len(), 1);
         assert_eq!(parsed.total, 1);
+    }
+}
+
+// ---- Personal access token (manual backup login path) ----
+//
+// A personal access token is created by the user on Bangumi's official token
+// page and pasted into the app. It is NOT an OAuth session: no refresh token,
+// no client binding, no queryable expiry. Validation is therefore one read of
+// `/v0/me` on the selected API host, and that is all the app can ever know.
+
+/// The identity a personal access token was proven to carry. Deliberately
+/// carries no token value.
+#[derive(Clone, Deserialize)]
+pub struct PersonalAccessTokenProfile {
+    pub user_id: i64,
+    pub username: String,
+}
+
+/// Validate a personal access token via `/v0/me`.
+///
+/// The token goes to exactly one host — the collection route choice
+/// (`api.bgm.tv`, or `api.bangumi.lat` after the explicit collection opt-in)
+/// — and is never retried against a second host. Errors are fixed strings:
+/// neither the token nor any response body can reach them.
+pub async fn validate_personal_access_token(token: &str) -> Result<PersonalAccessTokenProfile> {
+    validate_personal_access_token_via(collection_base(), HttpTimeouts::default(), token).await
+}
+
+/// The injectable variant used by transport tests: the endpoint base and
+/// timeouts come from the caller. Production passes the collection base.
+pub(crate) async fn validate_personal_access_token_via(
+    base: &str,
+    timeouts: HttpTimeouts,
+    token: &str,
+) -> Result<PersonalAccessTokenProfile> {
+    let token = token.trim();
+    if token.is_empty() {
+        anyhow::bail!("personal token empty");
+    }
+    let mut builder = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(timeouts.connect)
+        .timeout(timeouts.total);
+    let is_loopback = base.starts_with("http://127.0.0.1") || base.starts_with("http://localhost");
+    if !is_loopback {
+        if let Some(proxy) = detect_system_proxy() {
+            builder = builder.proxy(reqwest::Proxy::all(proxy).context("personal token proxy")?);
+        }
+    }
+    let mut resp = builder
+        .build()
+        .context("personal token client")?
+        .get(format!("{base}/v0/me"))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| anyhow::anyhow!("personal token request failed"))?;
+    let status = resp.status();
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| anyhow::anyhow!("personal token request failed"))?
+    {
+        if body.len().saturating_add(chunk.len()) > 64 * 1024 {
+            anyhow::bail!("personal token response too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        anyhow::bail!("personal token rejected (http {})", status.as_u16());
+    }
+    if !status.is_success() {
+        anyhow::bail!("personal token endpoint http {}", status.as_u16());
+    }
+    #[derive(Deserialize)]
+    struct Me {
+        #[serde(default)]
+        id: serde_json::Value,
+        username: Option<String>,
+    }
+    let me: Me = serde_json::from_slice(&body)
+        .map_err(|_| anyhow::anyhow!("personal token endpoint invalid response"))?;
+    let user_id = match &me.id {
+        serde_json::Value::Number(n) => n.as_i64().unwrap_or(0),
+        serde_json::Value::String(s) => s.parse().unwrap_or(0),
+        _ => 0,
+    };
+    let username = me
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_owned);
+    match (user_id > 0, username) {
+        (true, Some(username)) => Ok(PersonalAccessTokenProfile { user_id, username }),
+        _ => anyhow::bail!("personal token profile invalid"),
+    }
+}
+
+/// Timeouts for one authenticated endpoint round trip (personal-token
+/// `/v0/me`), injectable so tests can reach the fail-closed paths quickly
+/// instead of waiting 15/30 s.
+#[derive(Clone, Copy)]
+pub(crate) struct HttpTimeouts {
+    pub(crate) connect: std::time::Duration,
+    pub(crate) total: std::time::Duration,
+}
+
+impl Default for HttpTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: std::time::Duration::from_secs(15),
+            total: std::time::Duration::from_secs(30),
+        }
+    }
+}
+
+/// Personal-access-token validation tests against a scripted loopback
+/// endpoint. The token is synthetic; nothing reaches a real provider.
+#[cfg(test)]
+mod personal_token_tests {
+    use super::match_tests::{reset_routes, route_test_guard};
+    use super::*;
+    use crate::test_http::{respond, respond_json, MockHttpServer, ScriptedStep};
+
+    const PAT: &str = "synthetic-personal-token";
+
+    fn fast_timeouts() -> HttpTimeouts {
+        HttpTimeouts {
+            connect: std::time::Duration::from_millis(400),
+            total: std::time::Duration::from_millis(800),
+        }
+    }
+
+    fn err_text(result: Result<PersonalAccessTokenProfile>) -> String {
+        match result {
+            Ok(_) => panic!("expected an error, got a profile"),
+            Err(e) => e.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn me_returns_a_profile_and_sends_only_the_bearer() {
+        let server = MockHttpServer::start(vec![respond_json(
+            200,
+            r#"{"id":42,"username":"synthetic-user"}"#,
+        )])
+        .await;
+        let profile = validate_personal_access_token_via(&server.base_url(), fast_timeouts(), PAT)
+            .await
+            .unwrap();
+        server.abort();
+
+        assert_eq!(server.request_lines(), ["GET /v0/me"]);
+        let request = &server.requests()[0];
+        assert_eq!(
+            request.header("authorization"),
+            Some("Bearer synthetic-personal-token")
+        );
+        assert_eq!(request.header("accept"), Some("application/json"));
+        assert_eq!(profile.user_id, 42);
+        assert_eq!(profile.username, "synthetic-user");
+    }
+
+    #[tokio::test]
+    async fn me_requires_a_real_identity() {
+        for body in [
+            r#"{"id":0,"username":"u"}"#,
+            r#"{"id":-1,"username":"u"}"#,
+            r#"{"id":42}"#,
+            r#"{"username":"u"}"#,
+            r#"{"id":42,"username":"   "}"#,
+            r#"{}"#,
+            r#"{"id":"not-a-number","username":"u"}"#,
+        ] {
+            let server = MockHttpServer::start(vec![respond_json(200, body)]).await;
+            let err = err_text(
+                validate_personal_access_token_via(&server.base_url(), fast_timeouts(), PAT).await,
+            );
+            server.abort();
+            assert_eq!(err, "personal token profile invalid", "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn me_rejected_credentials_report_a_fixed_error() {
+        for status in [401u16, 403] {
+            let server = MockHttpServer::start(vec![respond(
+                status,
+                "application/json",
+                br#"{"error":"unauthorized","detail":"token abc-secret"}"#.to_vec(),
+            )])
+            .await;
+            let err = err_text(
+                validate_personal_access_token_via(&server.base_url(), fast_timeouts(), PAT).await,
+            );
+            server.abort();
+            assert_eq!(err, format!("personal token rejected (http {status})"));
+            assert!(!err.contains("abc-secret"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn me_html_is_rejected_without_echoing_the_page() {
+        let server = MockHttpServer::start(vec![respond(
+            200,
+            "text/html",
+            b"<html>challenge page mentioning synthetic-personal-token</html>".to_vec(),
+        )])
+        .await;
+        let err = err_text(
+            validate_personal_access_token_via(&server.base_url(), fast_timeouts(), PAT).await,
+        );
+        server.abort();
+        assert_eq!(err, "personal token endpoint invalid response");
+        assert!(!err.contains(PAT), "{err}");
+        assert!(!err.contains("<"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn me_redirect_is_not_followed() {
+        let server = MockHttpServer::start(vec![ScriptedStep::Respond {
+            status: 302,
+            headers: vec![(
+                "Location".to_string(),
+                "https://example.invalid/v0/me".to_string(),
+            )],
+            body: Vec::new(),
+        }])
+        .await;
+        let err = err_text(
+            validate_personal_access_token_via(&server.base_url(), fast_timeouts(), PAT).await,
+        );
+        server.abort();
+        assert!(err.contains("302"), "{err}");
+        assert_eq!(server.requests().len(), 1, "must not follow the redirect");
+    }
+
+    #[tokio::test]
+    async fn me_transport_failures_fail_closed() {
+        for step in [ScriptedStep::Silence, ScriptedStep::Close] {
+            let server = MockHttpServer::start(vec![step]).await;
+            let err = err_text(
+                validate_personal_access_token_via(&server.base_url(), fast_timeouts(), PAT).await,
+            );
+            server.abort();
+            assert_eq!(err, "personal token request failed");
+        }
+    }
+
+    #[tokio::test]
+    async fn me_rejects_an_empty_token_without_a_request() {
+        let server = MockHttpServer::start(vec![]).await;
+        for bad in ["", "   "] {
+            let err = err_text(
+                validate_personal_access_token_via(&server.base_url(), fast_timeouts(), bad).await,
+            );
+            assert_eq!(err, "personal token empty", "{bad:?}");
+        }
+        server.abort();
+        assert!(
+            server.requests().is_empty(),
+            "no request may leave for an empty token"
+        );
+    }
+
+    #[test]
+    fn pat_api_base_follows_only_the_collection_route_flag() {
+        let _guard = route_test_guard();
+        reset_routes();
+        // Default: official API.
+        assert_eq!(collection_base(), BASE_OFFICIAL);
+        // The OAuth page flag never moves the account API host.
+        MIRROR.store(true, std::sync::atomic::Ordering::Relaxed);
+        set_route_options(true, false);
+        assert_eq!(
+            collection_base(),
+            BASE_OFFICIAL,
+            "the login page flag must not route the personal-token API"
+        );
+        // The collection opt-in does.
+        set_route_options(true, true);
+        assert_eq!(collection_base(), BASE_MIRROR);
+        // ...only while the proxy is enabled.
+        MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(collection_base(), BASE_OFFICIAL);
+        reset_routes();
     }
 }
