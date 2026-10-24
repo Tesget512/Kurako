@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
@@ -7,11 +7,18 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'pages/home_page.dart';
 import 'pages/onboarding_page.dart';
+import 'services/bangumi_oauth.dart';
 import 'services/secure_storage_probe.dart';
 import 'state/providers.dart';
 import 'state/update_provider.dart';
 import 'widgets/update_banner.dart';
 import 'ui/transitions.dart';
+
+/// Dev-only acceptance switch: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
+const kMirrorOAuthAcceptanceEnabled = bool.fromEnvironment(
+  'KURAKO_MIRROR_OAUTH_ACCEPTANCE',
+  defaultValue: false,
+);
 
 class AnimeBdApp extends ConsumerStatefulWidget {
   const AnimeBdApp({super.key});
@@ -54,7 +61,69 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
       unawaited(ref.read(settingsProvider.notifier).ensureFreshBangumiToken());
       unawaited(ref.read(updateCheckProvider.notifier).checkAtStartup());
       if (kSecureStorageProbeEnabled) launchSecureStorageProbe();
+      if (kMirrorOAuthAcceptanceEnabled) {
+        unawaited(_runMirrorOAuthAcceptance());
+      }
     });
+  }
+
+  /// Dev-only acceptance driver: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
+  ///
+  /// Runs the *production* login flow (browser authorization included — the
+  /// only human step is the user clicking "authorize" in their own browser),
+  /// persists the session exactly like the settings page does, then forces
+  /// one renewal. Writes stage outcomes only: never tokens, codes, secrets
+  /// or raw errors.
+  Future<void> _runMirrorOAuthAcceptance() async {
+    const out = String.fromEnvironment(
+      'KURAKO_MIRROR_OAUTH_ACCEPTANCE_OUT',
+      defaultValue: '',
+    );
+    Future<void> report(String stage) async {
+      debugPrint('MirrorOAuthAcceptance: $stage');
+      if (out.isNotEmpty) {
+        try {
+          final existing = await File(out).readAsString();
+          await File(out).writeAsString('$existing$stage\n');
+        } catch (_) {
+          await File(out).writeAsString('$stage\n');
+        }
+      }
+    }
+
+    // The mirror providers restore asynchronously (service verification
+    // replay included); wait until the route is actually in effect.
+    var viaMirror = false;
+    for (var i = 0; i < 40; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+      viaMirror =
+          ref.read(bangumiMirrorProvider) &&
+          ref.read(bangumiOAuthViaMirrorProvider);
+      if (viaMirror) break;
+    }
+    await report('route-mirror: $viaMirror');
+    if (!viaMirror) {
+      await report('login: SKIPPED mirror route not active');
+      return;
+    }
+    try {
+      final result = await BangumiOAuth.login();
+      await ref.read(settingsProvider.notifier).setOAuthSession(
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresAt: result.expiresAt,
+        userId: result.userId,
+      );
+      await report('login: OK userId=${result.userId}');
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      await ref.read(settingsProvider.notifier).ensureFreshBangumiToken(
+        force: true,
+      );
+      final status = ref.read(bangumiRefreshStateProvider).status.name;
+      await report('forced-renewal status: $status');
+    } catch (error) {
+      await report('login: FAIL ${bangumiLoginFailureMessage(error)}');
+    }
   }
 
   @override
