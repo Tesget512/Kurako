@@ -31,7 +31,7 @@ void main() {
                   onLoadStop: onLoadStop,
                   onError: onError,
                   onNavigationBlocked: onNavigationBlocked,
-                  pageText: '{"id":1,"name":"Cowboy Bebop"}',
+                  pageText: '{"id":541285,"name":"きみが死ぬまで恋をしたい"}',
                   supportsFlutterOverlay: true,
                 );
                 return host;
@@ -79,7 +79,7 @@ void main() {
                   onLoadStop: onLoadStop,
                   onError: onError,
                   onNavigationBlocked: onNavigationBlocked,
-                  pageText: '{"id":1,"name":"Cowboy Bebop"}',
+                  pageText: '{"id":541285,"name":"きみが死ぬまで恋をしたい"}',
                   supportsFlutterOverlay: false,
                 );
                 return host;
@@ -120,7 +120,7 @@ void main() {
                   onLoadStop: onLoadStop,
                   onError: onError,
                   onNavigationBlocked: onNavigationBlocked,
-                  pageText: '{"id":1,"name":"Cowboy Bebop"}',
+                  pageText: '{"id":541285,"name":"きみが死ぬまで恋をしたい"}',
                 );
                 return host;
               },
@@ -218,7 +218,7 @@ void main() {
                   onLoadStop: onLoadStop,
                   onError: onError,
                   onNavigationBlocked: onNavigationBlocked,
-                  pageText: '{"id":1,"name":"Cowboy Bebop"}',
+                  pageText: '{"id":541285,"name":"きみが死ぬまで恋をしたい"}',
                   failLoadUri: Uri.parse('https://lain.bangumi.lat/cover.jpg'),
                 );
                 return host;

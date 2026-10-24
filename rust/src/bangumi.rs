@@ -9,6 +9,7 @@ const BASE_OFFICIAL: &str = "https://api.bgm.tv";
 const MIRROR_API_HOST: &str = "api.bangumi.lat";
 pub const BASE_MIRROR: &str = "https://api.bangumi.lat";
 pub const IMAGE_MIRROR_HOST: &str = "lain.bangumi.lat";
+const MIRROR_PROBE_SUBJECT_ID: i64 = 541285;
 /// Official OAuth lives on the main site, not the API host.
 const OAUTH_OFFICIAL: &str = "https://bgm.tv/oauth";
 /// The reverse proxy mirrors the site, so its authorization *page* can be used
@@ -238,7 +239,15 @@ pub async fn probe_mirror() -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!(MIRROR_FAILURE))?;
     let c = client()?;
     let mut resp = send_with_backoff(
-        || proof_headers(c.get(format!("{BASE_MIRROR}/v0/subjects/1")), &proof, false),
+        || {
+            proof_headers(
+                c.get(format!(
+                    "{BASE_MIRROR}/v0/subjects/{MIRROR_PROBE_SUBJECT_ID}"
+                )),
+                &proof,
+                false,
+            )
+        },
         "bangumi mirror probe",
     )
     .await?;
@@ -258,7 +267,7 @@ pub async fn probe_mirror() -> Result<String> {
     }
     let value: serde_json::Value =
         serde_json::from_slice(&body).map_err(|_| anyhow::anyhow!(MIRROR_FAILURE))?;
-    if value["id"].as_i64() != Some(1) {
+    if value["id"].as_i64() != Some(MIRROR_PROBE_SUBJECT_ID) {
         anyhow::bail!(MIRROR_FAILURE);
     }
     let image = ["large", "common", "medium", "small"]
@@ -1903,6 +1912,15 @@ mod match_tests {
             .headers()
             .contains_key(reqwest::header::AUTHORIZATION));
         assert!(!unknown.headers().contains_key(reqwest::header::COOKIE));
+    }
+
+    #[test]
+    fn mirror_probe_uses_the_configured_subject() {
+        assert_eq!(MIRROR_PROBE_SUBJECT_ID, 541285);
+        assert_eq!(
+            format!("{BASE_MIRROR}/v0/subjects/{MIRROR_PROBE_SUBJECT_ID}"),
+            "https://api.bangumi.lat/v0/subjects/541285"
+        );
     }
 
     #[test]

@@ -36,6 +36,10 @@ void main() {
     },
   );
 
+  test('reverse proxy probe targets subject 541285', () {
+    expect(bangumiMirrorApiProbe, 'https://api.bangumi.lat/v0/subjects/541285');
+  });
+
   test('cover rewrite matches exact URI host and preserves path/query', () {
     for (final host in [
       'lain.bgm.tv',
@@ -465,21 +469,22 @@ void main() {
     expect(isBangumiMirrorChallengePage('Making sure you are a human'), true);
     // A real API document is not a challenge.
     expect(
-      isBangumiMirrorChallengePage('{"id":1,"name":"Cowboy Bebop"}'),
+      isBangumiMirrorChallengePage('{"id":541285,"name":"きみが死ぬまで恋をしたい"}'),
       false,
     );
     expect(isBangumiMirrorChallengePage(''), false);
   });
 
   test('API probe readiness needs the real subject document', () {
-    // The probe requests subject 1; only that decoded object counts as done.
+    // The probe requests subject 541285; only that decoded object counts as done.
     expect(
-      isBangumiMirrorSubjectResponse('{"id":1,"name":"Cowboy Bebop"}'),
+      isBangumiMirrorSubjectResponse('{"id":541285,"name":"きみが死ぬまで恋をしたい"}'),
       isTrue,
     );
     expect(
       isBangumiMirrorSubjectResponse(
-        '{"id":1,"name":"Cowboy Bebop","name_cn":"星际牛仔"}',
+        '{"id":541285,"name":"きみが死ぬまで恋をしたい",'
+        '"name_cn":"与你相恋到生命尽头"}',
       ),
       isTrue,
     );
@@ -492,9 +497,18 @@ void main() {
     expect(isBangumiMirrorSubjectResponse(''), isFalse);
     expect(isBangumiMirrorSubjectResponse('not json at all'), isFalse);
     // JSON, but not the subject we asked for.
-    expect(isBangumiMirrorSubjectResponse('{"id":2,"name":"Other"}'), isFalse);
-    expect(isBangumiMirrorSubjectResponse('{"id":1}'), isFalse);
-    expect(isBangumiMirrorSubjectResponse('{"id":"1","name":"X"}'), isFalse);
-    expect(isBangumiMirrorSubjectResponse('[{"id":1,"name":"X"}]'), isFalse);
+    expect(
+      isBangumiMirrorSubjectResponse('{"id":1,"name":"Cowboy Bebop"}'),
+      isFalse,
+    );
+    expect(isBangumiMirrorSubjectResponse('{"id":541285}'), isFalse);
+    expect(
+      isBangumiMirrorSubjectResponse('{"id":"541285","name":"きみが死ぬまで恋をしたい"}'),
+      isFalse,
+    );
+    expect(
+      isBangumiMirrorSubjectResponse('[{"id":541285,"name":"X"}]'),
+      isFalse,
+    );
   });
 }

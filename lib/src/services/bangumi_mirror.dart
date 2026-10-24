@@ -7,7 +7,9 @@ import '../pages/bangumi_mirror_verification_page.dart';
 import 'bangumi_mirror_web_host.dart';
 
 const bangumiMirrorApiHost = 'api.bangumi.lat';
-const bangumiMirrorApiProbe = 'https://$bangumiMirrorApiHost/v0/subjects/1';
+const bangumiMirrorProbeSubjectId = 541285;
+const bangumiMirrorApiProbe =
+    'https://$bangumiMirrorApiHost/v0/subjects/$bangumiMirrorProbeSubjectId';
 const bangumiMirrorImageHost = 'lain.bangumi.lat';
 const bangumiMirrorFailureMessage =
     '反向代理验证已失效或请求被拦截。请重新验证，或关闭反向代理回退官方；'

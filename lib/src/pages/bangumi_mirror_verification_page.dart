@@ -12,7 +12,9 @@ import '../services/bangumi_mirror_web_host_factory.dart';
 bool isBangumiMirrorSubjectResponse(String text) {
   try {
     final value = jsonDecode(text);
-    return value is Map && value['id'] == 1 && value['name'] is String;
+    return value is Map &&
+        value['id'] == bangumiMirrorProbeSubjectId &&
+        value['name'] is String;
   } on FormatException {
     return false;
   }
