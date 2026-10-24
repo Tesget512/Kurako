@@ -381,7 +381,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   SwitchListTile(
                     contentPadding: const EdgeInsets.only(left: 16),
                     title: const Text('登录走反向代理'),
-                    subtitle: const Text('仅授权页面经反代打开，换取令牌仍走官方'),
+                    subtitle: const Text('授权、令牌交换与续期均经反代，自动完成人机验证'),
                     value: ref.watch(bangumiOAuthViaMirrorProvider),
                     onChanged: (value) => ref
                         .read(bangumiOAuthViaMirrorProvider.notifier)
@@ -436,8 +436,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               SizedBox(height: 12),
               Text(
                 '登录与收藏可以分别选择走官方或反向代理。'
-                '登录开关只改变授权页面从哪里打开：反代会对服务端的令牌请求'
-                '下发验证页，因此换取令牌始终由官方完成。'
+                '开启“登录走反向代理”后，授权页面在反代打开，令牌交换与续期'
+                '也由应用直接请求反代完成：应用会按其协议自动完成人机验证，'
+                '但授权码、应用密钥与令牌都会经过反代服务器，运营方在技术上'
+                '可以看到这些内容。关闭该开关后立即回到官方链路。'
                 '收藏开关会让读取与修改请求连同令牌一起经反代转发。'
                 '两种方式拿到的令牌是通用的。',
               ),

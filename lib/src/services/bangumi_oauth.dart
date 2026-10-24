@@ -217,6 +217,9 @@ String bangumiLoginFailureMessage(Object error) {
   if (text.contains('token verification')) {
     return 'Bangumi 返回的授权身份或有效期验证失败，未保存账号，请重新授权。';
   }
+  if (text.contains('mirror challenge')) {
+    return '反向代理的人机验证未能自动完成，请稍后重试，或在设置中关闭“登录走反向代理”。';
+  }
   if (text.contains('oauth response')) {
     return '授权服务未返回有效数据，可能受到验证页面或网络拦截，请检查网络后重试。';
   }

@@ -1425,6 +1425,18 @@ pub fn authorize_url(client_id: &str, redirect_uri: &str) -> String {
 /// The token payload returned by the OAuth token endpoint. Field names match
 /// Bangumi's JSON so it deserializes directly. Deliberately not `Debug`: this
 /// value holds credentials that must never reach a log or panic message.
+/// Test-only Debug: shows shape metadata but never the credential fields, so
+/// a panic message still cannot leak a token while `unwrap_err()` stays usable.
+#[cfg(test)]
+impl std::fmt::Debug for OAuthToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthToken")
+            .field("expires_in", &self.expires_in)
+            .field("user_id", &self.user_id)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub struct OAuthToken {
     pub access_token: String,
@@ -1509,6 +1521,10 @@ impl RawOAuthToken {
 ///
 /// The `state` echoed back here is the same value the app sent to `/authorize`
 /// and already validated against the callback.
+///
+/// With the mirror login opt-in the token requests go to the reverse proxy,
+/// clearing its Anubis challenge first (see [`MirrorChallengeSession`]);
+/// every other route keeps the direct official transport.
 pub async fn exchange_code(
     client_id: &str,
     client_secret: &str,
@@ -1524,6 +1540,9 @@ pub async fn exchange_code(
         ("redirect_uri", redirect_uri),
         ("state", state),
     ];
+    if mirror_route(&OAUTH_VIA_MIRROR) {
+        return exchange_code_mirror(&params, client_id).await;
+    }
     let mut token = post_token(&params).await?;
     // The exchange alone only proves *a* token was issued. token_status proves
     // it belongs to this client, is still valid, and reports the user id the
@@ -1538,6 +1557,9 @@ pub async fn exchange_code(
 }
 
 /// Refresh an expired access token using the stored refresh token.
+///
+/// Mirrors [`exchange_code`]'s route choice: the reverse proxy after the
+/// explicit login opt-in, the official endpoint otherwise.
 pub async fn refresh_token(
     client_id: &str,
     client_secret: &str,
@@ -1551,7 +1573,270 @@ pub async fn refresh_token(
         ("refresh_token", refresh),
         ("redirect_uri", redirect_uri),
     ];
+    if mirror_route(&OAUTH_VIA_MIRROR) {
+        let session = MirrorChallengeSession::establish(OAUTH_PAGE_MIRROR).await?;
+        let value = session
+            .post_form("access_token", &params)
+            .await
+            .and_then(post_token_from_value)?;
+        return Ok(value);
+    }
     post_token(&params).await
+}
+
+// ---- Mirror OAuth transport with the Anubis challenge solved in-process ----
+//
+// The reverse proxy fronts the whole site with Anubis, which answers every
+// cookie-less request with a proof-of-work challenge page. Its "fast"
+// challenge is a plain sha256 PoW meant to be solved by any capable client —
+// browser or not. We solve it per the public protocol; the session cookie
+// lives only inside the client's in-memory cookie store and nothing about
+// the challenge, the cookie or the form bodies is ever logged.
+
+/// Highest Anubis difficulty solved locally. Each hex digit is 16x the work;
+/// the deployed site uses 5 (~10^6 hashes, well under a second). Above 6 the
+/// solve stops being interactive, so it fails closed instead.
+const ANUBIS_MAX_DIFFICULTY: u32 = 6;
+/// Wall-clock budget for the PoW loop, so a hostile difficulty cannot pin a
+/// core forever.
+const ANUBIS_POW_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
+struct AnubisChallenge {
+    id: String,
+    random_data: String,
+    difficulty: u32,
+}
+
+fn is_anubis_page(body: &str) -> bool {
+    body.contains("/.within.website/x/cmd/anubis/")
+}
+
+/// Pull the embedded `anubis_challenge` JSON out of a challenge page. String
+/// scanning, not HTML parsing: the marker is stable and an HTML parser would
+/// be a new dependency for one page shape.
+fn extract_anubis_challenge(html: &str) -> Result<AnubisChallenge> {
+    let idx = html
+        .find("id=\"anubis_challenge\"")
+        .context("mirror challenge page missing challenge data")?;
+    let start = html[idx..]
+        .find('{')
+        .map(|offset| idx + offset)
+        .context("mirror challenge page missing challenge data")?;
+    let end = html[start..]
+        .find("</script>")
+        .map(|offset| start + offset)
+        .context("mirror challenge page missing challenge data")?;
+    let value: serde_json::Value = serde_json::from_str(&html[start..end])
+        .map_err(|_| anyhow::anyhow!("mirror challenge page malformed"))?;
+    if value["rules"]["algorithm"].as_str() != Some("fast") {
+        anyhow::bail!("mirror challenge algorithm unsupported");
+    }
+    let difficulty = value["rules"]["difficulty"].as_u64().unwrap_or(0) as u32;
+    if difficulty == 0 || difficulty > ANUBIS_MAX_DIFFICULTY {
+        anyhow::bail!("mirror challenge difficulty out of range");
+    }
+    let id = value["challenge"]["id"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .context("mirror challenge page missing challenge data")?;
+    let random_data = value["challenge"]["randomData"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .context("mirror challenge page missing challenge data")?;
+    Ok(AnubisChallenge {
+        id: id.to_owned(),
+        random_data: random_data.to_owned(),
+        difficulty,
+    })
+}
+
+fn sha256_hex(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(input.as_bytes());
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+/// Solve the PoW: find the nonce whose sha256(random_data + nonce) starts
+/// with `difficulty` hex zeros. Bounded by the wall-clock budget.
+fn solve_anubis_pow(random_data: &str, difficulty: u32) -> Result<(String, u64)> {
+    let prefix = "0".repeat(difficulty as usize);
+    let started = std::time::Instant::now();
+    let mut nonce: u64 = 0;
+    loop {
+        let hash = sha256_hex(&format!("{random_data}{nonce}"));
+        if hash.starts_with(&prefix) {
+            return Ok((hash, nonce));
+        }
+        nonce = nonce.wrapping_add(1);
+        if nonce & 0xFFFFF == 0 && started.elapsed() > ANUBIS_POW_BUDGET {
+            anyhow::bail!("mirror challenge solve exceeded time budget");
+        }
+        if nonce == 0 {
+            anyhow::bail!("mirror challenge solve exhausted nonce space");
+        }
+    }
+}
+
+/// One challenge-cleared HTTP client for the mirror OAuth endpoints. `base`
+/// is the OAuth base (the site origin plus `/oauth`); tests inject a
+/// loopback server, production passes [`OAUTH_PAGE_MIRROR`]. `origin` is the
+/// site root the Anubis challenge endpoints live under.
+struct MirrorChallengeSession {
+    client: reqwest::Client,
+    base: String,
+    origin: String,
+}
+
+/// Test-only Debug so `unwrap()` stays usable; shows no credentials.
+#[cfg(test)]
+impl std::fmt::Debug for MirrorChallengeSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MirrorChallengeSession")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
+}
+
+impl MirrorChallengeSession {
+    /// Build a cookie-carrying client against `base` and clear one Anubis
+    /// challenge.
+    async fn establish(base: &str) -> Result<Self> {
+        let mut builder = reqwest::Client::builder()
+            .user_agent(USER_AGENT)
+            .redirect(reqwest::redirect::Policy::none())
+            .cookie_store(true)
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .timeout(std::time::Duration::from_secs(30));
+        // Loopback bases only exist in tests; the system proxy must not sit
+        // between the session and its scripted endpoint.
+        let is_loopback =
+            base.starts_with("http://127.0.0.1") || base.starts_with("http://localhost");
+        if !is_loopback {
+            if let Some(proxy) = detect_system_proxy() {
+                builder =
+                    builder.proxy(reqwest::Proxy::all(proxy).context("oauth proxy configuration")?);
+            }
+        }
+        // The Anubis endpoints live at the site root, not under /oauth.
+        let origin = base.split('/').take(3).collect::<Vec<_>>().join("/");
+        let session = Self {
+            client: builder.build().context("oauth client initialization")?,
+            base: base.to_owned(),
+            origin,
+        };
+        // One protected request fetches the challenge page.
+        let first = session.get_text("access_token").await?;
+        if !is_anubis_page(&first) {
+            return Ok(session);
+        }
+        let challenge = extract_anubis_challenge(&first)?;
+        let started = std::time::Instant::now();
+        let (hash, nonce) = solve_anubis_pow(&challenge.random_data, challenge.difficulty)?;
+        // pass-challenge answers 302 and sets the session cookies; the
+        // cookie store keeps them for the POSTs below.
+        let url = format!(
+            "{}/.within.website/x/cmd/anubis/api/pass-challenge?id={}&response={}&nonce={}&redir=%2F&elapsedTime={}",
+            session.origin,
+            urlencode(&challenge.id),
+            urlencode(&hash),
+            nonce,
+            started.elapsed().as_millis(),
+        );
+        let resp = session
+            .client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("mirror challenge request failed"))?;
+        // Any 2xx/3xx with cookies set is fine; a challenge page back means
+        // the solve was rejected.
+        if resp.status().as_u16() >= 400 {
+            anyhow::bail!("mirror challenge rejected");
+        }
+        Ok(session)
+    }
+
+    async fn get_text(&self, endpoint: &str) -> Result<String> {
+        let resp = self
+            .client
+            .get(format!("{}/{endpoint}", self.base))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("oauth token request failed"))?;
+        read_bounded(resp)
+            .await
+            .map(|body| String::from_utf8_lossy(&body).into_owned())
+    }
+
+    /// POST one OAuth form through the cleared session. The response body is
+    /// returned for the same strict parsing as the official transport; a
+    /// challenge page still in the way is reported as such.
+    async fn post_form(
+        &self,
+        endpoint: &str,
+        params: &[(&str, &str)],
+    ) -> Result<serde_json::Value> {
+        let resp = self
+            .client
+            .post(format!("{}/{endpoint}", self.base))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .form(params)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("oauth token request failed"))?;
+        let status = resp.status();
+        let body = read_bounded(resp).await?;
+        if is_anubis_page(&String::from_utf8_lossy(&body)) {
+            anyhow::bail!("mirror challenge expired");
+        }
+        parse_oauth_response(status, &body)
+    }
+}
+
+/// Read a response body with the shared 64 KiB bound.
+async fn read_bounded(mut resp: reqwest::Response) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    while let Some(chunk) = resp
+        .chunk()
+        .await
+        .map_err(|_| anyhow::anyhow!("oauth token request failed"))?
+    {
+        if body.len().saturating_add(chunk.len()) > 64 * 1024 {
+            anyhow::bail!("oauth response too large");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn post_token_from_value(value: serde_json::Value) -> Result<OAuthToken> {
+    let raw: RawOAuthToken = serde_json::from_value(value)
+        .map_err(|_| anyhow::anyhow!("oauth response invalid fields"))?;
+    raw.into_token()
+}
+
+/// The mirror-route exchange: challenge-cleared POSTs for access_token and
+/// token_status, parsed and validated exactly like the official flow.
+async fn exchange_code_mirror(params: &[(&str, &str)], client_id: &str) -> Result<OAuthToken> {
+    let session = MirrorChallengeSession::establish(OAUTH_PAGE_MIRROR).await?;
+    let mut token = session
+        .post_form("access_token", params)
+        .await
+        .and_then(post_token_from_value)?;
+    let status = session
+        .post_form(
+            "token_status",
+            &[("access_token", token.access_token.as_str())],
+        )
+        .await?;
+    validate_token_status(&status, client_id, &mut token)?;
+    Ok(token)
 }
 
 async fn post_token(params: &[(&str, &str)]) -> Result<OAuthToken> {
@@ -2776,5 +3061,244 @@ mod personal_token_tests {
         MIRROR.store(false, std::sync::atomic::Ordering::Relaxed);
         assert_eq!(collection_base(), BASE_OFFICIAL);
         reset_routes();
+    }
+}
+
+/// Mirror-route transport tests: a scripted loopback plays the Anubis
+/// challenge flow. Every value below is synthetic.
+#[cfg(test)]
+mod mirror_challenge_tests {
+    use super::*;
+    use crate::test_http::{respond, respond_json, MockHttpServer, ScriptedStep};
+
+    const CLIENT_ID: &str = "synthetic-client-id";
+
+    fn challenge_page(difficulty: u64, algorithm: &str) -> String {
+        format!(
+            r#"<html><body><script id="anubis_challenge" type="application/json">{{"rules":{{"algorithm":"{algorithm}","difficulty":{difficulty}}},"challenge":{{"id":"synthetic-challenge-id","randomData":"deadbeefcafe"}}}}</script><script src="/.within.website/x/cmd/anubis/static/js/main.mjs"></script></body></html>"#
+        )
+    }
+
+    fn token_body() -> String {
+        r#"{"access_token":"synthetic-access","refresh_token":"synthetic-refresh","expires_in":604800,"token_type":"Bearer","user_id":42}"#.into()
+    }
+
+    fn status_body() -> String {
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 3600;
+        format!(
+            r#"{{"access_token":"synthetic-access","client_id":"{CLIENT_ID}","expires":{expires},"user_id":42}}"#
+        )
+    }
+
+    fn pass_challenge_step() -> ScriptedStep {
+        ScriptedStep::Respond {
+            status: 302,
+            headers: vec![(
+                "Set-Cookie".into(),
+                "techaro.lol-anubis-auth-test=solved; Path=/".into(),
+            )],
+            body: Vec::new(),
+        }
+    }
+
+    fn mirror_base(server: &MockHttpServer) -> String {
+        format!("{}/oauth", server.base_url())
+    }
+
+    #[tokio::test]
+    async fn exchange_solves_the_challenge_then_posts_with_the_session() {
+        let server = MockHttpServer::start(vec![
+            // 1) first touch of the token endpoint answers with a challenge
+            respond(200, "text/html", challenge_page(1, "fast").into_bytes()),
+            // 2) pass-challenge sets the session cookie
+            pass_challenge_step(),
+            // 3) exchange POST (cookie attached by the client's store)
+            respond_json(200, token_body()),
+            // 4) token_status POST
+            respond_json(200, status_body()),
+        ])
+        .await;
+        let base = mirror_base(&server);
+        let session = MirrorChallengeSession::establish(&base).await.unwrap();
+
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("client_id", CLIENT_ID),
+            ("client_secret", "synthetic-secret"),
+            ("code", "synthetic-code"),
+            ("redirect_uri", OAUTH_REDIRECT_URI),
+            ("state", "synthetic-state"),
+        ];
+        let mut token = session
+            .post_form("access_token", &params)
+            .await
+            .and_then(post_token_from_value)
+            .unwrap();
+        let status = session
+            .post_form(
+                "token_status",
+                &[("access_token", token.access_token.as_str())],
+            )
+            .await
+            .unwrap();
+        validate_token_status(&status, CLIENT_ID, &mut token).unwrap();
+        server.abort();
+
+        let requests = server.requests();
+        let lines: Vec<String> = server
+            .request_lines()
+            .into_iter()
+            .map(|line| line.split('?').next().unwrap_or_default().to_owned())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "GET /oauth/access_token".to_owned(),
+                "GET /.within.website/x/cmd/anubis/api/pass-challenge".to_owned(),
+                "POST /oauth/access_token".to_owned(),
+                "POST /oauth/token_status".to_owned(),
+            ]
+        );
+        // The pass-challenge call carries the solved proof.
+        let pass = &requests[1];
+        let query = pass.path.split('?').nth(1).unwrap_or_default();
+        assert!(query.contains("id=synthetic-challenge-id"), "{query}");
+        assert!(query.contains("nonce="), "{query}");
+        assert!(query.contains("response="), "{query}");
+        // The OAuth POSTs ride the cleared session cookie.
+        for request in &requests[2..] {
+            let cookie = request.header("cookie").unwrap_or_default();
+            assert!(
+                cookie.contains("techaro.lol-anubis-auth-test=solved"),
+                "{cookie}"
+            );
+        }
+        assert_eq!(token.user_id, 42);
+    }
+
+    #[tokio::test]
+    async fn a_session_that_starts_clear_skips_the_challenge() {
+        let server = MockHttpServer::start(vec![
+            respond_json(200, token_body()),
+            respond_json(200, token_body()),
+        ])
+        .await;
+        let base = mirror_base(&server);
+        let session = MirrorChallengeSession::establish(&base).await.unwrap();
+        let value = session
+            .post_form("access_token", &[("grant_type", "refresh_token")])
+            .await
+            .and_then(post_token_from_value);
+        server.abort();
+        assert!(value.is_ok(), "{:?}", value.err());
+        assert_eq!(
+            server.request_lines(),
+            ["GET /oauth/access_token", "POST /oauth/access_token"],
+            "no challenge means no pass-challenge round trip"
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_or_unsupported_challenges_fail_closed() {
+        for (page, expected) in [
+            (
+                challenge_page(9, "fast"),
+                "mirror challenge difficulty out of range",
+            ),
+            (
+                challenge_page(5, "wasm-sha256"),
+                "mirror challenge algorithm unsupported",
+            ),
+            (
+                r#"<html><script id="anubis_challenge" type="application/json">{oops}</script><script src="/.within.website/x/cmd/anubis/static/js/main.mjs"></script></html>"#
+                    .to_owned(),
+                "mirror challenge page malformed",
+            ),
+        ] {
+            let server = MockHttpServer::start(vec![respond(
+                200,
+                "text/html",
+                page.as_bytes().to_vec(),
+            )])
+            .await;
+            let err = MirrorChallengeSession::establish(&mirror_base(&server))
+                .await
+                .unwrap_err()
+                .to_string();
+            server.abort();
+            assert!(err.contains(expected), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_challenge_page_after_passing_is_reported_as_expired() {
+        let server = MockHttpServer::start(vec![
+            respond(200, "text/html", challenge_page(1, "fast").into_bytes()),
+            pass_challenge_step(),
+            // The POST is still answered by a challenge page.
+            respond(200, "text/html", challenge_page(1, "fast").into_bytes()),
+        ])
+        .await;
+        let base = mirror_base(&server);
+        let session = MirrorChallengeSession::establish(&base).await.unwrap();
+        let err = session
+            .post_form("access_token", &[("grant_type", "refresh_token")])
+            .await
+            .unwrap_err()
+            .to_string();
+        server.abort();
+        assert_eq!(err, "mirror challenge expired");
+    }
+
+    #[tokio::test]
+    async fn the_pow_solver_finds_a_valid_nonce() {
+        let (hash, nonce) = solve_anubis_pow("deadbeefcafe", 1).unwrap();
+        assert!(hash.starts_with('0'), "{hash}");
+        let check = sha256_hex(&format!("deadbeefcafe{nonce}"));
+        assert_eq!(hash, check);
+    }
+}
+
+/// Manual live check of the mirror challenge chain. Run explicitly:
+/// `cargo test --manifest-path rust/Cargo.toml --lib -- --ignored`.
+///
+/// Solves the real Anubis challenge with production code and posts synthetic
+/// OAuth parameters (never a real credential). The expected outcome is the
+/// provider's rejection of the fake client — anything challenge-shaped means
+/// the chain is broken.
+#[cfg(test)]
+mod mirror_live_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "hits the live mirror; run manually"]
+    async fn live_mirror_challenge_round_trip() {
+        let session = MirrorChallengeSession::establish(OAUTH_PAGE_MIRROR)
+            .await
+            .expect("challenge must clear against the live mirror");
+        let params = [
+            ("grant_type", "authorization_code"),
+            ("client_id", "probe"),
+            ("client_secret", "probe"),
+            ("code", "probe"),
+            ("redirect_uri", OAUTH_REDIRECT_URI),
+            ("state", "probe"),
+        ];
+        let err = session
+            .post_form("access_token", &params)
+            .await
+            .and_then(post_token_from_value)
+            .expect_err("the fake client must be rejected")
+            .to_string();
+        // mirrox wraps the upstream 400 in an HTML error page, so the parser
+        // sees invalid JSON; a JSON protocol error would also be acceptable.
+        assert!(
+            err.contains("invalid JSON") || err.contains("oauth error"),
+            "unexpected failure mode: {err}"
+        );
     }
 }

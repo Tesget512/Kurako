@@ -15,7 +15,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 walkdir = "2"
 regex = "1"
 anitomy = { git = "https://github.com/Rapptz/anitomy-rs", branch = "master" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "cookies"] }
 reqwest_dav = { version = "=0.2.1", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs"] }
 futures = "0.3"
@@ -31,6 +31,9 @@ if-addrs = "0.15"
 quick-xml = "0.41"
 percent-encoding = "2"
 serde-xml-rs = "0.6"
+# Anubis proof-of-work on the mirror login route (its "fast" challenge is a
+# plain sha256 PoW solved per the public protocol; no browser involved).
+sha2 = "0.10"
 # Already in the lockfile via rustls; used for unpredictable loopback tokens.
 getrandom = "0.2"
 
