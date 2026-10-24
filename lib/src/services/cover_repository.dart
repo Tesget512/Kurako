@@ -255,7 +255,6 @@ class CoverRepository {
     const hosts = {
       'lain.bgm.tv',
       'bgmimg.anibt.net',
-      'lain.bangumi.lat',
       bangumiMirrorImageHost,
     };
     if (uri.scheme != 'https' ||

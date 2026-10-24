@@ -121,7 +121,7 @@ pub fn set_bangumi_token(token: Option<String>) {
 }
 
 /// Route Bangumi API calls through the community reverse proxy
-/// (bangumi.vip, Mirrox) instead of api.bgm.tv. Opt-in and verified first.
+/// (bangumi.lat, Mirrox) instead of api.bgm.tv. Opt-in and verified first.
 pub fn set_bangumi_mirror(enabled: bool) {
     bangumi::set_mirror(enabled);
 }

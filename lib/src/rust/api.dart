@@ -24,7 +24,7 @@ Future<void> setBangumiToken({String? token}) =>
     RustLib.instance.api.crateApiSetBangumiToken(token: token);
 
 /// Route Bangumi API calls through the community reverse proxy
-/// (bangumi.vip, Mirrox) instead of api.bgm.tv. Opt-in and verified first.
+/// (bangumi.lat, Mirrox) instead of api.bgm.tv. Opt-in and verified first.
 Future<void> setBangumiMirror({required bool enabled}) =>
     RustLib.instance.api.crateApiSetBangumiMirror(enabled: enabled);
 

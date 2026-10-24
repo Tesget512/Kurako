@@ -12,7 +12,7 @@ final png = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGP4z8DAAMIM/4EAAB/uBfsL2WiLAAAAAElFTkSuQmCC',
 );
 const official = 'https://lain.bgm.tv/pic/cover/l/test.jpg';
-const mirror = 'https://lain.bangumi.vip/pic/cover/l/test.jpg';
+const mirror = 'https://lain.bangumi.lat/pic/cover/l/test.jpg';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

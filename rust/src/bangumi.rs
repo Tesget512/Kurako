@@ -6,8 +6,9 @@ use std::sync::Mutex;
 
 const BASE_OFFICIAL: &str = "https://api.bgm.tv";
 /// Public, read-only Bangumi mirror. Account/OAuth traffic always stays official.
-pub const BASE_MIRROR: &str = "https://api.bangumi.vip";
-pub const IMAGE_MIRROR_HOST: &str = "lain.bangumi.vip";
+const MIRROR_API_HOST: &str = "api.bangumi.lat";
+pub const BASE_MIRROR: &str = "https://api.bangumi.lat";
+pub const IMAGE_MIRROR_HOST: &str = "lain.bangumi.lat";
 /// Official OAuth lives on the main site, not the API host.
 const OAUTH_OFFICIAL: &str = "https://bgm.tv/oauth";
 /// The reverse proxy mirrors the site, so its authorization *page* can be used
@@ -15,7 +16,7 @@ const OAUTH_OFFICIAL: &str = "https://bgm.tv/oauth";
 /// answers every server-side POST there with a challenge page, so the code
 /// exchange always goes to the official endpoint. The token itself is valid on
 /// both hosts, which is why only the page needs a route choice.
-const OAUTH_PAGE_MIRROR: &str = "https://bangumi.vip/oauth";
+const OAUTH_PAGE_MIRROR: &str = "https://bangumi.lat/oauth";
 
 /// Mirror is opt-in and only becomes enabled after an application-side probe.
 static MIRROR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -214,7 +215,7 @@ fn mirror_image_url(image: &str) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(image).context("反向代理封面地址无效")?;
     if !matches!(
         url.host_str(),
-        Some("lain.bgm.tv" | "bgmimg.anibt.net" | "lain.bangumi.vip" | "lain.bangumi.lat")
+        Some("lain.bgm.tv" | "bgmimg.anibt.net" | "lain.bangumi.lat")
     ) || !url.username().is_empty()
         || url.password().is_some()
         || url.port().is_some()
@@ -413,7 +414,7 @@ fn client() -> Result<reqwest::Client> {
             let mirror = attempt
                 .previous()
                 .iter()
-                .any(|url| matches!(url.host_str(), Some("api.bangumi.vip" | "lain.bangumi.vip")));
+                .any(|url| matches!(url.host_str(), Some("api.bangumi.lat" | "lain.bangumi.lat")));
             if mirror || attempt.previous().len() >= 10 {
                 attempt.stop()
             } else {
@@ -594,7 +595,7 @@ fn auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         .try_clone()
         .and_then(|r| r.build().ok())
         .and_then(|r| r.url().host_str().map(str::to_owned));
-    if host.as_deref() == Some("api.bangumi.vip") {
+    if host.as_deref() == Some(MIRROR_API_HOST) {
         return mirror_headers(req, false);
     }
     if host.as_deref() != Some("api.bgm.tv") {
@@ -621,7 +622,7 @@ fn collection_auth(req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         .and_then(|r| r.build().ok())
         .and_then(|r| r.url().host_str().map(str::to_owned));
     let req = match host.as_deref() {
-        Some("api.bangumi.vip") => mirror_headers(req, false),
+        Some(MIRROR_API_HOST) => mirror_headers(req, false),
         Some("api.bgm.tv") => req,
         // Never attach account credentials to any other host.
         _ => return req,
@@ -784,7 +785,7 @@ async fn send_with_backoff(
             .is_some_and(|r| {
                 r.url()
                     .host_str()
-                    .is_some_and(|h| h == "api.bangumi.vip" || h == IMAGE_MIRROR_HOST)
+                    .is_some_and(|h| h == MIRROR_API_HOST || h == IMAGE_MIRROR_HOST)
             });
         let resp = builder.send().await.map_err(|e| {
             if mirror_request {
@@ -796,7 +797,7 @@ async fn send_with_backoff(
         let mirror = resp
             .url()
             .host_str()
-            .is_some_and(|host| host == "api.bangumi.vip" || host == IMAGE_MIRROR_HOST);
+            .is_some_and(|host| host == MIRROR_API_HOST || host == IMAGE_MIRROR_HOST);
         let html = resp
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
@@ -1575,7 +1576,7 @@ fn parse_oauth_response(status: reqwest::StatusCode, body: &[u8]) -> Result<serd
 ///
 /// Always posts to the official endpoint, even when the authorization page was
 /// opened through the reverse proxy: Anubis answers a server-side POST on
-/// `bangumi.vip/oauth/*` with a challenge page, so that route can never
+/// `bangumi.lat/oauth/*` with a challenge page, so that route can never
 /// exchange a code. A code issued after a proxied authorization is accepted
 /// here because it comes from the same Bangumi account, not from the host that
 /// rendered the form.
@@ -1879,10 +1880,11 @@ mod match_tests {
     fn live_mirror_image_alias_is_rewritten_to_verified_host() {
         let url = mirror_image_url("https://lain.bangumi.lat/pic/cover/l/test.jpg").unwrap();
         assert_eq!(url.scheme(), "https");
-        assert_eq!(url.host_str(), Some(IMAGE_MIRROR_HOST));
+        assert_eq!(url.host_str(), Some("lain.bangumi.lat"));
         assert_eq!(url.path(), "/pic/cover/l/test.jpg");
         assert!(mirror_image_url("https://lain.bangumi.lat.evil.test/test.jpg").is_err());
         assert!(mirror_image_url("https://lain.bangumi.lat:444/test.jpg").is_err());
+        assert!(mirror_image_url("https://lain.bangumi.vip/test.jpg").is_err());
     }
 
     #[test]
@@ -2014,7 +2016,7 @@ mod match_tests {
         assert!(authorize_url("id", callback).starts_with("https://bgm.tv/oauth/authorize"));
 
         set_route_options(true, false);
-        assert!(authorize_url("id", callback).starts_with("https://bangumi.vip/oauth/authorize"));
+        assert!(authorize_url("id", callback).starts_with("https://bangumi.lat/oauth/authorize"));
         // Login opt-in must not move collections.
         assert_eq!(collection_base(), BASE_OFFICIAL);
 
@@ -2035,7 +2037,7 @@ mod match_tests {
         reset_routes();
         set_token(Some("route-test-token".into()));
         let client = reqwest::Client::new();
-        for host in ["https://api.bangumi.vip", "https://api.bgm.tv"] {
+        for host in ["https://api.bangumi.lat", "https://api.bgm.tv"] {
             let request = collection_auth(client.get(format!("{host}/v0/me")))
                 .build()
                 .unwrap();
@@ -2048,6 +2050,13 @@ mod match_tests {
                 "{host} should receive the bearer"
             );
         }
+        let retired = collection_auth(client.get("https://api.bangumi.vip/v0/me"))
+            .build()
+            .unwrap();
+        assert!(retired
+            .headers()
+            .get(reqwest::header::AUTHORIZATION)
+            .is_none());
         // Credentials must not follow a route to an unrelated host.
         let request = collection_auth(client.get("https://example.com/"))
             .build()

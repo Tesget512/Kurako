@@ -6,9 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../pages/bangumi_mirror_verification_page.dart';
 import 'bangumi_mirror_web_host.dart';
 
-const bangumiMirrorApiHost = 'api.bangumi.vip';
+const bangumiMirrorApiHost = 'api.bangumi.lat';
 const bangumiMirrorApiProbe = 'https://$bangumiMirrorApiHost/v0/subjects/1';
-const bangumiMirrorImageHost = 'lain.bangumi.vip';
+const bangumiMirrorImageHost = 'lain.bangumi.lat';
 const bangumiMirrorFailureMessage =
     '反向代理验证已失效或请求被拦截。请重新验证，或关闭反向代理回退官方；'
     '请确保 WebView 与应用使用相同网络和代理出口，网络/IP 或 User-Agent 改变会使验证失效。';
@@ -116,7 +116,6 @@ String normalizeBangumiCoverUrl(String raw, {required bool mirror}) {
     'lain.bgm.tv',
     'bgmimg.anibt.net',
     'lain.bangumi.lat',
-    bangumiMirrorImageHost,
   }.contains(uri.host)) {
     return raw;
   }
@@ -189,7 +188,7 @@ class BangumiMirrorService extends ChangeNotifier {
     BangumiMirrorHostProof? image,
   ) async {
     if (!api.valid ||
-        api.host != 'api.bangumi.vip' ||
+        api.host != bangumiMirrorApiHost ||
         (image != null &&
             (!image.valid ||
                 image.host != bangumiMirrorImageHost ||

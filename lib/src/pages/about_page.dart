@@ -211,7 +211,7 @@ class _Acknowledgements extends StatelessWidget {
         title: '数据与网络服务',
         entries: [
           'Bangumi 番组计划 — 番剧元数据与评分',
-          'Mirrox（bangumi.vip，作者 sakurairo）— 社区维护的反向代理',
+          'Mirrox（bangumi.lat，作者 sakurairo）— 社区维护的反向代理',
         ],
       ),
       _AcknowledgementGroup(

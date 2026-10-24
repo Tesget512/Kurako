@@ -15,7 +15,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({
@@ -63,7 +63,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({
@@ -104,7 +104,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({
@@ -137,14 +137,14 @@ void main() {
     await tester.tap(find.text('检查并继续'));
     await tester.pump();
     await tester.pump();
-    expect(host.loadedUri, Uri.parse('https://lain.bangumi.vip/cover.jpg'));
+    expect(host.loadedUri, Uri.parse('https://lain.bangumi.lat/cover.jpg'));
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
 
     host.finishLoadAt(apiGeneration, Uri.parse(bangumiMirrorApiProbe));
     await tester.pump();
     expect(find.byType(LinearProgressIndicator), findsOneWidget);
 
-    host.finishLoad(Uri.parse('https://lain.bangumi.vip/cover.jpg'));
+    host.finishLoad(Uri.parse('https://lain.bangumi.lat/cover.jpg'));
     await tester.pump();
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
@@ -202,7 +202,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({
@@ -219,7 +219,7 @@ void main() {
                   onError: onError,
                   onNavigationBlocked: onNavigationBlocked,
                   pageText: '{"id":1,"name":"Cowboy Bebop"}',
-                  failLoadUri: Uri.parse('https://lain.bangumi.vip/cover.jpg'),
+                  failLoadUri: Uri.parse('https://lain.bangumi.lat/cover.jpg'),
                 );
                 return host;
               },
@@ -248,7 +248,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({
@@ -288,7 +288,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           loadTimeout: const Duration(seconds: 5),
           hostFactory:
@@ -327,7 +327,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({
@@ -371,7 +371,7 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: BangumiMirrorVerificationPage(
-          onApiProof: (_) async => 'https://lain.bangumi.vip/cover.jpg',
+          onApiProof: (_) async => 'https://lain.bangumi.lat/cover.jpg',
           onImageProof: (_, _) async {},
           hostFactory:
               ({

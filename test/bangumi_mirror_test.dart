@@ -41,14 +41,13 @@ void main() {
       'lain.bgm.tv',
       'bgmimg.anibt.net',
       'lain.bangumi.lat',
-      'lain.bangumi.vip',
     ]) {
       expect(
         normalizeBangumiCoverUrl(
           'http://$host/p.jpg?q=lain.bgm.tv',
           mirror: true,
         ),
-        'https://lain.bangumi.vip/p.jpg?q=lain.bgm.tv',
+        'https://lain.bangumi.lat/p.jpg?q=lain.bgm.tv',
       );
       expect(
         normalizeBangumiCoverUrl('https://$host/p.jpg', mirror: false),
@@ -60,6 +59,7 @@ void main() {
       'https://evil.test/lain.bgm.tv/p.jpg',
       'https://user@lain.bgm.tv/p.jpg',
       'https://lain.bgm.tv:444/p.jpg',
+      'https://lain.bangumi.vip/p.jpg',
       'https://example.test/?url=https://lain.bgm.tv/p.jpg',
     ]) {
       expect(normalizeBangumiCoverUrl(url, mirror: true), url);
@@ -75,40 +75,40 @@ void main() {
         MirrorCookie(
           name: 'account_session',
           value: 'never-store',
-          domain: '.bangumi.vip',
+          domain: '.bangumi.lat',
           path: '/',
         ),
         MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'host-proof',
-          domain: 'api.bangumi.vip',
+          domain: 'api.bangumi.lat',
           path: '/',
           httpOnly: true,
         ),
         MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'other-host',
-          domain: 'lain.bangumi.vip',
+          domain: 'lain.bangumi.lat',
           path: '/',
         ),
         MirrorCookie(
           name: 'techaro.lol-anubis-cookie-verification',
           value: 'parent-proof',
-          domain: '.bangumi.vip',
+          domain: '.bangumi.lat',
           path: '/',
           expiresAt: 10000,
         ),
         MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'expired',
-          domain: '.bangumi.vip',
+          domain: '.bangumi.lat',
           path: '/',
           expiresAt: 99,
         ),
         MirrorCookie(
           name: 'techaro.lol-anubis-auth',
           value: 'evil',
-          domain: '.vip.evil.test',
+          domain: '.lat.evil.test',
           path: '/',
         ),
       ],
@@ -118,7 +118,7 @@ void main() {
       'techaro.lol-anubis-auth=host-proof; techaro.lol-anubis-cookie-verification=parent-proof',
     );
     expect(proof.expiresAt, 10000);
-    expect(proof.host, 'api.bangumi.vip');
+    expect(proof.host, 'api.bangumi.lat');
   });
 
   test('Anubis dynamic cookie suffixes and parent domains are accepted', () {
@@ -129,13 +129,13 @@ void main() {
         MirrorCookie(
           name: 'techaro.lol-anubis-auth-8702d140',
           value: 'auth-proof',
-          domain: 'bangumi.vip',
+          domain: 'bangumi.lat',
           path: '/',
         ),
         MirrorCookie(
           name: 'techaro.lol-anubis-cookie-verification-0a1b2c3d',
           value: 'challenge-proof',
-          domain: '.bangumi.vip',
+          domain: '.bangumi.lat',
           path: '/',
         ),
       ],
@@ -162,13 +162,13 @@ void main() {
 
   test('older Android missing metadata stays scoped to queried host', () {
     final proof = collectBangumiMirrorProof(
-      queriedUri: Uri.parse('https://lain.bangumi.vip/cover.jpg'),
+      queriedUri: Uri.parse('https://lain.bangumi.lat/cover.jpg'),
       userAgent: 'Browser-UA',
       cookies: [
         MirrorCookie(name: 'techaro.lol-anubis-auth', value: 'native-only'),
       ],
     );
-    expect(proof.host, 'lain.bangumi.vip');
+    expect(proof.host, 'lain.bangumi.lat');
     expect(proof.cookie, 'techaro.lol-anubis-auth=native-only');
     expect(
       () => collectBangumiMirrorProof(
@@ -213,12 +213,12 @@ void main() {
     Future<void> Function()? imageProbe,
   }) async {
     const api = BangumiMirrorHostProof(
-      host: 'api.bangumi.vip',
+      host: 'api.bangumi.lat',
       cookie: 'techaro.lol-anubis-auth=api',
       userAgent: 'Browser-UA',
     );
     const image = BangumiMirrorHostProof(
-      host: 'lain.bangumi.vip',
+      host: 'lain.bangumi.lat',
       cookie: 'techaro.lol-anubis-auth=image',
       userAgent: 'Browser-UA',
     );
@@ -246,7 +246,7 @@ void main() {
             },
         probeApi: () async {
           calls.add('api');
-          return 'https://lain.bangumi.vip/cover.jpg';
+          return 'https://lain.bangumi.lat/cover.jpg';
         },
         probeImage: (_) async {
           calls.add('image');
@@ -277,7 +277,7 @@ void main() {
         'enabled=true',
       ]);
       expect(
-        s.headersForCover('https://lain.bangumi.vip/a.jpg')['Cookie'],
+        s.headersForCover('https://lain.bangumi.lat/a.jpg')['Cookie'],
         'techaro.lol-anubis-auth=image',
       );
       expect(
@@ -286,19 +286,25 @@ void main() {
       );
       expect(
         s
-            .headersForCover('https://lain.bangumi.vip.evil.test/a.jpg')
+            .headersForCover('https://lain.bangumi.lat.evil.test/a.jpg')
             .containsKey('Cookie'),
         false,
       );
       expect(
         s
-            .headersForCover('http://lain.bangumi.vip/a.jpg')
+            .headersForCover('http://lain.bangumi.lat/a.jpg')
             .containsKey('Cookie'),
         false,
       );
       expect(
         s
-            .headersForCover('https://user@lain.bangumi.vip/a.jpg')
+            .headersForCover('https://user@lain.bangumi.lat/a.jpg')
+            .containsKey('Cookie'),
+        false,
+      );
+      expect(
+        s
+            .headersForCover('https://lain.bangumi.vip/a.jpg')
             .containsKey('Cookie'),
         false,
       );
@@ -385,7 +391,7 @@ void main() {
         probeApi: () async {
           calls.add('api');
           if (failApi) throw Exception('challenge-served');
-          return 'https://lain.bangumi.vip/cover.jpg';
+          return 'https://lain.bangumi.lat/cover.jpg';
         },
         probeImage: (_) async {
           calls.add('image');
@@ -416,7 +422,7 @@ void main() {
     expect(prefs.getBool('bangumi_mirror'), true);
     // The stored proof round-trips with no cookie, so a later restore works.
     final stored = prefs.getString(BangumiMirrorService.proofPreferenceKey)!;
-    expect(stored, contains('api.bangumi.vip'));
+    expect(stored, contains('api.bangumi.lat'));
     expect(stored, contains(kBangumiMirrorDirectUserAgent));
     s.dispose();
   });
