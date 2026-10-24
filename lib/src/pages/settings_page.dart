@@ -327,7 +327,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const SizedBox(height: 8),
           OutlinedButton.icon(
             icon: const Icon(Icons.vpn_key_outlined),
-            label: const Text('使用个人访问令牌登录（备用）'),
+            label: const Text('使用个人访问令牌登录'),
             onPressed: _loggingIn ? null : _showPersonalTokenDialog,
           ),
         ],
