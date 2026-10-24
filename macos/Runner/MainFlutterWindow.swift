@@ -13,6 +13,8 @@ class MainFlutterWindow: NSWindow {
       messenger: flutterViewController.engine.binaryMessenger)
     (NSApplication.shared.delegate as? AppDelegate)?.configureSecurityScope(
       messenger: flutterViewController.engine.binaryMessenger)
+    (NSApplication.shared.delegate as? AppDelegate)?.configurePlayerPicker(
+      messenger: flutterViewController.engine.binaryMessenger)
 
     super.awakeFromNib()
   }

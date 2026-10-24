@@ -7,7 +7,7 @@ import 'frb_generated.dart';
 import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `binding_survivor`, `configured_download_directory`, `download_error`, `download_match_is_valid`, `ensure_anime_for_subject`, `finish_scan_session`, `import_scan_manual_matches`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`
+// These functions are ignored because they are not marked as `pub`: `binding_survivor`, `configured_download_directory`, `download_error`, `download_match_is_valid`, `ensure_anime_for_subject`, `finish_scan_session`, `import_scan_manual_matches`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`, `tokio_file_from_fd`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// Open (and create if needed) the SQLite database at the given path.
@@ -193,6 +193,12 @@ Future<void> smbConnect({
 /// authenticates or alters the active SMB session.
 Future<List<DiscoveredServer>> discoverWindowsFileServers() =>
     RustLib.instance.api.crateApiDiscoverWindowsFileServers();
+
+/// Verify one DNS-SD candidate by completing a real SMB2 NEGOTIATE exchange.
+/// A listening TCP port is deliberately insufficient: unrelated services are
+/// commonly exposed on LAN hosts and must not appear as SMB servers.
+Future<bool> verifySmbServer({required String host, required int port}) =>
+    RustLib.instance.api.crateApiVerifySmbServer(host: host, port: port);
 
 Future<SmbShareListResult> smbListShares({
   required String host,
@@ -386,6 +392,43 @@ Stream<DownloadProgress> webdavDownload({
 Future<void> webdavCancelDownload({required String remoteUri}) =>
     RustLib.instance.api.crateApiWebdavCancelDownload(remoteUri: remoteUri);
 
+/// Stream an SMB file into an Android MediaStore descriptor. The caller owns
+/// publishing the pending entry only after this stream reports success.
+Stream<DownloadProgress> smbDownloadToFd({
+  required String smbUri,
+  required PlatformInt64 fd,
+}) => RustLib.instance.api.crateApiSmbDownloadToFd(smbUri: smbUri, fd: fd);
+
+/// Stream a WebDAV file into an Android MediaStore descriptor.
+Stream<DownloadProgress> webdavDownloadToFd({
+  required String remoteUri,
+  required PlatformInt64 fd,
+}) => RustLib.instance.api.crateApiWebdavDownloadToFd(
+  remoteUri: remoteUri,
+  fd: fd,
+);
+
+Stream<DownloadProgress> networkDownloadToFd({
+  required String remoteUri,
+  required PlatformInt64 fd,
+}) => RustLib.instance.api.crateApiNetworkDownloadToFd(
+  remoteUri: remoteUri,
+  fd: fd,
+);
+
+Future<void> recordDownload({
+  required String remoteUri,
+  required String localUri,
+  required PlatformInt64 bytesTotal,
+}) => RustLib.instance.api.crateApiRecordDownload(
+  remoteUri: remoteUri,
+  localUri: localUri,
+  bytesTotal: bytesTotal,
+);
+
+Future<void> removeDownloadRecord({required PlatformInt64 id}) =>
+    RustLib.instance.api.crateApiRemoveDownloadRecord(id: id);
+
 Future<List<DownloadEntry>> listDownloads() =>
     RustLib.instance.api.crateApiListDownloads();
 
@@ -393,7 +436,8 @@ Future<List<DownloadEntry>> listDownloads() =>
 Future<List<DownloadDetail>> listDownloadsDetailed() =>
     RustLib.instance.api.crateApiListDownloadsDetailed();
 
-/// Delete a download: removes the record and the local file.
+/// Delete a filesystem-backed download. The physical file is removed first;
+/// a failure keeps the database row so the UI never reports a false success.
 Future<void> removeDownload({required PlatformInt64 id}) =>
     RustLib.instance.api.crateApiRemoveDownload(id: id);
 

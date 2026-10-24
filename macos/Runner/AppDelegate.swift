@@ -1,10 +1,12 @@
 import Cocoa
 import FlutterMacOS
+import UniformTypeIdentifiers
 import os.log
 
 @main
 class AppDelegate: FlutterAppDelegate {
   private var oauthChannel: FlutterMethodChannel?
+  private var playerPickerChannel: FlutterMethodChannel?
   private var awaitingOAuth = false
   // Paths whose security-scoped access is currently started through us, with
   // a count: starting access twice for the same folder must be stopped twice,
@@ -26,6 +28,53 @@ class AppDelegate: FlutterAppDelegate {
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  func configurePlayerPicker(messenger: FlutterBinaryMessenger) {
+    let channel = FlutterMethodChannel(
+      name: "com.tesget.kurako/player_picker", binaryMessenger: messenger)
+    playerPickerChannel = channel
+    channel.setMethodCallHandler { call, result in
+      guard call.method == "pickApplication" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let dialog = NSOpenPanel()
+      dialog.canChooseFiles = true
+      dialog.canChooseDirectories = false
+      dialog.allowsMultipleSelection = false
+      dialog.showsHiddenFiles = false
+      dialog.treatsFilePackagesAsDirectories = false
+      dialog.allowedContentTypes = [.applicationBundle]
+      dialog.message = "选择用于外置播放的应用程序"
+      guard
+        let window =
+          NSApplication.shared.keyWindow
+          ?? NSApplication.shared.mainWindow
+          ?? NSApplication.shared.windows.first
+      else {
+        result(FlutterError(code: "NO_WINDOW", message: "no key window", details: nil))
+        return
+      }
+      dialog.beginSheetModal(for: window) { response in
+        guard response == .OK, let url = dialog.url else {
+          result(nil)
+          return
+        }
+        guard
+          url.pathExtension.lowercased() == "app",
+          let bundle = Bundle(url: url),
+          bundle.executableURL != nil
+        else {
+          result(
+            FlutterError(
+              code: "INVALID_APP", message: "selected bundle has no executable",
+              details: nil))
+          return
+        }
+        result(url.path)
       }
     }
   }

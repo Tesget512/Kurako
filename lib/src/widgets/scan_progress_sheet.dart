@@ -108,6 +108,28 @@ class ScanDetailDialog extends ConsumerWidget {
                 for (final title in state.unmatchedTitles)
                   Text('· $title', style: theme.textTheme.bodySmall),
               ],
+              if (state.matchedTitles.isNotEmpty)
+                ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(left: 12),
+                  title: Text(
+                    '已匹配番剧（${state.matchedTitles.length}）',
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  children: [
+                    for (final title in state.matchedTitles)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '· $title',
+                            style: theme.textTheme.bodySmall,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
             ],
           ),
         ),

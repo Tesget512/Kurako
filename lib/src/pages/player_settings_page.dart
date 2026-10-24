@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/external_player.dart';
+import '../services/mac_player_picker.dart';
 import '../state/providers.dart';
 
 class PlayerSettingsPage extends ConsumerWidget {
@@ -271,13 +272,16 @@ class PlayerSettingsPage extends ConsumerWidget {
   );
 
   static Future<void> _pickPlayer(WidgetRef ref) async {
-    final result = Platform.isLinux
-        ? await FilePicker.platform.pickFiles(type: FileType.any)
-        : await FilePicker.platform.pickFiles(
-            type: FileType.custom,
-            allowedExtensions: [Platform.isWindows ? 'exe' : 'app'],
-          );
-    final path = result?.files.single.path;
+    final String? path;
+    if (Platform.isMacOS) {
+      path = await MacPlayerPicker().pickApplication();
+    } else {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowedExtensions: Platform.isWindows ? const ['exe'] : null,
+      );
+      path = result?.files.single.path;
+    }
     if (path == null) return;
     await ref.read(settingsProvider.notifier).setExternalPlayerPath(path);
   }

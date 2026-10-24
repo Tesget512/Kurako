@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/download_storage.dart';
 import '../state/providers.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/window_caption.dart';
@@ -66,7 +67,15 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
       _deletingIds.add(deletingId);
     });
     try {
-      await rust.removeDownload(id: e.id);
+      if (e.localPath.startsWith('content://')) {
+        await AndroidMediaStoreStorage().deleteMedia(
+          e.localPath,
+          videoName: e.fileName,
+        );
+        await rust.removeDownloadRecord(id: e.id);
+      } else {
+        await rust.removeDownload(id: e.id);
+      }
       ref.invalidate(episodesProvider);
       if (!mounted) return;
       _reload();
@@ -93,9 +102,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
     List<DownloadDetail> groupItems,
     DownloadDetail selected,
   ) async {
-    final availability = await Future.wait(
-      groupItems.map((item) => File(item.localPath).exists()),
-    );
+    final availability = await Future.wait(groupItems.map(_isAvailable));
     final available = <DownloadDetail>[
       for (var i = 0; i < groupItems.length; i++)
         if (availability[i]) groupItems[i],
@@ -125,7 +132,7 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
           watched: false,
           lastPositionMs: 0,
           durationMs: 0,
-          sourceType: 'local',
+          sourceType: item.localPath.startsWith('content://') ? 'saf' : 'local',
           isNewFile: false,
           isDownloaded: false,
         ),
@@ -140,6 +147,17 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
         ),
       ),
     );
+  }
+
+  Future<bool> _isAvailable(DownloadDetail item) async {
+    if (!item.localPath.startsWith('content://')) {
+      return File(item.localPath).exists();
+    }
+    try {
+      return (await AndroidMediaStoreStorage().stat(item.localPath)).size > 0;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override

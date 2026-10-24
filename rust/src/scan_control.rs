@@ -5,6 +5,95 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use unicode_normalization::UnicodeNormalization;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MatchOutcome {
+    Matched,
+    NoCandidate,
+    RequestFailed,
+    PersistFailed,
+    NotAttempted,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MatchResult {
+    pub(crate) anime_id: i64,
+    pub(crate) title: String,
+    pub(crate) outcome: MatchOutcome,
+}
+
+#[derive(Debug, Default, Eq, PartialEq)]
+pub(crate) struct ScanMatchReport {
+    pub(crate) matched: Vec<String>,
+    pub(crate) unmatched: Vec<String>,
+    pub(crate) failed: usize,
+    pub(crate) completed_ids: Vec<i64>,
+    pub(crate) retry_ids: Vec<i64>,
+}
+
+impl ScanMatchReport {
+    pub(crate) fn from_results(results: Vec<MatchResult>) -> Self {
+        use std::collections::BTreeSet;
+
+        let mut matched = BTreeSet::new();
+        let mut unmatched = BTreeSet::new();
+        let mut completed_ids = BTreeSet::new();
+        let mut retry_ids = BTreeSet::new();
+        let mut failed = 0;
+        for result in results {
+            let title = result.title.trim().to_string();
+            if !title.is_empty() {
+                match result.outcome {
+                    MatchOutcome::Matched => {
+                        matched.insert(title);
+                    }
+                    _ => {
+                        unmatched.insert(title);
+                    }
+                }
+            }
+            match result.outcome {
+                MatchOutcome::Matched | MatchOutcome::NoCandidate => {
+                    completed_ids.insert(result.anime_id);
+                }
+                MatchOutcome::RequestFailed
+                | MatchOutcome::PersistFailed
+                | MatchOutcome::NotAttempted => {
+                    retry_ids.insert(result.anime_id);
+                    failed += 1;
+                }
+            }
+        }
+        Self {
+            matched: matched.into_iter().collect(),
+            unmatched: unmatched.into_iter().collect(),
+            failed,
+            completed_ids: completed_ids.into_iter().collect(),
+            retry_ids: retry_ids.into_iter().collect(),
+        }
+    }
+
+    pub(crate) fn append_to(&self, message: &mut String) {
+        use std::fmt::Write;
+
+        if !message.ends_with('\n') {
+            message.push('\n');
+        }
+        let _ = writeln!(
+            message,
+            "match-result: matched={}|unmatched={}|failed={}",
+            self.matched.len(),
+            self.unmatched.len(),
+            self.failed
+        );
+        for title in &self.matched {
+            let _ = writeln!(message, "matched: {title}");
+        }
+        for title in &self.unmatched {
+            let _ = writeln!(message, "unmatched: {title}");
+        }
+    }
+}
+
 static CHANGED_ANIME_IDS: Lazy<Mutex<HashSet<i64>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);

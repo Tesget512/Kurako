@@ -164,11 +164,16 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
 
   Widget _buildDownloadDirRow() {
     final dir = ref.watch(downloadDirProvider);
+    final platform = currentOnboardingPlatform();
+    final copy = onboardingCopyFor(
+      platform,
+      androidLegacy: androidUsesLegacyPrivateStorage,
+    );
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: const Icon(Icons.folder_outlined),
       title: const Text('下载保存位置'),
-      subtitle: Text(effectiveDownloadDir(dir)),
+      subtitle: Text(copy.locationDescription ?? effectiveDownloadDir(dir)),
       trailing: Wrap(
         children: [
           if (dir.isNotEmpty)
@@ -179,7 +184,8 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
                   ? null
                   : () => ref.read(downloadDirProvider.notifier).set(''),
             ),
-          if (!Platform.isIOS)
+          if (platform != OnboardingPlatform.ios &&
+              platform != OnboardingPlatform.android)
             IconButton(
               tooltip: '选择文件夹',
               icon: const Icon(Icons.folder_open),
@@ -234,7 +240,12 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       contentPadding: EdgeInsets.zero,
       leading: const Icon(Icons.assistant_outlined),
       title: const Text('重新运行初始设置'),
-      subtitle: const Text('重新确认下载位置与文件夹访问权限'),
+      subtitle: Text(
+        onboardingCopyFor(
+          currentOnboardingPlatform(),
+          androidLegacy: androidUsesLegacyPrivateStorage,
+        ).accessSummary,
+      ),
       trailing: const Icon(Icons.chevron_right),
       onTap: _maintenanceBusy
           ? null

@@ -1017,6 +1017,59 @@ pub async fn download(
     Ok(final_path.to_string_lossy().to_string())
 }
 
+/// Stream a WebDAV file directly into an already-open MediaStore descriptor.
+pub async fn download_to_file(
+    remote_uri: &str,
+    mut output: tokio::fs::File,
+    mut progress: impl FnMut(u64, u64),
+) -> Result<u64> {
+    let _active = ActiveTransfer::begin();
+    let _permit = DOWNLOAD_SEMAPHORE.acquire().await?;
+    if download_was_cancelled(remote_uri) {
+        anyhow::bail!("下载已取消");
+    }
+    let relative = relative_from_uri(remote_uri)?;
+    let (_, client) = client()?;
+    let encoded = encoded_relative(&relative);
+    let response = tokio::select! {
+        _ = wait_for_download_cancellation(remote_uri) => anyhow::bail!("下载已取消"),
+        result = tokio::time::timeout(READ_TIMEOUT, client.get(&encoded)) => {
+            result.context("WebDAV 下载连接超时")??
+        }
+    };
+    let total = response.content_length().unwrap_or(0);
+    if total == 0 {
+        anyhow::bail!("WebDAV 响应缺少文件大小");
+    }
+    let mut done = 0u64;
+    progress(done, total);
+    let mut body = response.bytes_stream();
+    loop {
+        if download_was_cancelled(remote_uri) {
+            anyhow::bail!("下载已取消");
+        }
+        let next = tokio::select! {
+            _ = wait_for_download_cancellation(remote_uri) => anyhow::bail!("下载已取消"),
+            next = tokio::time::timeout(READ_TIMEOUT, body.next()) => {
+                next.context("WebDAV 下载接收超时")?
+            }
+        };
+        let Some(chunk) = next else { break };
+        let chunk = chunk?;
+        output
+            .write_all(&chunk)
+            .await
+            .context("write MediaStore file")?;
+        done += chunk.len() as u64;
+        progress(done, total);
+    }
+    output.flush().await.context("flush MediaStore file")?;
+    if done != total {
+        anyhow::bail!("下载不完整（{done}/{total} 字节）");
+    }
+    Ok(done)
+}
+
 async fn download_to_path(
     remote_uri: &str,
     final_path: &Path,

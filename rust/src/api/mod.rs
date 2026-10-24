@@ -7,6 +7,7 @@ use crate::models::{
     DuplicateCheckProgress, Episode, LibraryFolder, PreparedSubtitle, RemoteDirectory, RemoteEntry,
     ScanFileBatch, ScanProgress, SmbShareListResult, SubtitleCandidate,
 };
+use crate::scan_control::{MatchOutcome, MatchResult, ScanMatchReport};
 use crate::{bangumi, db, recognize, scan, scan_control, sidecar, smb};
 use flutter_rust_bridge::frb;
 use once_cell::sync::Lazy;
@@ -41,6 +42,11 @@ fn configured_download_directory() -> Option<String> {
 }
 
 fn download_match_is_valid(matched: &db::DownloadPathMatch) -> bool {
+    if matched.local_path.starts_with("content://") {
+        // MediaStore owns the bytes. Rust cannot stat a content URI, so rely on
+        // the non-zero size recorded after the Android bridge published it.
+        return matched.bytes_total > 0;
+    }
     std::fs::metadata(&matched.local_path)
         .map(|metadata| {
             metadata.is_file()
@@ -583,6 +589,19 @@ pub fn discover_windows_file_servers() -> Vec<DiscoveredServer> {
     RT.block_on(crate::discovery::discover_windows_file_servers())
 }
 
+/// Verify one DNS-SD candidate by completing a real SMB2 NEGOTIATE exchange.
+/// A listening TCP port is deliberately insufficient: unrelated services are
+/// commonly exposed on LAN hosts and must not appear as SMB servers.
+pub fn verify_smb_server(host: String, port: u16) -> Result<bool, String> {
+    if host.trim().is_empty() {
+        return Err("服务器地址不能为空".to_string());
+    }
+    if port == 0 {
+        return Err("服务器端口无效".to_string());
+    }
+    Ok(RT.block_on(crate::discovery::verify_smb_server(&host, port)))
+}
+
 pub fn smb_list_shares(
     host: String,
     user: String,
@@ -940,6 +959,103 @@ pub fn webdav_cancel_download(remote_uri: String) {
     crate::webdav::cancel_download(&remote_uri);
 }
 
+#[cfg(unix)]
+fn tokio_file_from_fd(fd: i64) -> Result<tokio::fs::File, String> {
+    use std::os::fd::FromRawFd;
+
+    if fd < 0 {
+        return Err("无效的文件句柄".to_string());
+    }
+    // Android detaches the ParcelFileDescriptor before passing ownership to
+    // Rust. File takes that ownership and closes it when dropped.
+    let file = unsafe { std::fs::File::from_raw_fd(fd as std::os::fd::RawFd) };
+    Ok(tokio::fs::File::from_std(file))
+}
+
+#[cfg(not(unix))]
+fn tokio_file_from_fd(_fd: i64) -> Result<tokio::fs::File, String> {
+    Err("当前平台不支持文件描述符下载".to_string())
+}
+
+/// Stream an SMB file into an Android MediaStore descriptor. The caller owns
+/// publishing the pending entry only after this stream reports success.
+pub fn smb_download_to_fd(
+    sink: StreamSink<DownloadProgress>,
+    smb_uri: String,
+    fd: i64,
+) -> Result<(), String> {
+    let output = tokio_file_from_fd(fd)?;
+    *DOWNLOAD_DIRECTORY.lock().unwrap() = None;
+    smb::reset_download_cancellation(&smb_uri);
+    RT.block_on(async {
+        smb::download_to_file(&smb_uri, output, |done, total| {
+            let _ = sink.add(DownloadProgress {
+                bytes_done: done as i64,
+                bytes_total: total as i64,
+                error: None,
+            });
+        })
+        .await
+    })
+    .map(|_| ())
+    .map_err(|error| download_error(&sink, format!("{error:#}")))
+}
+
+/// Stream a WebDAV file into an Android MediaStore descriptor.
+pub fn webdav_download_to_fd(
+    sink: StreamSink<DownloadProgress>,
+    remote_uri: String,
+    fd: i64,
+) -> Result<(), String> {
+    let output = tokio_file_from_fd(fd)?;
+    crate::webdav::reset_download_cancellation(&remote_uri);
+    RT.block_on(async {
+        crate::webdav::download_to_file(&remote_uri, output, |done, total| {
+            let _ = sink.add(DownloadProgress {
+                bytes_done: done as i64,
+                bytes_total: total as i64,
+                error: None,
+            });
+        })
+        .await
+    })
+    .map(|_| ())
+    .map_err(|error| download_error(&sink, error.to_string()))
+}
+
+pub fn network_download_to_fd(
+    sink: StreamSink<DownloadProgress>,
+    remote_uri: String,
+    fd: i64,
+) -> Result<(), String> {
+    if remote_uri.starts_with("smb://") {
+        smb_download_to_fd(sink, remote_uri, fd)
+    } else if remote_uri.starts_with("http://") || remote_uri.starts_with("https://") {
+        webdav_download_to_fd(sink, remote_uri, fd)
+    } else {
+        let message = format!("不支持的下载来源：{remote_uri}");
+        Err(download_error(&sink, message))
+    }
+}
+
+pub fn record_download(
+    remote_uri: String,
+    local_uri: String,
+    bytes_total: i64,
+) -> Result<(), String> {
+    if bytes_total <= 0 {
+        return Err("空文件不能记录为已完成下载".to_string());
+    }
+    db::add_download(&remote_uri, &local_uri, bytes_total, now_secs())
+        .map_err(|error| error.to_string())
+}
+
+pub fn remove_download_record(id: i64) -> Result<(), String> {
+    db::remove_download_record(id)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
 pub fn list_downloads() -> Result<Vec<DownloadEntry>, String> {
     db::list_downloads().map_err(|e| e.to_string())
 }
@@ -949,13 +1065,25 @@ pub fn list_downloads_detailed() -> Result<Vec<crate::models::DownloadDetail>, S
     db::list_downloads_detailed().map_err(|e| e.to_string())
 }
 
-/// Delete a download: removes the record and the local file.
+/// Delete a filesystem-backed download. The physical file is removed first;
+/// a failure keeps the database row so the UI never reports a false success.
 pub fn remove_download(id: i64) -> Result<(), String> {
-    let path = db::remove_download(id).map_err(|e| e.to_string())?;
-    if let Some(p) = path {
-        smb::remove_downloaded_subtitles(&p);
-        let _ = std::fs::remove_file(p);
+    let path = db::download_path_by_id(id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "下载记录不存在".to_string())?;
+    if path.starts_with("content://") {
+        return Err("请通过 Android MediaStore 删除该下载".to_string());
     }
+    let aliases = db::download_path_alias_count(&path).map_err(|e| e.to_string())?;
+    if aliases <= 1 {
+        smb::remove_downloaded_subtitles(&path);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("删除本地文件失败：{error}")),
+        }
+    }
+    db::remove_download_record(id).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1149,9 +1277,6 @@ fn import_scan_manual_matches(
     Ok(())
 }
 
-/// Match only after all folders have been scanned. Three consecutive Bangumi
-/// errors trip a circuit breaker so a disconnected API cannot add 30 seconds
-/// of timeout to every unmatched title.
 fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
     if scan_control::is_cancelled() {
         return Err("扫描已取消".to_string());
@@ -1178,22 +1303,23 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
         } // Offline: do not pay one timeout per manual subject.
     }
     let retry_pending = db::match_retry_ids().map_err(|e| e.to_string())?;
-    let unmatched = scan_control::matching_candidates(
+    let candidates = scan_control::matching_candidates(
         db::unmatched_anime().map_err(|e| e.to_string())?,
         &retry_pending,
     );
-    let match_total = unmatched.len() as i64;
+    let match_total = candidates.len() as i64;
     let done = std::sync::atomic::AtomicI64::new(0);
     let consecutive_errors = std::sync::atomic::AtomicI64::new(0);
     let total_errors = std::sync::atomic::AtomicI64::new(0);
-    // Which candidates finished a match attempt (found a subject or searched
-    // and found none) versus which could not be attempted at all. The latter
-    // stay flagged so the next incremental scan retries them.
-    let outcomes: std::sync::Mutex<Vec<(i64, bool)>> = std::sync::Mutex::new(Vec::new());
+    // Keep the final result of every candidate. A successful API search is not
+    // enough: if the database binding fails, the title must stay unmatched and
+    // retryable instead of being reported as successfully matched.
+    let outcomes: std::sync::Mutex<Vec<MatchResult>> = std::sync::Mutex::new(Vec::new());
+    let scan_match_report;
 
     RT.block_on(async {
         use futures::stream::{self, StreamExt};
-        stream::iter(unmatched.clone())
+        stream::iter(candidates.clone())
             // Bounded concurrency: parallel matching speeds up large scans, but
             // Bangumi rate-limits, and a 429 on the full-title query degrades
             // match quality — 4 is the sweet spot (via the mainland mirror).
@@ -1203,14 +1329,18 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
                 let total_errors = &total_errors;
                 let outcomes = &outcomes;
                 async move {
-                    let record = |completed: bool| {
-                        outcomes.lock().unwrap().push((anime_id, completed));
+                    let record = |outcome: MatchOutcome| {
+                        outcomes.lock().unwrap().push(MatchResult {
+                            anime_id,
+                            title: title.clone(),
+                            outcome,
+                        });
                     };
                     if scan_control::is_cancelled()
                         || consecutive_errors.load(std::sync::atomic::Ordering::Relaxed) >= 3
                     {
                         // Not attempted at all: retry it on a later scan.
-                        record(false);
+                        record(MatchOutcome::NotAttempted);
                         return;
                     }
                     let result = tokio::select! {
@@ -1222,87 +1352,94 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
                         }),
                         _ = scan_control::wait_cancelled() => return,
                     };
-                    match &result {
-                        Ok(_) => {
+                    if scan_control::is_cancelled() {
+                        return;
+                    }
+                    let outcome = match result {
+                        Ok(Some(best)) => {
                             consecutive_errors.store(0, std::sync::atomic::Ordering::Relaxed);
-                            // The search itself completed; "no candidate" is a
-                            // real answer, not an outage.
-                            record(true);
+                            // Search results often lack images/eps; fetch the
+                            // subject detail to get a reliable cover, rating, tags.
+                            let detail = tokio::select! {
+                                result = bangumi::subject(best.id) => result.ok(),
+                                _ = scan_control::wait_cancelled() => return,
+                            };
+                            let cover = detail
+                                .as_ref()
+                                .and_then(|d| d.cover_url.clone())
+                                .or(best.cover_url.clone());
+                            let eps = detail.as_ref().and_then(|d| d.eps).or(best.eps);
+                            let summary = detail
+                                .as_ref()
+                                .map(|d| d.summary.clone())
+                                .filter(|s| !s.is_empty())
+                                .unwrap_or(best.summary.clone());
+                            let rating = detail.as_ref().and_then(|d| d.rating).or(best.rating);
+                            let rating_total = detail
+                                .as_ref()
+                                .and_then(|d| d.rating_total)
+                                .or(best.rating_total);
+                            let rating_rank = detail
+                                .as_ref()
+                                .and_then(|d| d.rating_rank)
+                                .or(best.rating_rank);
+                            let rating_counts = detail
+                                .as_ref()
+                                .and_then(|d| d.rating_counts.clone())
+                                .or(best.rating_counts.clone());
+                            let air_date = detail
+                                .as_ref()
+                                .and_then(|d| d.air_date.clone())
+                                .or(best.air_date.clone());
+                            let (tags_vec, tag_counts) = detail
+                                .as_ref()
+                                .filter(|subject| !subject.tags.is_empty())
+                                .map(|subject| (subject.tags.clone(), subject.tag_counts.clone()))
+                                .unwrap_or((best.tags.clone(), best.tag_counts.clone()));
+                            let tags = if tags_vec.is_empty() {
+                                None
+                            } else {
+                                Some(tags_vec.join(","))
+                            };
+                            let weekday = air_date.as_deref().and_then(bangumi::weekday_of);
+                            match db::bind_bangumi(
+                                anime_id,
+                                best.id,
+                                &best.name,
+                                &best.name_cn,
+                                &summary,
+                                cover.as_deref(),
+                                air_date.as_deref(),
+                                eps,
+                                rating,
+                                rating_total,
+                                rating_rank,
+                                rating_counts.as_deref(),
+                                weekday,
+                                tags.as_deref(),
+                                tag_counts.as_deref(),
+                                "high",
+                                false,
+                            ) {
+                                Ok(()) => MatchOutcome::Matched,
+                                Err(error) => {
+                                    eprintln!("bind_bangumi: {error}");
+                                    total_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    MatchOutcome::PersistFailed
+                                }
+                            }
+                        }
+                        Ok(None) => {
+                            consecutive_errors.store(0, std::sync::atomic::Ordering::Relaxed);
+                            MatchOutcome::NoCandidate
                         }
                         Err(_) => {
                             consecutive_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             total_errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            record(false);
+                            MatchOutcome::RequestFailed
                         }
-                    }
-                    if scan_control::is_cancelled() {
-                        return;
-                    }
-                    if let Ok(Some(best)) = result {
-                        // Search results often lack images/eps; fetch the
-                        // subject detail to get a reliable cover, rating, tags.
-                        let detail = tokio::select! {
-                            result = bangumi::subject(best.id) => result.ok(),
-                            _ = scan_control::wait_cancelled() => return,
-                        };
-                        let cover = detail
-                            .as_ref()
-                            .and_then(|d| d.cover_url.clone())
-                            .or(best.cover_url.clone());
-                        let eps = detail.as_ref().and_then(|d| d.eps).or(best.eps);
-                        let summary = detail
-                            .as_ref()
-                            .map(|d| d.summary.clone())
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or(best.summary.clone());
-                        let rating = detail.as_ref().and_then(|d| d.rating).or(best.rating);
-                        let rating_total = detail
-                            .as_ref()
-                            .and_then(|d| d.rating_total)
-                            .or(best.rating_total);
-                        let rating_rank = detail
-                            .as_ref()
-                            .and_then(|d| d.rating_rank)
-                            .or(best.rating_rank);
-                        let rating_counts = detail
-                            .as_ref()
-                            .and_then(|d| d.rating_counts.clone())
-                            .or(best.rating_counts.clone());
-                        let air_date = detail
-                            .as_ref()
-                            .and_then(|d| d.air_date.clone())
-                            .or(best.air_date.clone());
-                        let (tags_vec, tag_counts) = detail
-                            .as_ref()
-                            .filter(|subject| !subject.tags.is_empty())
-                            .map(|subject| (subject.tags.clone(), subject.tag_counts.clone()))
-                            .unwrap_or((best.tags.clone(), best.tag_counts.clone()));
-                        let tags = if tags_vec.is_empty() {
-                            None
-                        } else {
-                            Some(tags_vec.join(","))
-                        };
-                        let weekday = air_date.as_deref().and_then(bangumi::weekday_of);
-                        let _ = db::bind_bangumi(
-                            anime_id,
-                            best.id,
-                            &best.name,
-                            &best.name_cn,
-                            &summary,
-                            cover.as_deref(),
-                            air_date.as_deref(),
-                            eps,
-                            rating,
-                            rating_total,
-                            rating_rank,
-                            rating_counts.as_deref(),
-                            weekday,
-                            tags.as_deref(),
-                            tag_counts.as_deref(),
-                            "high",
-                            false,
-                        );
-                    }
+                    };
+                    record(outcome);
                     let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                     let _ = sink.add(ScanProgress {
                         stage: "matching".to_string(),
@@ -1326,22 +1463,15 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
     // Persist which titles still need a match attempt so a later incremental
     // scan retries them even though their files never changed.
     {
-        let outcomes = outcomes.into_inner().unwrap_or_default();
-        let mut completed = Vec::new();
-        let mut incomplete = Vec::new();
-        for (anime_id, finished) in outcomes {
-            if finished {
-                completed.push(anime_id);
-            } else {
-                incomplete.push(anime_id);
-            }
-        }
-        if let Err(error) = db::clear_match_retry(completed) {
+        let results = outcomes.into_inner().unwrap_or_default();
+        let report = ScanMatchReport::from_results(results);
+        if let Err(error) = db::clear_match_retry(report.completed_ids.clone()) {
             eprintln!("clear_match_retry: {error}");
         }
-        if let Err(error) = db::mark_match_retry(incomplete) {
+        if let Err(error) = db::mark_match_retry(report.retry_ids.clone()) {
             eprintln!("mark_match_retry: {error}");
         }
+        scan_match_report = report;
     }
 
     let api_unreachable = consecutive_errors.load(std::sync::atomic::Ordering::Relaxed) >= 3;
@@ -1379,9 +1509,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
         let mut message = format!(
             "媒体扫描已完成，但{reason}，部分自动匹配与收藏同步未完成{detail}{mirror_help}"
         );
-        for (_, title) in &unmatched {
-            let _ = writeln!(message, "unmatched: {title}");
-        }
+        scan_match_report.append_to(&mut message);
         let _ = sink.add(ScanProgress {
             stage: "warning".to_string(),
             current: done.load(std::sync::atomic::Ordering::Relaxed),
@@ -1397,9 +1525,7 @@ fn finish_scan_session(sink: &StreamSink<ScanProgress>) -> Result<(), String> {
         if match_total > 0 {
             let matched = done.load(std::sync::atomic::Ordering::Relaxed);
             let _ = writeln!(message, "match-attempted: {matched}/{match_total}");
-            for (_, title) in &unmatched {
-                let _ = writeln!(message, "unmatched: {title}");
-            }
+            scan_match_report.append_to(&mut message);
         }
         let _ = sink.add(ScanProgress {
             stage: "done".to_string(),
@@ -1885,6 +2011,63 @@ mod download_path_tests {
             exact_uri: true,
         }));
 
+        assert!(download_match_is_valid(&db::DownloadPathMatch {
+            local_path: "content://media/external/downloads/42".to_string(),
+            bytes_total: 5,
+            exact_uri: true,
+        }));
+
         std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod scan_match_report_tests {
+    use super::*;
+
+    fn result(anime_id: i64, title: &str, outcome: MatchOutcome) -> MatchResult {
+        MatchResult {
+            anime_id,
+            title: title.to_string(),
+            outcome,
+        }
+    }
+
+    #[test]
+    fn final_report_lists_only_successes_as_matched() {
+        let report = ScanMatchReport::from_results(vec![
+            result(1, "已匹配", MatchOutcome::Matched),
+            result(2, "没有结果", MatchOutcome::NoCandidate),
+            result(3, "请求失败", MatchOutcome::RequestFailed),
+            result(4, "写库失败", MatchOutcome::PersistFailed),
+            result(5, "未执行", MatchOutcome::NotAttempted),
+        ]);
+
+        assert_eq!(report.matched, vec!["已匹配"]);
+        assert_eq!(
+            report.unmatched,
+            vec!["写库失败", "未执行", "没有结果", "请求失败"]
+        );
+        assert_eq!(report.failed, 3);
+        assert_eq!(report.completed_ids, vec![1, 2]);
+        assert_eq!(report.retry_ids, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn report_lines_are_stable_and_never_duplicate_titles() {
+        let report = ScanMatchReport::from_results(vec![
+            result(1, "B", MatchOutcome::Matched),
+            result(2, "A", MatchOutcome::Matched),
+            result(3, "C", MatchOutcome::NoCandidate),
+            result(4, "C", MatchOutcome::NoCandidate),
+        ]);
+
+        let mut message = String::from("完成");
+        report.append_to(&mut message);
+        assert_eq!(
+            message,
+            "完成\nmatch-result: matched=2|unmatched=1|failed=0\n\
+             matched: A\nmatched: B\nunmatched: C\n"
+        );
     }
 }

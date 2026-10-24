@@ -24,8 +24,9 @@ class SmbServerCandidate {
 
 const _androidNetworkChannel = MethodChannel('kurako/android/network');
 
-/// Combine SMB DNS-SD, Windows WS-Discovery, and a bounded local TCP/445
-/// fallback. Discovery never authenticates or changes the active SMB session.
+/// Combine verified SMB DNS-SD with verified Windows/NAS candidates. Discovery
+/// never authenticates or changes the active SMB session; Rust only performs
+/// the anonymous SMB2 NEGOTIATE needed to reject unrelated port-445 services.
 Future<List<SmbServerCandidate>> discoverSmbServers() async {
   return _withAndroidMulticastLock(() async {
     final results = await Future.wait([
@@ -77,7 +78,7 @@ Future<List<SmbServerCandidate>> _discoverDnsSd() async {
       ipLookupType: nsd.IpLookupType.any,
     );
     await Future<void>.delayed(const Duration(milliseconds: 2800));
-    return discovery.services
+    final candidates = discovery.services
         .map((service) {
           final resolved = service.addresses?.where((address) {
             return !address.isLoopback && !address.isLinkLocal;
@@ -95,6 +96,20 @@ Future<List<SmbServerCandidate>> _discoverDnsSd() async {
         })
         .whereType<SmbServerCandidate>()
         .toList();
+    final verified = await Future.wait(
+      candidates.map((server) async {
+        try {
+          final ok = await rust.verifySmbServer(
+            host: server.host,
+            port: server.port,
+          );
+          return ok ? server : null;
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
+    return verified.whereType<SmbServerCandidate>().toList();
   } catch (_) {
     return const [];
   } finally {

@@ -18,11 +18,13 @@ import 'package:window_manager/window_manager.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../services/anime4k_shader_assets.dart';
+import '../services/download_storage.dart';
 import '../services/ios_platform.dart';
 import '../services/media_source.dart';
 import '../services/media_session.dart';
 import '../services/playback_metadata.dart';
 import '../services/playback_start.dart';
+import '../services/player_window_controller.dart';
 import '../state/providers.dart';
 import '../state/player_appearance.dart';
 import '../widgets/player_visuals.dart';
@@ -224,6 +226,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   // the button icon because the controls subtree is keyed and won't rebuild on
   // a plain setState.
   final ValueNotifier<bool> _fullscreen = ValueNotifier<bool>(false);
+  late final PlayerFullscreenController _fullscreenController =
+      PlayerFullscreenController(
+        state: _fullscreen,
+        setFullscreen: windowManager.setFullScreen,
+      );
 
   // Quick-seek jump (seconds), kept in sync with [seekDurationProvider].
   int _seekSec = 10;
@@ -326,7 +333,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   ModalRoute<dynamic>? _route;
 
   void _onRouteStatus(AnimationStatus status) {
-    if (status == AnimationStatus.reverse) unawaited(_restoreSystemChrome());
+    if (status == AnimationStatus.reverse) {
+      unawaited(_restoreWindowState());
+    }
   }
 
   Future<void> _initializePlayer() async {
@@ -356,10 +365,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   /// already fullscreen+landscape.
   Future<void> _toggleFullscreen() async {
     if (_isMobile) return;
-    final next = !_fullscreen.value;
     try {
-      await windowManager.setFullScreen(next);
-      _fullscreen.value = next;
+      await _fullscreenController.toggle();
     } catch (_) {}
   }
 
@@ -775,6 +782,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   }) async {
     final seq = _openSeq;
     PreparedSubtitle? prepared;
+    String? materializedContent;
     final previousSource = _activeExtSub;
     final previousPrepared = _preparedExtSub;
     // Mark the external choice as pending before sub-add. That command itself
@@ -784,11 +792,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _activeExtSub = sub.uri;
     try {
       final cache = await _subtitleCache();
+      var sourceUri = sub.uri;
+      if (sourceUri.startsWith('content://')) {
+        materializedContent = await AndroidMediaStoreStorage().copyToCache(
+          sourceUri,
+          sub.fileName,
+        );
+        sourceUri = materializedContent;
+      }
       prepared = await rust.prepareSubtitle(
-        sourceUri: sub.uri,
+        sourceUri: sourceUri,
         fileName: sub.fileName,
         cacheDir: cache.path,
       );
+      if (materializedContent != null) {
+        try {
+          await File(materializedContent).delete();
+        } catch (_) {}
+        materializedContent = null;
+      }
       if (!mounted || seq != _openSeq) {
         await _releasePreparedSubtitle(prepared);
         return;
@@ -806,6 +828,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       }
     } catch (error) {
       await _releasePreparedSubtitle(prepared);
+      if (materializedContent != null) {
+        try {
+          await File(materializedContent).delete();
+        } catch (_) {}
+      }
       if (seq == _openSeq && _activeExtSub == sub.uri) {
         _activeExtSub = previousSource;
       }
@@ -1331,10 +1358,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     if (_isMobile) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
       SystemChrome.setPreferredOrientations(DeviceOrientation.values);
-    } else if (_fullscreen.value) {
-      // Leave the OS window as we found it (windowed) when closing the player.
-      windowManager.setFullScreen(false);
     }
+    _fullscreenController.dispose();
     if (!_isMobile) windowManager.removeListener(this);
     _route?.animation?.removeStatusListener(_onRouteStatus);
     _fullscreen.dispose();
@@ -1449,8 +1474,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   Future<void> _leavePlayer() async {
     if (_leaving) return;
     _leaving = true;
-    await _restoreSystemChrome();
+    final scaffold = _scaffoldKey.currentState;
+    if (scaffold?.isEndDrawerOpen ?? false) {
+      scaffold!.closeEndDrawer();
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    await _restoreWindowState();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _restoreWindowState() async {
+    await _restoreSystemChrome();
+    if (!_isMobile) {
+      try {
+        await _fullscreenController.restore();
+      } catch (_) {}
+    }
   }
 
   Future<void> _restoreSystemChrome() async {
@@ -1472,6 +1511,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       // A small look-ahead so the selected row isn't pinned to the very top
       // edge; the ListView clamps this to a valid offset once it lays out.
       final target = (_index - 1) * _episodeTileHeight;
+      _episodeScrollController?.dispose();
       _episodeScrollController = ScrollController(
         initialScrollOffset: target < 0 ? 0 : target,
       );
@@ -1532,7 +1572,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                     ),
                     IconButton(
                       icon: Icon(Icons.close, color: cs.onSurfaceVariant),
-                      onPressed: _leavePlayer,
+                      onPressed: () =>
+                          _scaffoldKey.currentState?.closeEndDrawer(),
                     ),
                   ],
                 ),

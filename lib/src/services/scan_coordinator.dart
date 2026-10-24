@@ -46,20 +46,27 @@ class FolderScanStats {
 class ScanEventFacts {
   final FolderScanStats? stats;
   final List<String> unmatched;
+  final List<String> matched;
   final String? matchAttempted;
+  final bool finalReport;
   const ScanEventFacts({
     this.stats,
     this.unmatched = const [],
+    this.matched = const [],
     this.matchAttempted,
+    this.finalReport = false,
   });
 
-  /// Lines starting with `stats:` / `unmatched:` / `match-attempted:` are
+  /// Lines starting with `stats:` / `unmatched:` / `matched:` / `match-result:`
+  /// / `match-attempted:` are
   /// structured summary data appended by Rust; everything else is the
   /// human-readable status line.
   static ScanEventFacts parse(String message) {
     FolderScanStats? stats;
     final unmatched = <String>[];
+    final matched = <String>[];
     String? matchAttempted;
+    var finalReport = false;
     final status = <String>[];
     for (final line in message.split('\n')) {
       if (line.startsWith('stats: ')) {
@@ -81,6 +88,11 @@ class ScanEventFacts {
       } else if (line.startsWith('unmatched: ')) {
         final title = line.substring(11).trim();
         if (title.isNotEmpty) unmatched.add(title);
+      } else if (line.startsWith('matched: ')) {
+        final title = line.substring(9).trim();
+        if (title.isNotEmpty) matched.add(title);
+      } else if (line.startsWith('match-result: ')) {
+        finalReport = true;
       } else if (line.startsWith('match-attempted: ')) {
         matchAttempted = line.substring(17).trim();
       } else {
@@ -90,7 +102,9 @@ class ScanEventFacts {
     return ScanEventFacts(
       stats: stats,
       unmatched: unmatched,
+      matched: matched,
       matchAttempted: matchAttempted,
+      finalReport: finalReport,
     );
   }
 }
@@ -103,6 +117,7 @@ class ScanState {
   final List<String> warnings;
   final Map<String, FolderScanStats> folders;
   final List<String> unmatchedTitles;
+  final List<String> matchedTitles;
   final String? matchAttempted;
   const ScanState({
     this.running = false,
@@ -112,6 +127,7 @@ class ScanState {
     this.warnings = const [],
     this.folders = const {},
     this.unmatchedTitles = const [],
+    this.matchedTitles = const [],
     this.matchAttempted,
   });
 
@@ -238,6 +254,11 @@ class ScanCoordinator extends StateNotifier<ScanState> {
     // call returns; its late progress must not resurrect the UI bar.
     if (_cancelRequested) return;
     final facts = ScanEventFacts.parse(progress.message);
+    List<String> mergeTitles(List<String> existing, List<String> incoming) {
+      if (facts.finalReport) return List.unmodifiable(incoming);
+      return List.unmodifiable({...existing, ...incoming});
+    }
+
     _publish(
       ScanState(
         running: true,
@@ -247,12 +268,8 @@ class ScanCoordinator extends StateNotifier<ScanState> {
         folders: facts.stats == null
             ? state.folders
             : {...state.folders, facts.stats!.folderId: facts.stats!},
-        unmatchedTitles: facts.unmatched.isEmpty
-            ? state.unmatchedTitles
-            : {
-                for (final title in state.unmatchedTitles) title,
-                ...facts.unmatched,
-              }.toList(),
+        unmatchedTitles: mergeTitles(state.unmatchedTitles, facts.unmatched),
+        matchedTitles: mergeTitles(state.matchedTitles, facts.matched),
         matchAttempted: facts.matchAttempted ?? state.matchAttempted,
       ),
     );
@@ -317,6 +334,7 @@ class ScanCoordinator extends StateNotifier<ScanState> {
               warnings: [...state.warnings, '${folder.path}：$e'],
               folders: state.folders,
               unmatchedTitles: state.unmatchedTitles,
+              matchedTitles: state.matchedTitles,
               matchAttempted: state.matchAttempted,
             ),
           );
@@ -363,6 +381,7 @@ class ScanCoordinator extends StateNotifier<ScanState> {
               warnings: state.warnings,
               folders: state.folders,
               unmatchedTitles: state.unmatchedTitles,
+              matchedTitles: state.matchedTitles,
               matchAttempted: state.matchAttempted,
               progress: ScanProgress(
                 stage: 'done',

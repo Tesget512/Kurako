@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/bangumi_mirror.dart';
 import '../services/cover_repository.dart';
+import '../services/download_storage.dart';
 import '../services/security_scope.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
@@ -358,31 +359,38 @@ final downloadDirProvider = StateNotifierProvider<_StringPrefNotifier, String>((
   return _StringPrefNotifier('download_dir', defaultValue: '');
 });
 
-/// Whether the first-run setup has been completed. The setup exists because
-/// macOS only keeps a folder reachable across launches after a security-scoped
-/// bookmark is created for it, which requires an explicit user pick.
+enum OnboardingStatus { loading, required, completed }
+
+/// Whether the first-run setup has loaded and is required. The loading state
+/// prevents an existing installation from seeing the onboarding page for one
+/// frame while SharedPreferences is still being read.
 final onboardingCompletedProvider =
-    StateNotifierProvider<OnboardingCompletedNotifier, bool>((ref) {
+    StateNotifierProvider<OnboardingCompletedNotifier, OnboardingStatus>((ref) {
       return OnboardingCompletedNotifier();
     });
 
-class OnboardingCompletedNotifier extends StateNotifier<bool> {
-  OnboardingCompletedNotifier() : super(false) {
-    _load();
+class OnboardingCompletedNotifier extends StateNotifier<OnboardingStatus> {
+  OnboardingCompletedNotifier() : super(OnboardingStatus.loading) {
+    ready = _load();
   }
 
+  late final Future<void> ready;
   static const _key = 'onboarding_completed_v1';
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) state = prefs.getBool(_key) ?? false;
+    if (mounted) {
+      state = (prefs.getBool(_key) ?? false)
+          ? OnboardingStatus.completed
+          : OnboardingStatus.required;
+    }
   }
 
   /// Marks setup as done and returns the stored value.
   Future<bool> complete() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_key, true);
-    if (mounted) state = true;
+    if (mounted) state = OnboardingStatus.completed;
     return true;
   }
 }
@@ -437,10 +445,14 @@ class DownloadTask {
 /// detail page can show a progress icon without a modal dialog blocking play.
 /// Completed tasks linger (so the badge stays) until [dismissAnime] clears them.
 class DownloadManager extends StateNotifier<List<DownloadTask>> {
-  DownloadManager(this._ref) : super(const []);
+  DownloadManager(this._ref, {AndroidMediaStoreStorage? mediaStore})
+    : _mediaStore = mediaStore ?? AndroidMediaStoreStorage(),
+      super(const []);
 
   final Ref _ref;
+  final AndroidMediaStoreStorage _mediaStore;
   final _subs = <String, StreamSubscription<DownloadProgress>>{};
+  final _reservations = <String, MediaStoreReservation>{};
 
   bool isDownloading(String sourceUri) =>
       state.any((task) => task.sourceUri == sourceUri && task.active);
@@ -473,6 +485,10 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   /// has no bookmark, so a missing bookmark means "use the path as-is" rather
   /// than a hard failure. The scope is released when the stream ends.
   Future<void> _runDownload(Episode ep, String destDir, int? animeId) async {
+    if (AndroidMediaStoreStorage.supported) {
+      await _runMediaStoreDownload(ep, animeId);
+      return;
+    }
     ScopedPath? scope;
     if (Platform.isMacOS) {
       try {
@@ -534,6 +550,160 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
     );
   }
 
+  Future<void> _runMediaStoreDownload(Episode ep, int? animeId) async {
+    MediaStoreReservation? reservation;
+    var terminalError = '';
+    try {
+      reservation = await _mediaStore.reserveVideo(ep.fileName);
+      _reservations[ep.filePath] = reservation;
+      final stream = rust.networkDownloadToFd(
+        remoteUri: ep.filePath,
+        fd: reservation.fd,
+      );
+      _subs[ep.filePath] = stream.listen(
+        (progress) {
+          final failure = progress.error;
+          if (failure != null) terminalError = failure;
+          _update(
+            ep.filePath,
+            (task) => task.copyWith(
+              bytesDone: progress.bytesDone.toInt(),
+              bytesTotal: progress.bytesTotal.toInt(),
+              error: failure,
+            ),
+          );
+        },
+        onError: (Object error) {
+          terminalError = '$error';
+          _update(ep.filePath, (task) => task.copyWith(error: terminalError));
+        },
+        onDone: () {
+          _subs.remove(ep.filePath);
+          unawaited(
+            _finishMediaStoreDownload(
+              ep: ep,
+              animeId: animeId,
+              reservation: reservation!,
+              terminalError: terminalError,
+            ),
+          );
+        },
+      );
+    } catch (error) {
+      if (reservation != null) {
+        try {
+          await _mediaStore.abort(reservation.uri);
+        } catch (_) {}
+      }
+      _reservations.remove(ep.filePath);
+      _update(ep.filePath, (task) => task.copyWith(error: '$error'));
+    }
+  }
+
+  Future<void> _finishMediaStoreDownload({
+    required Episode ep,
+    required int? animeId,
+    required MediaStoreReservation reservation,
+    required String terminalError,
+  }) async {
+    _reservations.remove(ep.filePath);
+    var published = false;
+    try {
+      if (terminalError.isNotEmpty) throw StateError(terminalError);
+      final stat = await _mediaStore.stat(reservation.uri);
+      if (stat.size <= 0) throw StateError('下载文件为空');
+      await _mediaStore.publish(reservation.uri);
+      published = true;
+      await rust.recordDownload(
+        remoteUri: ep.filePath,
+        localUri: reservation.uri,
+        bytesTotal: stat.size,
+      );
+      await _downloadMediaStoreSubtitles(ep, reservation.displayName);
+      _update(
+        ep.filePath,
+        (task) => task.copyWith(
+          done: true,
+          bytesDone: stat.size,
+          bytesTotal: stat.size,
+          clearError: true,
+        ),
+      );
+      if (animeId != null) _ref.invalidate(episodesProvider(animeId));
+    } catch (error) {
+      try {
+        if (published) {
+          await _mediaStore.deleteMedia(
+            reservation.uri,
+            videoName: reservation.displayName,
+          );
+        } else {
+          await _mediaStore.abort(reservation.uri);
+        }
+      } catch (_) {}
+      _update(ep.filePath, (task) => task.copyWith(error: '$error'));
+    }
+  }
+
+  Future<void> _downloadMediaStoreSubtitles(
+    Episode ep,
+    String videoName,
+  ) async {
+    try {
+      final candidates = ep.sourceType == 'webdav'
+          ? await rust.webdavListSubtitles(remoteUri: ep.filePath)
+          : await rust.smbListSubtitles(smbUri: ep.filePath);
+      for (final candidate in candidates) {
+        MediaStoreReservation? reservation;
+        try {
+          reservation = await _mediaStore.reserveSubtitle(candidate.fileName);
+          await _downloadFdToCompletion(candidate.uri, reservation.fd);
+          final stat = await _mediaStore.stat(reservation.uri);
+          if (stat.size <= 0) throw StateError('字幕文件为空');
+          await _mediaStore.publish(reservation.uri);
+          reservation = null;
+        } catch (error) {
+          debugPrint('MediaStore subtitle skipped: $error');
+          if (reservation != null) {
+            try {
+              await _mediaStore.abort(reservation.uri);
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (error) {
+      debugPrint('MediaStore subtitle discovery skipped: $error');
+    }
+  }
+
+  Future<void> _downloadFdToCompletion(String remoteUri, int fd) async {
+    final completer = Completer<void>();
+    late final StreamSubscription<DownloadProgress> subscription;
+    subscription = rust
+        .networkDownloadToFd(remoteUri: remoteUri, fd: fd)
+        .listen(
+          (progress) {
+            final error = progress.error;
+            if (error != null && !completer.isCompleted) {
+              completer.completeError(StateError(error));
+            }
+          },
+          onError: (Object error, StackTrace stackTrace) {
+            if (!completer.isCompleted) {
+              completer.completeError(error, stackTrace);
+            }
+          },
+          onDone: () {
+            if (!completer.isCompleted) completer.complete();
+          },
+        );
+    try {
+      await completer.future.timeout(const Duration(minutes: 2));
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   void _releaseScope(ScopedPath? scope) {
     if (scope != null) unawaited(SecurityScope.release(scope.scopePath));
   }
@@ -543,6 +713,12 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
     // must not resurrect the task we're about to remove, or pollute a
     // re-download of the same episode started right afterwards.
     await _subs.remove(sourceUri)?.cancel();
+    final reservation = _reservations.remove(sourceUri);
+    if (reservation != null) {
+      try {
+        await _mediaStore.abort(reservation.uri);
+      } catch (_) {}
+    }
     final task = state.where((task) => task.sourceUri == sourceUri).firstOrNull;
     if (task?.sourceType == 'webdav') {
       await rust.webdavCancelDownload(remoteUri: sourceUri);

@@ -10,6 +10,7 @@ import 'package:saf_util/saf_util_platform_interface.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../services/download_storage.dart';
 import '../services/security_scope.dart';
 import 'external_player.dart' show smbUncPath, ensureUncAuth;
 import 'ios_platform.dart';
@@ -215,6 +216,10 @@ class LocalMediaSource extends MediaSource {
 /// active security scope. Holding it for the whole playback keeps seeks and
 /// sidecar reads working; the handle releases it on stop.
 Future<PlayableHandle> _localCopyHandle(String path) async {
+  if (path.startsWith('content://')) {
+    final fd = await SafUtil().getFileDescriptor(path);
+    return PlayableHandle('fd://$fd', fd: fd);
+  }
   if (!Platform.isMacOS) return PlayableHandle(localPlaybackUri(path));
   final ScopedPath scope;
   try {
@@ -383,6 +388,11 @@ class SafMediaSource extends MediaSource {
     final fd = await _saf.getFileDescriptor(episode.filePath);
     return PlayableHandle('fd://$fd', fd: fd);
   }
+
+  @override
+  Future<List<SubtitleCandidate>> listSubtitles(Episode episode) {
+    return _mediaStoreSubtitles(episode.fileName, episode.filePath);
+  }
 }
 
 /// SMB network share source. Enumeration + playback go through Rust: the file
@@ -460,6 +470,9 @@ class SmbMediaSource extends MediaSource {
     // sidecar as UTF-8 before handing it to mpv.
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
     if (local != null) {
+      if (local.startsWith('content://')) {
+        return _mediaStoreSubtitles(episode.fileName, local);
+      }
       return listLocalSubtitles(local);
     }
     // Windows: the UNC share behaves like a local directory once authenticated,
@@ -530,13 +543,30 @@ class WebDavMediaSource extends MediaSource {
   @override
   Future<List<SubtitleCandidate>> listSubtitles(Episode episode) async {
     final local = await rust.downloadedLocalPath(smbUri: episode.filePath);
-    if (local != null) return listLocalSubtitles(local);
+    if (local != null) {
+      if (local.startsWith('content://')) {
+        return _mediaStoreSubtitles(episode.fileName, local);
+      }
+      return listLocalSubtitles(local);
+    }
     try {
       return await rust.webdavListSubtitles(remoteUri: episode.filePath);
     } catch (_) {
       return const [];
     }
   }
+}
+
+Future<List<SubtitleCandidate>> _mediaStoreSubtitles(
+  String videoFileName,
+  String videoUri,
+) async {
+  if (!videoUri.startsWith('content://')) return const [];
+  final entries = await AndroidMediaStoreStorage().listSubtitles(videoFileName);
+  return [
+    for (final entry in entries)
+      SubtitleCandidate(fileName: entry.fileName, uri: entry.uri),
+  ];
 }
 
 /// Platforms whose remote playback goes through the Rust loopback HTTP proxy:

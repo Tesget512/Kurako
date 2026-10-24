@@ -19,6 +19,7 @@ import 'src/state/providers.dart';
 import 'src/services/proxy.dart';
 import 'src/services/media_session.dart';
 import 'src/services/security_scope.dart';
+import 'src/services/download_storage.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,6 +35,14 @@ Future<void> main() async {
   PaintingBinding.instance.imageCache.maximumSizeBytes = 96 << 20;
 
   await RustLib.init();
+  if (AndroidMediaStoreStorage.supported) {
+    try {
+      await AndroidMediaStoreStorage().cleanupPending();
+    } catch (_) {
+      // A failed cleanup must not block startup; entries stay hidden while
+      // pending and a later launch retries the cleanup.
+    }
+  }
 
   // Desktop: drop the native OS title bar and manage the window ourselves
   // (custom drag region + window buttons drawn in-app). See widgets/

@@ -113,7 +113,7 @@ dependencies:
 
   # Desktop frameless window + custom title bar (Windows/macOS/Linux). Used to
   # drop the native OS title bar and draw our own drag region + window buttons.
-  window_manager: ^0.4.0
+  window_manager: 0.5.2
 
   rust_lib_kurako:
     path: rust_builder

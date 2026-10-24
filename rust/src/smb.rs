@@ -1563,6 +1563,76 @@ pub async fn download(
     Ok(final_path.to_string_lossy().to_string())
 }
 
+/// Stream an SMB file directly into an already-open destination file.
+///
+/// Android MediaStore entries stay `IS_PENDING=1` until Dart publishes them,
+/// so no temporary `.part` filename is needed (or writable) here.
+pub async fn download_to_file(
+    smb_uri: &str,
+    mut output: tokio::fs::File,
+    progress: impl Fn(u64, u64),
+) -> Result<u64> {
+    let path = smb_path_from_uri(smb_uri).context("bad smb uri")?;
+    let c = creds().context("smb not connected")?;
+    let _permit = acquire_download_permit(smb_uri).await?;
+    if is_cancelled(smb_uri) {
+        anyhow::bail!("下载已取消");
+    }
+    let (reader, sess) = open_session_reader(&c, &path).await?;
+    let total = reader.size();
+    if total == 0 {
+        let _ = reader.close().await;
+        anyhow::bail!("SMB reported this video as 0 bytes; download was not saved");
+    }
+
+    const CHUNK: u64 = 256 * 1024;
+    let mut offset = 0u64;
+    let transfer = async {
+        while offset < total {
+            if is_cancelled(smb_uri) {
+                anyhow::bail!("下载已取消");
+            }
+            if let Some(delay) = playback_download_yield() {
+                tokio::time::sleep(delay).await;
+            }
+            let want = CHUNK.min(total - offset);
+            let data = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                reader.read_at(offset, want),
+            )
+            .await
+            {
+                Ok(Ok(data)) => data,
+                Ok(Err(error)) => {
+                    invalidate_session_if(&sess);
+                    return Err(error).context("smb read");
+                }
+                Err(_) => {
+                    invalidate_session_if(&sess);
+                    anyhow::bail!("smb download read timed out")
+                }
+            };
+            if data.is_empty() {
+                break;
+            }
+            output
+                .write_all(&data)
+                .await
+                .context("write MediaStore file")?;
+            offset += data.len() as u64;
+            progress(offset, total);
+        }
+        output.flush().await.context("flush MediaStore file")?;
+        if offset != total {
+            anyhow::bail!("下载不完整（{offset}/{total} 字节）");
+        }
+        Ok(offset)
+    }
+    .await;
+    let _ = reader.close().await;
+    transfer
+}
+
 pub fn expected_download_path(smb_uri: &str, dest_dir: &str) -> Option<std::path::PathBuf> {
     let path = smb_path_from_uri(smb_uri)?;
     let file_name = path.rsplit('/').next().unwrap_or(&path);

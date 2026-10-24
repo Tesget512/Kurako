@@ -1092,34 +1092,80 @@ pub fn bind_bangumi(
     corrected: bool,
 ) -> Result<()> {
     with_conn(|c| {
-        c.execute(
-            "UPDATE anime SET bangumi_id=?2, name=?3, name_cn=?4, summary=?5, cover_url=?6,
+        bind_bangumi_on(
+            c,
+            anime_id,
+            bangumi_id,
+            name,
+            name_cn,
+            summary,
+            cover_url,
+            air_date,
+            total_eps,
+            rating,
+            rating_total,
+            rating_rank,
+            rating_counts,
+            air_weekday,
+            tags,
+            tag_counts,
+            confidence,
+            corrected,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn bind_bangumi_on(
+    c: &Connection,
+    anime_id: i64,
+    bangumi_id: i64,
+    name: &str,
+    name_cn: &str,
+    summary: &str,
+    cover_url: Option<&str>,
+    air_date: Option<&str>,
+    total_eps: Option<i64>,
+    rating: Option<f64>,
+    rating_total: Option<i64>,
+    rating_rank: Option<i64>,
+    rating_counts: Option<&str>,
+    air_weekday: Option<i64>,
+    tags: Option<&str>,
+    tag_counts: Option<&str>,
+    confidence: &str,
+    corrected: bool,
+) -> Result<()> {
+    let updated = c.execute(
+        "UPDATE anime SET bangumi_id=?2, name=?3, name_cn=?4, summary=?5, cover_url=?6,
                 air_date=?7, total_eps=?8, rating=?9, rating_total=?10, rating_rank=?11,
                 rating_counts=?12, air_weekday=?13, tags=?14, tag_counts=?15,
                 match_confidence=?16, corrected=?17
              WHERE id=?1",
-            params![
-                anime_id,
-                bangumi_id,
-                name,
-                name_cn,
-                summary,
-                cover_url,
-                air_date,
-                total_eps,
-                rating,
-                rating_total,
-                rating_rank,
-                rating_counts,
-                air_weekday,
-                tags,
-                tag_counts,
-                confidence,
-                corrected as i64
-            ],
-        )?;
-        Ok(())
-    })
+        params![
+            anime_id,
+            bangumi_id,
+            name,
+            name_cn,
+            summary,
+            cover_url,
+            air_date,
+            total_eps,
+            rating,
+            rating_total,
+            rating_rank,
+            rating_counts,
+            air_weekday,
+            tags,
+            tag_counts,
+            confidence,
+            corrected as i64
+        ],
+    )?;
+    if updated != 1 {
+        anyhow::bail!("anime {anime_id} no longer exists");
+    }
+    Ok(())
 }
 
 pub fn mark_anime_has_new_files(anime_id: i64) -> Result<()> {
@@ -1699,8 +1745,29 @@ pub fn list_downloads() -> Result<Vec<crate::models::DownloadEntry>> {
 
 /// Remove one download record. Return the local path only when no other legacy
 /// alias still references it, so callers never delete a shared physical file.
-pub fn remove_download(id: i64) -> Result<Option<String>> {
+pub fn remove_download_record(id: i64) -> Result<Option<String>> {
     with_conn(|c| remove_download_on(c, id))
+}
+
+pub fn download_path_by_id(id: i64) -> Result<Option<String>> {
+    with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT local_path FROM downloads WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?)
+    })
+}
+
+pub fn download_path_alias_count(local_path: &str) -> Result<i64> {
+    with_conn(|c| {
+        Ok(c.query_row(
+            "SELECT COUNT(*) FROM downloads WHERE local_path = ?1",
+            params![local_path],
+            |row| row.get(0),
+        )?)
+    })
 }
 
 fn remove_download_on(c: &Connection, id: i64) -> Result<Option<String>> {
@@ -3138,6 +3205,45 @@ mod download_tests {
                 "smb://server/01.mkv".to_string(),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod bind_tests {
+    use super::*;
+
+    #[test]
+    fn binding_a_missing_anime_is_an_error() {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE anime (
+                id INTEGER PRIMARY KEY,
+                bangumi_id INTEGER,
+                name TEXT,
+                name_cn TEXT,
+                summary TEXT,
+                cover_url TEXT,
+                air_date TEXT,
+                total_eps INTEGER,
+                rating REAL,
+                rating_total INTEGER,
+                rating_rank INTEGER,
+                rating_counts TEXT,
+                air_weekday INTEGER,
+                tags TEXT,
+                tag_counts TEXT,
+                match_confidence TEXT,
+                corrected INTEGER
+            );",
+        )
+        .unwrap();
+
+        let error = bind_bangumi_on(
+            &c, 99, 1, "name", "", "", None, None, None, None, None, None, None, None, None, None,
+            "high", false,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("anime 99"));
     }
 }
 

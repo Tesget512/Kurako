@@ -28,8 +28,13 @@ class _StartupGate extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final completed = ref.watch(onboardingCompletedProvider);
-    return completed ? const HomePage() : const OnboardingPage();
+    return switch (ref.watch(onboardingCompletedProvider)) {
+      OnboardingStatus.loading => const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      ),
+      OnboardingStatus.required => const OnboardingPage(),
+      OnboardingStatus.completed => const HomePage(),
+    };
   }
 }
 

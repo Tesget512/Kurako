@@ -5,8 +5,13 @@ import 'package:kurako/src/rust/models.dart';
 import 'package:kurako/src/services/scan_coordinator.dart';
 
 class FakeScanBackend implements ScanBackend {
-  final entered = Completer<void>();
-  final enumerated = Completer<List<ScannedFile>>();
+  Completer<void> entered = Completer<void>();
+  Completer<List<ScannedFile>> enumerated = Completer<List<ScannedFile>>();
+  String preliminaryMessage =
+      'ok\nstats: folder=7|checked=10|changed=3|removed=1';
+  String finishMessage =
+      '完成\nmatch-result: matched=0|unmatched=2|failed=0\n'
+      'match-attempted: 2/3\nunmatched: 剧场版 A\nunmatched: 剧场版 B';
   int begins = 0;
   int closes = 0;
   int clears = 0;
@@ -57,22 +62,22 @@ class FakeScanBackend implements ScanBackend {
     LibraryFolder folder,
     List<ScannedFile> files,
   ) async* {
-    yield const ScanProgress(
+    yield ScanProgress(
       stage: 'scanning',
       current: 1,
       total: 1,
-      message: 'ok\nstats: folder=7|checked=10|changed=3|removed=1',
+      message: preliminaryMessage,
     );
   }
 
   @override
   Stream<ScanProgress> finish() async* {
     finishes++;
-    yield const ScanProgress(
+    yield ScanProgress(
       stage: 'done',
       current: 1,
       total: 1,
-      message: '完成\nmatch-attempted: 2/3\nunmatched: 剧场版 A\nunmatched: 剧场版 B',
+      message: finishMessage,
     );
   }
 }
@@ -166,4 +171,38 @@ void main() {
       coordinator.dispose();
     },
   );
+
+  test('final scan report replaces stale unmatched entries', () async {
+    final backend = FakeScanBackend();
+    backend.preliminaryMessage = '扫描中\nunmatched: 已被成功匹配的旧标题';
+    final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final run = coordinator.start();
+    await backend.entered.future;
+    backend.enumerated.complete([]);
+    await run;
+    expect(coordinator.state.unmatchedTitles, ['剧场版 A', '剧场版 B']);
+
+    backend.entered = Completer<void>();
+    backend.enumerated = Completer<List<ScannedFile>>();
+    backend.finishMessage =
+        '完成\nmatch-result: matched=1|unmatched=1|failed=0\n'
+        'match-attempted: 1/1\nmatched: 已匹配番剧\n'
+        'unmatched: 仍然未匹配';
+    final second = coordinator.start();
+    await backend.entered.future;
+    backend.enumerated.complete(const []);
+    await second;
+    expect(coordinator.state.unmatchedTitles, ['仍然未匹配']);
+    expect(coordinator.state.matchedTitles, ['已匹配番剧']);
+    coordinator.dispose();
+  });
+
+  test('scan report separates matched titles from unmatched titles', () {
+    final facts = ScanEventFacts.parse(
+      '完成\nmatch-result: matched=1|unmatched=1|failed=0\n'
+      'matched: 已匹配番剧\nunmatched: 未匹配番剧',
+    );
+    expect(facts.matched, ['已匹配番剧']);
+    expect(facts.unmatched, ['未匹配番剧']);
+  });
 }
