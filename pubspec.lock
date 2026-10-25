@@ -889,18 +889,18 @@ packages:
     dependency: "direct main"
     description:
       name: saf_stream
-      sha256: "417501ced1caeb98958524e1a93e64be87af203395a7ba7bb1da47b19234ccf1"
+      sha256: "9a1b6f70527a52f7464c161f9cb05e8d471e71d460b987adbb94b15ed2b0e8cf"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.11.3"
+    version: "4.0.3"
   saf_util:
     dependency: "direct main"
     description:
       name: saf_util
-      sha256: af4c6e285b1b315eead6c8e210b0f45a8325238a0d8f827ebb1f59cc673ef139
+      sha256: c630df86aa412d3c5b715eb941ebefa9c97eefe31395bf45223ba5efb3862a43
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.9.0"
+    version: "3.1.1"
   safe_local_storage:
     dependency: transitive
     description:
