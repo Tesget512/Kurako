@@ -8,7 +8,8 @@ PODS:
     - FlutterMacOS
   - dynamic_color (0.0.3):
     - FlutterMacOS
-  - file_picker (0.0.1):
+  - file_picker_darwin (1.0.0):
+    - Flutter
     - FlutterMacOS
   - flutter_inappwebview_macos (0.0.1):
     - FlutterMacOS
@@ -56,7 +57,7 @@ DEPENDENCIES:
   - audio_session (from `Flutter/ephemeral/.symlinks/plugins/audio_session/macos`)
   - desktop_webview_window (from `Flutter/ephemeral/.symlinks/plugins/desktop_webview_window/macos`)
   - dynamic_color (from `Flutter/ephemeral/.symlinks/plugins/dynamic_color/macos`)
-  - file_picker (from `Flutter/ephemeral/.symlinks/plugins/file_picker/macos`)
+  - file_picker_darwin (from `Flutter/ephemeral/.symlinks/plugins/file_picker_darwin/darwin`)
   - flutter_inappwebview_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_inappwebview_macos/macos`)
   - flutter_secure_storage_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - flutter_web_auth_2 (from `Flutter/ephemeral/.symlinks/plugins/flutter_web_auth_2/macos`)
@@ -89,8 +90,8 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral/.symlinks/plugins/desktop_webview_window/macos
   dynamic_color:
     :path: Flutter/ephemeral/.symlinks/plugins/dynamic_color/macos
-  file_picker:
-    :path: Flutter/ephemeral/.symlinks/plugins/file_picker/macos
+  file_picker_darwin:
+    :path: Flutter/ephemeral/.symlinks/plugins/file_picker_darwin/darwin
   flutter_inappwebview_macos:
     :path: Flutter/ephemeral/.symlinks/plugins/flutter_inappwebview_macos/macos
   flutter_secure_storage_darwin:
@@ -133,9 +134,9 @@ SPEC CHECKSUMS:
   audio_session: 728ae3823d914f809c485d390274861a24b0904e
   desktop_webview_window: 96a659f19029a9a60377e41be01ee09457d73d35
   dynamic_color: b0b28f4bc541eb1a011f49579adedf0ff836adee
-  file_picker: e716a70a9fe5fd9e09ebc922d7541464289443af
+  file_picker_darwin: 27e043831d68462d54f1c40e724b1f53c9d1e8be
   flutter_inappwebview_macos: bdf207b8f4ebd58e86ae06cd96b147de99a67c9b
-  flutter_secure_storage_darwin: 557817588b80e60213cbecb573c45c76b788018d
+  flutter_secure_storage_darwin: 79a377dfb00a246ccab2c64fe79d4d78c89e0fbc
   flutter_web_auth_2: 3fe7e46bdb854095fec46ef73e376ddf4f2ccb73
   FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
   media_kit_libs_macos_video: b3e2bbec2eef97c285f2b1baa7963c67c753fb82
