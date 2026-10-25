@@ -10,6 +10,7 @@ import '../state/providers.dart';
 import '../widgets/cover_image.dart';
 import '../widgets/window_caption.dart';
 import 'player_page.dart';
+import '../ui/shapes.dart';
 
 /// Management page for network downloads. Downloads are grouped by anime (like
 /// the library → detail view): each anime shows its cover, and its episodes list
@@ -290,6 +291,7 @@ class _AnimeGroup extends StatelessWidget {
       (s, e) => s + e.bytesTotal.toInt(),
     );
     return Card(
+      shape: KurakoShapes.card,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
       clipBehavior: Clip.antiAlias,
       child: Column(

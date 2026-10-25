@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/external_player.dart';
 import '../services/mac_player_picker.dart';
 import '../state/providers.dart';
+import '../ui/grouped_card.dart';
 
 class PlayerSettingsPage extends ConsumerWidget {
   const PlayerSettingsPage({super.key});
@@ -19,160 +20,170 @@ class PlayerSettingsPage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _section(context, '播放行为'),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('自动续播'),
-            subtitle: const Text('打开视频时从上次观看位置继续'),
-            value: settings.autoResumePlayback,
-            onChanged: (value) => ref
-                .read(settingsProvider.notifier)
-                .setAutoResumePlayback(value),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('自动连播'),
-            subtitle: const Text('本集结束后播放下一集；关闭后返回番剧详情页'),
-            value: settings.autoPlayNext,
-            onChanged: (value) =>
-                ref.read(settingsProvider.notifier).setAutoPlayNext(value),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('使用外置播放器'),
-            subtitle: Text(
-              Platform.isAndroid
-                  ? '开启后调用系统中的外部播放器，例如 MX Player 或 VLC'
-                  : Platform.isIOS
-                  ? '通过系统“打开方式”交给 VLC、Infuse 等应用；远程视频需先下载'
-                  : '关闭则使用内置播放器（media_kit，支持硬解与字幕）',
-            ),
-            value: settings.useExternalPlayer,
-            onChanged: (value) =>
-                ref.read(settingsProvider.notifier).setUseExternalPlayer(value),
-          ),
-          if (settings.useExternalPlayer &&
-              !Platform.isAndroid &&
-              !Platform.isIOS) ...[
-            ListTile(
-              contentPadding: const EdgeInsets.only(left: 16),
-              leading: const Icon(Icons.smart_display_outlined),
-              title: const Text('选择播放器程序'),
-              subtitle: Text(
-                settings.externalPlayerPath.isEmpty
-                    ? '未选择，使用系统默认程序'
-                    : settings.externalPlayerPath,
-              ),
-              trailing: Wrap(
-                children: [
-                  if (settings.externalPlayerPath.isNotEmpty)
-                    IconButton(
-                      tooltip: '清除固定程序',
-                      icon: const Icon(Icons.clear),
-                      onPressed: () => ref
-                          .read(settingsProvider.notifier)
-                          .setExternalPlayerPath(''),
-                    ),
-                  IconButton(
-                    tooltip: '选择播放器程序',
-                    icon: const Icon(Icons.folder_open),
-                    onPressed: () => _pickPlayer(ref),
-                  ),
-                ],
-              ),
-            ),
-            if (Platform.isWindows)
-              ListTile(
-                contentPadding: const EdgeInsets.only(left: 16),
-                leading: const Icon(Icons.settings_applications_outlined),
-                title: const Text('重选系统默认程序'),
-                subtitle: const Text('打开 Windows“打开方式”选择器'),
-                trailing: const Icon(Icons.open_in_new, size: 18),
-                onTap: openWindowsProgramChooser,
-              ),
-          ],
-          const Divider(height: 32),
-          _section(context, '快进与手势'),
-          _durationSlider(
-            context,
-            title: '快进按钮：${ref.watch(seekDurationProvider)} 秒',
-            description: '播放器顶部快进按钮每次跳转的时长',
-            value: ref.watch(seekDurationProvider),
-            onChanged: (value) =>
-                ref.read(seekDurationProvider.notifier).set(value),
-          ),
-          _durationSlider(
-            context,
-            title: '双击快进/快退：${settings.gestureSeekDurationSec} 秒',
-            description: '双击画面左侧或右侧时跳转的时长，与快进按钮相互独立',
-            value: settings.gestureSeekDurationSec,
-            onChanged: (value) => ref
-                .read(settingsProvider.notifier)
-                .setGestureSeekDurationSec(value),
-          ),
-          const Divider(height: 32),
-          _section(context, '解码与画质'),
-          _decodeMode(context, ref),
-          _superResolution(context, ref, settings),
-          if (Platform.isAndroid || Platform.isIOS) ...[
-            const Divider(height: 32),
-            _section(context, '后台与系统控制'),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('后台播放'),
-              subtitle: Text(
-                Platform.isAndroid
-                    ? '切到后台或锁屏后继续播放；开启后必须同时显示系统媒体通知'
-                    : '切到后台或锁屏后继续播放音频',
-              ),
-              value: settings.backgroundPlayback,
-              onChanged: (value) => ref
-                  .read(settingsProvider.notifier)
-                  .setBackgroundPlayback(value),
-            ),
-            if (Platform.isAndroid)
+          SettingsGroupCard(
+            title: '播放行为',
+            children: [
               SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('切到后台时自动小窗播放'),
-                subtitle: const Text('离开正在播放的视频时自动进入 Android 系统画中画'),
-                value: settings.autoPictureInPicture,
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                title: const Text('自动续播'),
+                subtitle: const Text('打开视频时从上次观看位置继续'),
+                value: settings.autoResumePlayback,
                 onChanged: (value) => ref
                     .read(settingsProvider.notifier)
-                    .setAutoPictureInPicture(value),
+                    .setAutoResumePlayback(value),
               ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('系统媒体会话与锁屏控制'),
-              subtitle: Text(
-                settings.backgroundPlayback
-                    ? '后台播放依赖此功能，需先关闭后台播放才能单独关闭'
-                    : '在系统通知、控制中心和锁屏界面显示播放控制',
+              SwitchListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                title: const Text('自动连播'),
+                subtitle: const Text('本集结束后播放下一集；关闭后返回番剧详情页'),
+                value: settings.autoPlayNext,
+                onChanged: (value) =>
+                    ref.read(settingsProvider.notifier).setAutoPlayNext(value),
               ),
-              value: settings.mediaSessionEnabled,
-              onChanged: settings.backgroundPlayback
-                  ? null
-                  : (value) => ref
+              SwitchListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                title: const Text('使用外置播放器'),
+                subtitle: Text(
+                  Platform.isAndroid
+                      ? '开启后调用系统中的外部播放器，例如 MX Player 或 VLC'
+                      : Platform.isIOS
+                      ? '通过系统“打开方式”交给 VLC、Infuse 等应用；远程视频需先下载'
+                      : '关闭则使用内置播放器（media_kit，支持硬解与字幕）',
+                ),
+                value: settings.useExternalPlayer,
+                onChanged: (value) => ref
+                    .read(settingsProvider.notifier)
+                    .setUseExternalPlayer(value),
+              ),
+              if (settings.useExternalPlayer &&
+                  !Platform.isAndroid &&
+                  !Platform.isIOS) ...[
+                ListTile(
+                  contentPadding: const EdgeInsets.only(left: 16),
+                  leading: const Icon(Icons.smart_display_outlined),
+                  title: const Text('选择播放器程序'),
+                  subtitle: Text(
+                    settings.externalPlayerPath.isEmpty
+                        ? '未选择，使用系统默认程序'
+                        : settings.externalPlayerPath,
+                  ),
+                  trailing: Wrap(
+                    children: [
+                      if (settings.externalPlayerPath.isNotEmpty)
+                        IconButton(
+                          tooltip: '清除固定程序',
+                          icon: const Icon(Icons.clear),
+                          onPressed: () => ref
+                              .read(settingsProvider.notifier)
+                              .setExternalPlayerPath(''),
+                        ),
+                      IconButton(
+                        tooltip: '选择播放器程序',
+                        icon: const Icon(Icons.folder_open),
+                        onPressed: () => _pickPlayer(ref),
+                      ),
+                    ],
+                  ),
+                ),
+                if (Platform.isWindows)
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 16),
+                    leading: const Icon(Icons.settings_applications_outlined),
+                    title: const Text('重选系统默认程序'),
+                    subtitle: const Text('打开 Windows“打开方式”选择器'),
+                    trailing: const Icon(Icons.open_in_new, size: 18),
+                    onTap: openWindowsProgramChooser,
+                  ),
+              ],
+            ],
+          ),
+          SettingsGroupCard(
+            title: '快进与手势',
+            children: [
+              _durationSlider(
+                context,
+                title: '快进按钮：${ref.watch(seekDurationProvider)} 秒',
+                description: '播放器顶部快进按钮每次跳转的时长',
+                value: ref.watch(seekDurationProvider),
+                onChanged: (value) =>
+                    ref.read(seekDurationProvider.notifier).set(value),
+              ),
+              _durationSlider(
+                context,
+                title: '双击快进/快退：${settings.gestureSeekDurationSec} 秒',
+                description: '双击画面左侧或右侧时跳转的时长，与快进按钮相互独立',
+                value: settings.gestureSeekDurationSec,
+                onChanged: (value) => ref
+                    .read(settingsProvider.notifier)
+                    .setGestureSeekDurationSec(value),
+              ),
+            ],
+          ),
+          SettingsGroupCard(
+            title: '解码与画质',
+            children: [
+              _decodeMode(context, ref),
+              _superResolution(context, ref, settings),
+            ],
+          ),
+          if (Platform.isAndroid || Platform.isIOS)
+            SettingsGroupCard(
+              title: '后台与系统控制',
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                  title: const Text('后台播放'),
+                  subtitle: Text(
+                    Platform.isAndroid
+                        ? '切到后台或锁屏后继续播放；开启后必须同时显示系统媒体通知'
+                        : '切到后台或锁屏后继续播放音频',
+                  ),
+                  value: settings.backgroundPlayback,
+                  onChanged: (value) => ref
+                      .read(settingsProvider.notifier)
+                      .setBackgroundPlayback(value),
+                ),
+                if (Platform.isAndroid)
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                    title: const Text('切到后台时自动小窗播放'),
+                    subtitle: const Text('离开正在播放的视频时自动进入 Android 系统画中画'),
+                    value: settings.autoPictureInPicture,
+                    onChanged: (value) => ref
                         .read(settingsProvider.notifier)
-                        .setMediaSessionEnabled(value),
+                        .setAutoPictureInPicture(value),
+                  ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                  title: const Text('系统媒体会话与锁屏控制'),
+                  subtitle: Text(
+                    settings.backgroundPlayback
+                        ? '后台播放依赖此功能，需先关闭后台播放才能单独关闭'
+                        : '在系统通知、控制中心和锁屏界面显示播放控制',
+                  ),
+                  value: settings.mediaSessionEnabled,
+                  onChanged: settings.backgroundPlayback
+                      ? null
+                      : (value) => ref
+                            .read(settingsProvider.notifier)
+                            .setMediaSessionEnabled(value),
+                ),
+              ],
             ),
-          ],
-          const Divider(height: 32),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.restart_alt),
-            title: const Text('恢复初始设置'),
-            subtitle: const Text('仅重置本页面中的播放器选项'),
-            onTap: () => _confirmReset(context, ref),
+          SettingsGroupCard(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.restart_alt),
+                title: const Text('恢复初始设置'),
+                subtitle: const Text('仅重置本页面中的播放器选项'),
+                onTap: () => _confirmReset(context, ref),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-
-  static Widget _section(BuildContext context, String title) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-  );
 
   static Widget _durationSlider(
     BuildContext context, {

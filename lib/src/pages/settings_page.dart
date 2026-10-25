@@ -16,6 +16,7 @@ import '../services/media_source.dart';
 import '../services/scan_coordinator.dart';
 import '../services/security_scope.dart';
 import '../state/providers.dart';
+import '../ui/grouped_card.dart';
 import 'about_page.dart';
 import 'appearance_settings_page.dart';
 import 'downloads_page.dart';
@@ -46,168 +47,164 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _section(context, '番剧文件夹'),
-          foldersAsync.when(
-            loading: () => const LinearProgressIndicator(),
-            error: (e, _) => Text('加载失败: $e'),
-            data: (folders) => Column(
-              children: [
-                if (folders.length > 1)
-                  const ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.low_priority),
-                    title: Text('文件夹优先级'),
-                    subtitle: Text('拖动左侧把手调整；位置越高，同名视频越优先'),
-                  ),
-                AbsorbPointer(
-                  absorbing: sourcesBusy,
-                  child: _FolderPriorityList(
-                    folders: folders,
-                    onReorder: (ordered) async {
-                      if (ref.read(scanCoordinatorProvider).running) return;
-                      await _mutateSources(
-                        () => rust.reorderLibraryFolders(
-                          ids: Int64List.fromList(
-                            ordered.map((folder) => folder.id).toList(),
-                          ),
-                        ),
-                      );
-                    },
-                    onDelete: (folder) async {
-                      if (ref.read(scanCoordinatorProvider).running) return;
-                      await _mutateSources(
-                        () => rust.removeLibraryFolder(id: folder.id),
-                      );
-                    },
-                  ),
-                ),
-                if (scanning) const Text('扫描正在后台进行，完成后可调整媒体来源。'),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    child: PopupMenuButton<String>(
-                      enabled: !sourcesBusy,
-                      onSelected: (v) {
-                        if (ref.read(scanCoordinatorProvider).running) return;
-                        if (v == 'local') {
-                          _addFolder();
-                        } else if (v == 'smb') {
-                          _addSmbFolder();
-                        } else if (v == 'webdav') {
-                          _addWebDavFolder();
-                        }
-                      },
-                      itemBuilder: (context) => const [
-                        PopupMenuItem(
-                          value: 'local',
-                          child: ListTile(
-                            leading: Icon(Icons.folder_outlined),
-                            title: Text('本地文件夹'),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'webdav',
-                          child: ListTile(
-                            leading: Icon(Icons.cloud_outlined),
-                            title: Text('WebDAV 网络共享'),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                        PopupMenuItem(
-                          value: 'smb',
-                          child: ListTile(
-                            leading: Icon(Icons.lan_outlined),
-                            title: Text('SMB 网络共享'),
-                            contentPadding: EdgeInsets.zero,
-                          ),
-                        ),
-                      ],
-                      child: const FilledButton(
-                        onPressed: null,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.add, size: 18),
-                            SizedBox(width: 8),
-                            Text('添加文件夹'),
+          SettingsGroupCard(
+            title: '番剧文件夹',
+            children: [
+              foldersAsync.when(
+                loading: () => const LinearProgressIndicator(),
+                error: (e, _) => Text('加载失败: $e'),
+                data: (folders) => Column(
+                  children: [
+                    if (folders.length > 1)
+                      const ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.low_priority),
+                        title: Text('文件夹优先级'),
+                        subtitle: Text('拖动左侧把手调整；位置越高，同名视频越优先'),
+                      ),
+                    AbsorbPointer(
+                      absorbing: sourcesBusy,
+                      child: _FolderPriorityList(
+                        folders: folders,
+                        onReorder: (ordered) async {
+                          if (ref.read(scanCoordinatorProvider).running) return;
+                          await _mutateSources(
+                            () => rust.reorderLibraryFolders(
+                              ids: Int64List.fromList(
+                                ordered.map((folder) => folder.id).toList(),
+                              ),
+                            ),
+                          );
+                        },
+                        onDelete: (folder) async {
+                          if (ref.read(scanCoordinatorProvider).running) return;
+                          await _mutateSources(
+                            () => rust.removeLibraryFolder(id: folder.id),
+                          );
+                        },
+                      ),
+                    ),
+                    if (scanning) const Text('扫描正在后台进行，完成后可调整媒体来源。'),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: PopupMenuButton<String>(
+                          enabled: !sourcesBusy,
+                          onSelected: (v) {
+                            if (ref.read(scanCoordinatorProvider).running) {
+                              return;
+                            }
+                            if (v == 'local') {
+                              _addFolder();
+                            } else if (v == 'smb') {
+                              _addSmbFolder();
+                            } else if (v == 'webdav') {
+                              _addWebDavFolder();
+                            }
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: 'local',
+                              child: ListTile(
+                                leading: Icon(Icons.folder_outlined),
+                                title: Text('本地文件夹'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'webdav',
+                              child: ListTile(
+                                leading: Icon(Icons.cloud_outlined),
+                                title: Text('WebDAV 网络共享'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
+                            PopupMenuItem(
+                              value: 'smb',
+                              child: ListTile(
+                                leading: Icon(Icons.lan_outlined),
+                                title: Text('SMB 网络共享'),
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                            ),
                           ],
+                          child: const FilledButton(
+                            onPressed: null,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.add, size: 18),
+                                SizedBox(width: 8),
+                                Text('添加文件夹'),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SettingsGroupCard(
+            title: 'Bangumi 账号',
+            children: [_buildBangumiSection(context, settings)],
+          ),
+          SettingsGroupCard(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.play_circle_outline),
+                title: const Text('播放器'),
+                subtitle: const Text('播放行为、手势、画质、后台播放与系统控制'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const PlayerSettingsPage()),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('外观'),
+                subtitle: const Text('显示模式、主题色、缩放与字体'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const AppearanceSettingsPage(),
                   ),
                 ),
-              ],
-            ),
-          ),
-          const Divider(height: 32),
-          _section(context, 'Bangumi 账号'),
-          _buildBangumiSection(context, settings),
-          const Divider(height: 32),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.play_circle_outline),
-            title: const Text('播放器'),
-            subtitle: const Text('播放行为、手势、画质、后台播放与系统控制'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const PlayerSettingsPage()),
-            ),
-          ),
-          const Divider(height: 32),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.palette_outlined),
-            title: const Text('外观'),
-            subtitle: const Text('显示模式、主题色、缩放与字体'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AppearanceSettingsPage()),
-            ),
-          ),
-          const Divider(height: 32),
-          ListTile(
-            key: const ValueKey('settings-downloads'),
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.download_outlined),
-            title: const Text('下载管理'),
-            subtitle: const Text('播放与管理已下载到本地的网络视频'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
-          ),
-          const Divider(height: 32),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.build_outlined),
-            title: const Text('维护'),
-            subtitle: const Text('下载清理、屏蔽、配置备份与数据重置'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const MaintenancePage())),
-          ),
-          const Divider(height: 32),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.info_outline),
-            title: const Text('关于 Kurako'),
-            subtitle: const Text('版本信息、开源许可、致谢与项目主页'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () =>
-                Navigator.of(context)
+              ),
+              ListTile(
+                key: const ValueKey('settings-downloads'),
+                leading: const Icon(Icons.download_outlined),
+                title: const Text('下载管理'),
+                subtitle: const Text('播放与管理已下载到本地的网络视频'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const DownloadsPage()),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.build_outlined),
+                title: const Text('维护'),
+                subtitle: const Text('下载清理、屏蔽、配置备份与数据重置'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const MaintenancePage()),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: const Text('关于 Kurako'),
+                subtitle: const Text('版本信息、开源许可、致谢与项目主页'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context)
                     .push(MaterialPageRoute(builder: (_) => const AboutPage())),
+              ),
+            ],
           ),
         ],
       ),
-    );
-  }
-
-  Widget _section(BuildContext context, String title) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Text(title, style: Theme.of(context).textTheme.titleMedium),
     );
   }
 

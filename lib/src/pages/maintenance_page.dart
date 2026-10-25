@@ -13,6 +13,7 @@ import '../services/bangumi_mirror.dart';
 import '../services/security_scope.dart';
 import '../state/player_appearance.dart';
 import '../state/providers.dart';
+import '../ui/grouped_card.dart';
 import '../widgets/window_caption.dart';
 import 'onboarding_page.dart';
 import 'blacklist_page.dart';
@@ -52,115 +53,125 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _section(context, '下载'),
-          _buildDownloadDirRow(),
-          _buildOnboardingRow(),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.delete_forever_outlined),
-            title: const Text('清空所有已下载番剧'),
-            subtitle: const Text('删除下载管理中的全部本地视频、绑定字幕和下载记录'),
-            onTap: _maintenanceBusy ? null : _clearAllDownloads,
+          SettingsGroupCard(
+            title: '下载',
+            children: [
+              _buildDownloadDirRow(),
+              _buildOnboardingRow(),
+              ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.delete_forever_outlined),
+                title: const Text('清空所有已下载番剧'),
+                subtitle: const Text('删除下载管理中的全部本地视频、绑定字幕和下载记录'),
+                onTap: _maintenanceBusy ? null : _clearAllDownloads,
+              ),
+            ],
           ),
-          const Divider(height: 32),
-          _section(context, '内容管理'),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.content_copy_outlined),
-            title: const Text('疑似重复检查'),
-            subtitle: const Text('独立检查已扫描视频，不改变扫描、匹配或文件'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _maintenanceBusy
-                ? null
-                : () => Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => const DuplicateCheckPage(),
-                    ),
-                  ),
+          SettingsGroupCard(
+            title: '内容管理',
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.content_copy_outlined),
+                title: const Text('疑似重复检查'),
+                subtitle: const Text('独立检查已扫描视频，不改变扫描、匹配或文件'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _maintenanceBusy
+                    ? null
+                    : () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const DuplicateCheckPage(),
+                        ),
+                      ),
+              ),
+              ListTile(
+                key: const ValueKey('maintenance-blacklist'),
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.block_outlined),
+                title: const Text('屏蔽管理'),
+                subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: _maintenanceBusy
+                    ? null
+                    : () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => const BlacklistPage(),
+                        ),
+                      ),
+              ),
+            ],
           ),
-          ListTile(
-            key: const ValueKey('maintenance-blacklist'),
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.block_outlined),
-            title: const Text('屏蔽管理'),
-            subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: _maintenanceBusy
-                ? null
-                : () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const BlacklistPage()),
-                  ),
+          SettingsGroupCard(
+            title: '备份与恢复',
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: _transferringConfiguration
+                    ? const SizedBox.square(
+                        dimension: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.upload_file_outlined),
+                title: const Text('导出配置'),
+                subtitle: const Text(
+                  '导出设置、Bangumi 账号、SMB 与 WebDAV 凭证；不包含下载、媒体来源和本机路径',
+                ),
+                onTap: _maintenanceBusy ? null : _exportConfiguration,
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.file_download_outlined),
+                title: const Text('导入配置'),
+                subtitle: const Text('从 Kurako JSON 配置文件恢复可跨设备设置'),
+                onTap: _maintenanceBusy ? null : _importConfiguration,
+              ),
+            ],
           ),
-          const Divider(height: 32),
-          _section(context, '备份与恢复'),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: _transferringConfiguration
-                ? const SizedBox.square(
-                    dimension: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.upload_file_outlined),
-            title: const Text('导出配置'),
-            subtitle: const Text(
-              '导出设置、Bangumi 账号、SMB 与 WebDAV 凭证；不包含下载、媒体来源和本机路径',
-            ),
-            onTap: _maintenanceBusy ? null : _exportConfiguration,
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.file_download_outlined),
-            title: const Text('导入配置'),
-            subtitle: const Text('从 Kurako JSON 配置文件恢复可跨设备设置'),
-            onTap: _maintenanceBusy ? null : _importConfiguration,
-          ),
-          const Divider(height: 32),
-          _section(context, '重置'),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.delete_sweep_outlined),
-            title: const Text('清空番剧与匹配'),
-            subtitle: const Text('清空当前番剧、剧集和匹配结果；保留媒体来源、下载与设置'),
-            onTap: _maintenanceBusy ? null : _clearLibrary,
-          ),
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            leading: const Icon(Icons.link_off_outlined),
-            title: const Text('删除手动匹配配置'),
-            subtitle: const Text(
-              '清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
-              '下次扫描将恢复为自动分组',
-            ),
-            onTap: _maintenanceBusy ? null : _clearMatchConfig,
-          ),
-          ListTile(
-            key: const ValueKey('maintenance-reset-all'),
-            contentPadding: EdgeInsets.zero,
-            leading: _resettingConfiguration
-                ? const SizedBox.square(
-                    dimension: 24,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    Icons.restart_alt,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-            title: Text(
-              '清空所有配置',
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-            subtitle: const Text('恢复软件选项并清除账号、凭证、媒体来源、屏蔽与匹配配置；保留下载'),
-            onTap: _maintenanceBusy ? null : _clearAllConfiguration,
+          SettingsGroupCard(
+            title: '重置',
+            children: [
+              ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.delete_sweep_outlined),
+                title: const Text('清空番剧与匹配'),
+                subtitle: const Text('清空当前番剧、剧集和匹配结果；保留媒体来源、下载与设置'),
+                onTap: _maintenanceBusy ? null : _clearLibrary,
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: const Icon(Icons.link_off_outlined),
+                title: const Text('删除手动匹配配置'),
+                subtitle: const Text(
+                  '清除所有单独匹配 / 移出记录（番剧文件夹内的匹配文件及软件配置），'
+                  '下次扫描将恢复为自动分组',
+                ),
+                onTap: _maintenanceBusy ? null : _clearMatchConfig,
+              ),
+              ListTile(
+                key: const ValueKey('maintenance-reset-all'),
+                contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                leading: _resettingConfiguration
+                    ? const SizedBox.square(
+                        dimension: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        Icons.restart_alt,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                title: Text(
+                  '清空所有配置',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                subtitle: const Text('恢复软件选项并清除账号、凭证、媒体来源、屏蔽与匹配配置；保留下载'),
+                onTap: _maintenanceBusy ? null : _clearAllConfiguration,
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-
-  Widget _section(BuildContext context, String title) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-  );
 
   Widget _buildDownloadDirRow() {
     final dir = ref.watch(downloadDirProvider);
@@ -170,7 +181,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       androidLegacy: androidUsesLegacyPrivateStorage,
     );
     return ListTile(
-      contentPadding: EdgeInsets.zero,
+      contentPadding: EdgeInsets.symmetric(horizontal: 16),
       leading: const Icon(Icons.folder_outlined),
       title: const Text('下载保存位置'),
       subtitle: Text(copy.locationDescription ?? effectiveDownloadDir(dir)),
@@ -237,7 +248,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   /// deleting the source or reinstalling the app.
   Widget _buildOnboardingRow() {
     return ListTile(
-      contentPadding: EdgeInsets.zero,
+      contentPadding: EdgeInsets.symmetric(horizontal: 16),
       leading: const Icon(Icons.assistant_outlined),
       title: const Text('重新运行初始设置'),
       subtitle: Text(

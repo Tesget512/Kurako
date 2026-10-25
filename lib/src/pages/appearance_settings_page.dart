@@ -4,6 +4,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import '../ui/grouped_card.dart';
 import '../state/player_appearance.dart';
 import '../widgets/window_caption.dart';
 
@@ -19,87 +20,99 @@ class AppearanceSettingsPage extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          const Text('显示模式'),
-          const SizedBox(height: 8),
-          SegmentedButton<AppThemeMode>(
-            segments: const [
-              ButtonSegment(
-                value: AppThemeMode.system,
-                icon: Icon(Icons.brightness_auto_outlined),
-                label: Text('跟随系统'),
+          SettingsGroupCard(
+            title: '显示模式',
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: SegmentedButton<AppThemeMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: AppThemeMode.system,
+                      icon: Icon(Icons.brightness_auto_outlined),
+                      label: Text('跟随系统'),
+                    ),
+                    ButtonSegment(
+                      value: AppThemeMode.light,
+                      icon: Icon(Icons.light_mode_outlined),
+                      label: Text('浅色'),
+                    ),
+                    ButtonSegment(
+                      value: AppThemeMode.dark,
+                      icon: Icon(Icons.dark_mode_outlined),
+                      label: Text('深色'),
+                    ),
+                  ],
+                  selected: {theme.mode},
+                  onSelectionChanged: (selection) =>
+                      ref.read(themeProvider.notifier).setMode(selection.first),
+                ),
               ),
-              ButtonSegment(
-                value: AppThemeMode.light,
-                icon: Icon(Icons.light_mode_outlined),
-                label: Text('浅色'),
+              if (Platform.isAndroid)
+                SwitchListTile(
+                  title: const Text('跟随系统取色 (Monet)'),
+                  subtitle: const Text('使用 Android 12+ 壁纸动态配色，关闭后使用下方预设色'),
+                  value: theme.followSystem,
+                  onChanged: (value) =>
+                      ref.read(themeProvider.notifier).setFollowSystem(value),
+                ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                child: Text(
+                  followingColor ? '主题色（跟随系统中，暂不生效）' : '主题色',
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
               ),
-              ButtonSegment(
-                value: AppThemeMode.dark,
-                icon: Icon(Icons.dark_mode_outlined),
-                label: Text('深色'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                child: Opacity(
+                  opacity: followingColor ? 0.4 : 1,
+                  child: IgnorePointer(
+                    ignoring: followingColor,
+                    child: Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        for (var i = 0; i < kSeedPalette.length; i++)
+                          _SeedSwatch(index: i, selected: theme.seedIndex == i),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ],
-            selected: {theme.mode},
-            onSelectionChanged: (selection) =>
-                ref.read(themeProvider.notifier).setMode(selection.first),
           ),
-          const Divider(height: 32),
-          if (Platform.isAndroid)
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('跟随系统取色 (Monet)'),
-              subtitle: const Text('使用 Android 12+ 壁纸动态配色，关闭后使用下方预设色'),
-              value: theme.followSystem,
-              onChanged: (value) =>
-                  ref.read(themeProvider.notifier).setFollowSystem(value),
-            ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: Text(
-              followingColor ? '主题色（跟随系统中，暂不生效）' : '主题色',
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
+          SettingsGroupCard(
+            title: '播放器指示条颜色',
+            children: [const _PlayerGestureColors()],
           ),
-          Opacity(
-            opacity: followingColor ? 0.4 : 1,
-            child: IgnorePointer(
-              ignoring: followingColor,
-              child: Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  for (var i = 0; i < kSeedPalette.length; i++)
-                    _SeedSwatch(index: i, selected: theme.seedIndex == i),
-                ],
+          SettingsGroupCard(
+            title: '界面',
+            children: [
+              const _UiScaleControl(),
+              Consumer(
+                builder: (context, ref, _) => SwitchListTile(
+                  title: const Text('使用系统默认字体'),
+                  subtitle: const Text('关闭则使用软件内置的霞鹜文楷屏幕字体'),
+                  value: ref.watch(useSystemFontProvider),
+                  onChanged: (value) =>
+                      ref.read(useSystemFontProvider.notifier).set(value),
+                ),
               ),
-            ),
+              // Desktop only: window geometry restore (hidden on mobile).
+              if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+                Consumer(
+                  builder: (context, ref, _) => SwitchListTile(
+                    title: const Text('记住窗口大小'),
+                    subtitle: const Text('启动时恢复上次使用的窗口大小与最大化状态'),
+                    value: ref.watch(rememberWindowSizeProvider),
+                    onChanged: (value) => ref
+                        .read(rememberWindowSizeProvider.notifier)
+                        .set(value),
+                  ),
+                ),
+            ],
           ),
-          const Divider(height: 32),
-          const _PlayerGestureColors(),
-          const Divider(height: 32),
-          const _UiScaleControl(),
-          Consumer(
-            builder: (context, ref, _) => SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('使用系统默认字体'),
-              subtitle: const Text('关闭则使用软件内置的霞鹜文楷屏幕字体'),
-              value: ref.watch(useSystemFontProvider),
-              onChanged: (value) =>
-                  ref.read(useSystemFontProvider.notifier).set(value),
-            ),
-          ),
-          // Desktop only: window geometry restore (hidden on mobile).
-          if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
-            Consumer(
-              builder: (context, ref, _) => SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('记住窗口大小'),
-                subtitle: const Text('启动时恢复上次使用的窗口大小与最大化状态'),
-                value: ref.watch(rememberWindowSizeProvider),
-                onChanged: (value) =>
-                    ref.read(rememberWindowSizeProvider.notifier).set(value),
-              ),
-            ),
         ],
       ),
     );

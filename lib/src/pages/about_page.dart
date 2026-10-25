@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../build_info.dart';
 import '../state/update_provider.dart';
+import '../ui/grouped_card.dart';
 import '../widgets/update_download_dialog.dart';
 import '../widgets/window_caption.dart';
 
@@ -76,44 +77,42 @@ class _AboutPageState extends State<AboutPage> {
           ),
         ),
         const SizedBox(height: 12),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.schedule_outlined),
-          title: const Text('版本与编译时间'),
-          subtitle: FutureBuilder<PackageInfo>(
-            future: _packageInfo,
-            builder: (context, snapshot) {
-              final version = snapshot.data?.version;
-              return Text(
-                '${version == null ? '版本读取中' : '版本 $version'}\n编译时间：$kBuildTime',
-              );
-            },
-          ),
+        SettingsGroupCard(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.schedule_outlined),
+              title: const Text('版本与编译时间'),
+              subtitle: FutureBuilder<PackageInfo>(
+                future: _packageInfo,
+                builder: (context, snapshot) {
+                  final version = snapshot.data?.version;
+                  return Text(
+                    '${version == null ? '版本读取中' : '版本 $version'}\n编译时间：$kBuildTime',
+                  );
+                },
+              ),
+            ),
+            const _UpdateCheckSection(),
+            ListTile(
+              leading: const Icon(Icons.code_outlined),
+              title: const Text('GitHub 项目主页'),
+              subtitle: const Text('github.com/Tesget512/Kurako'),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () => _openProject(context),
+            ),
+            ListTile(
+              leading: const Icon(Icons.balance_outlined),
+              title: const Text('开源许可'),
+              subtitle: const Text(
+                'GNU General Public License v3.0 only（GPL-3.0-only）\n'
+                '查看 Kurako、Flutter 依赖与随附资源的详细许可。',
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _openLicenses(context),
+            ),
+            const _Acknowledgements(),
+          ],
         ),
-        const _UpdateCheckSection(),
-        const Divider(height: 32),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.code_outlined),
-          title: const Text('GitHub 项目主页'),
-          subtitle: const Text('github.com/Tesget512/Kurako'),
-          trailing: const Icon(Icons.open_in_new),
-          onTap: () => _openProject(context),
-        ),
-        const Divider(height: 32),
-        ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: const Icon(Icons.balance_outlined),
-          title: const Text('开源许可'),
-          subtitle: const Text(
-            'GNU General Public License v3.0 only（GPL-3.0-only）\n'
-            '查看 Kurako、Flutter 依赖与随附资源的详细许可。',
-          ),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () => _openLicenses(context),
-        ),
-        const Divider(height: 32),
-        const _Acknowledgements(),
       ],
     ),
   );
@@ -140,7 +139,7 @@ class _UpdateCheckSection extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ListTile(
-          contentPadding: EdgeInsets.zero,
+          contentPadding: EdgeInsets.symmetric(horizontal: 16),
           leading: const Icon(Icons.system_update_alt),
           title: const Text('检查更新'),
           subtitle: Text(statusText),
@@ -189,7 +188,7 @@ class _Acknowledgements extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       ListTile(
-        contentPadding: EdgeInsets.zero,
+        contentPadding: EdgeInsets.symmetric(horizontal: 16),
         leading: Icon(Icons.favorite_outline),
         title: Text('致谢'),
         subtitle: Text('Kurako 建立在开源软件与公共服务之上。'),

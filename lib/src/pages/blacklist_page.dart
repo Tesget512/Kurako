@@ -6,6 +6,7 @@ import '../rust/models.dart';
 import '../state/providers.dart';
 import '../services/scan_coordinator.dart';
 import '../widgets/window_caption.dart';
+import '../ui/shapes.dart';
 
 /// Settings sub-page listing blocked anime/files, with unblock actions.
 class BlacklistPage extends ConsumerStatefulWidget {
@@ -80,26 +81,32 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
             );
           }
           return ListView.builder(
+            padding: const EdgeInsets.all(12),
             itemCount: items.length,
             itemBuilder: (context, i) {
               final e = items[i];
               final isAnime = e.kind == 'anime';
-              return ListTile(
-                leading: Icon(
-                  isAnime
-                      ? Icons.video_library_outlined
-                      : Icons.insert_drive_file_outlined,
-                ),
-                title: Text(
-                  e.value,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(isAnime ? '番剧' : '视频文件'),
-                trailing: IconButton(
-                  tooltip: '解除屏蔽',
-                  icon: const Icon(Icons.remove_circle_outline),
-                  onPressed: busy ? null : () => _unblock(e),
+              return Card(
+                shape: KurakoShapes.card,
+                margin: const EdgeInsets.only(bottom: 8),
+                clipBehavior: Clip.antiAlias,
+                child: ListTile(
+                  leading: Icon(
+                    isAnime
+                        ? Icons.video_library_outlined
+                        : Icons.insert_drive_file_outlined,
+                  ),
+                  title: Text(
+                    e.value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  subtitle: Text(isAnime ? '番剧' : '视频文件'),
+                  trailing: IconButton(
+                    tooltip: '解除屏蔽',
+                    icon: const Icon(Icons.remove_circle_outline),
+                    onPressed: busy ? null : () => _unblock(e),
+                  ),
                 ),
               );
             },

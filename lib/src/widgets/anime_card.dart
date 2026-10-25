@@ -2,6 +2,7 @@ import 'package:material_ui/material_ui.dart';
 
 import '../rust/models.dart';
 import '../ui/cover_hero.dart';
+import '../ui/spring.dart';
 import 'cover_image.dart';
 
 class AnimeCard extends StatelessWidget {
@@ -42,90 +43,97 @@ class AnimeCard extends StatelessWidget {
       if (anime.airWeekday != null) _weekdays[anime.airWeekday!.toInt()],
     ];
 
-    return Card(
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Expanded(
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _cover(theme),
-                  if (anime.hasNewFiles || unmatched)
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: _fadeWithRoute(
-                        context,
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (anime.hasNewFiles)
-                              _badge(
-                                theme,
-                                '新增',
-                                theme.colorScheme.tertiaryContainer,
-                                theme.colorScheme.onTertiaryContainer,
-                              ),
-                            if (anime.hasNewFiles && unmatched)
-                              const SizedBox(height: 6),
-                            if (unmatched)
-                              _badge(
-                                theme,
-                                '待匹配',
-                                theme.colorScheme.errorContainer,
-                                theme.colorScheme.onErrorContainer,
-                              ),
-                          ],
+    // Expressive press feedback: the whole poster card springs down while
+    // pressed and springs back on release (scale only — the shape itself stays
+    // rectangular so the Hero flight to the detail page is unchanged).
+    return SpringTapScale(
+      onTap: onTap,
+      spec: KurakoSprings.snappy,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _cover(theme),
+                    if (anime.hasNewFiles || unmatched)
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: _fadeWithRoute(
+                          context,
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (anime.hasNewFiles)
+                                _badge(
+                                  theme,
+                                  '新增',
+                                  theme.colorScheme.tertiaryContainer,
+                                  theme.colorScheme.onTertiaryContainer,
+                                ),
+                              if (anime.hasNewFiles && unmatched)
+                                const SizedBox(height: 6),
+                              if (unmatched)
+                                _badge(
+                                  theme,
+                                  '待匹配',
+                                  theme.colorScheme.errorContainer,
+                                  theme.colorScheme.onErrorContainer,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                  if (collected != null)
-                    Positioned(
-                      top: 8,
-                      right: 8,
-                      child: _fadeWithRoute(
-                        context,
-                        _badge(
-                          theme,
-                          collected,
-                          theme.colorScheme.primaryContainer,
-                          theme.colorScheme.onPrimaryContainer,
+                    if (collected != null)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: _fadeWithRoute(
+                          context,
+                          _badge(
+                            theme,
+                            collected,
+                            theme.colorScheme.primaryContainer,
+                            theme.colorScheme.onPrimaryContainer,
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _displayName,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
+              Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _displayName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    infoParts.join(' · '),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
+                    const SizedBox(height: 4),
+                    Text(
+                      infoParts.join(' · '),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
