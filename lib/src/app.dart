@@ -15,6 +15,7 @@ import 'services/secure_storage_probe.dart';
 import 'state/providers.dart';
 import 'state/update_provider.dart';
 import 'widgets/update_banner.dart';
+import 'ui/shapes.dart';
 import 'ui/transitions.dart';
 
 /// Dev-only acceptance switch: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
@@ -259,9 +260,9 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
 
   ThemeData _theme(ColorScheme scheme, {required bool systemFont}) {
     final base = ThemeData(
-      useMaterial3: true,
       colorScheme: scheme,
       pageTransitionsTheme: kPageTransitionsTheme,
+      cardTheme: CardThemeData(shape: KurakoShapes.card),
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
       // instead of the system fallback chain. When the user opts into the
       // system font on Windows, use ONE real system font — 'Microsoft YaHei
@@ -339,13 +340,17 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
         // their背景 tint. Re-seed from the Monet primary instead — keeps the
         // wallpaper hue, fills every role.
         final Color seed = useDynamic ? lightDynamic.primary : theme.seedColor;
+        // Expressive variant: pastel, medium-chroma palettes — the M3E color
+        // language for 1.2.0.
         final light = ColorScheme.fromSeed(
           seedColor: seed,
           brightness: Brightness.light,
+          dynamicSchemeVariant: DynamicSchemeVariant.expressive,
         );
         final dark = ColorScheme.fromSeed(
           seedColor: seed,
           brightness: Brightness.dark,
+          dynamicSchemeVariant: DynamicSchemeVariant.expressive,
         );
         return MaterialApp(
           // The update banner is mounted in `builder`, above the navigator, so
