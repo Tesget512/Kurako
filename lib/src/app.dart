@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io' show File, Platform;
 
 import 'package:dynamic_color/dynamic_color.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -369,6 +369,13 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
                 ],
               );
             }
+            // The vendored media_kit_video controls (and any other dependency
+            // still on the legacy SDK material library) resolve their theme and
+            // localizations through this bridge inside a material_ui tree.
+            // Deprecated on purpose: a temporary migration utility — remove
+            // once third_party/media_kit_video moves to material_ui (stage D).
+            // ignore: deprecated_member_use
+            content = MaterialUiCompatibilityBridge(child: content);
             if (scalePercent == 100) return content;
             // UI scale: render at logical size / f then scale up — vector
             // rendering keeps text crisp at any percentage.

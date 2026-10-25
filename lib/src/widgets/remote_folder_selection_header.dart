@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// A persistent path row for remote-folder pickers. The confirmation action
 /// stays above the scrolling directory contents instead of living at the end of

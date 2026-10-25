@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../services/bangumi_mirror.dart';
 import '../services/bangumi_mirror_web_host.dart';

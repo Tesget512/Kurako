@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Coordinates and bounds are in the controls root's logical pixels.
 Rect playerLevelIndicatorRect({

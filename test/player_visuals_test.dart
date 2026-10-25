@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurako/src/services/configuration_backup.dart';
 import 'package:kurako/src/state/player_appearance.dart';

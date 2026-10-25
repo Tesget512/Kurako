@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Horizontal page inset shared by phone, tablet, and desktop layouts.
 double adaptiveContentInset(BuildContext context) {

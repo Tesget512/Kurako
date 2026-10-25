@@ -36,6 +36,12 @@ dependencies:
   # Rust bridge
   flutter_rust_bridge: 2.13.0
 
+  # Material design system, decoupled from the SDK (the SDK's
+  # package:flutter/material.dart is deprecated for removal). Sources the
+  # M3 Expressive shapes and the compatibility bridge for vendored packages
+  # that still import the legacy SDK material library.
+  material_ui: ^1.8.0
+
   # Video player (libmpv, hardware decoding + subtitles)
   media_kit: ^1.2.0
   # Local, pinned patch: a single tap shows controls, but a double-tap seek
@@ -96,7 +102,7 @@ dependencies:
   flutter_cache_manager: ^3.4.1
 
   # Network cover images
-  cached_network_image: ^3.4.1
+  cached_network_image: ^4.0.4
 
   # Cross-platform DNS-SD / Bonjour discovery. Platform plugins only expose
   # the OS multicast service; server selection and SMB sessions stay in Dart/Rust.
@@ -115,7 +121,7 @@ dependencies:
   flutter_secure_storage: ^11.2.0
 
   # Material You / Monet dynamic color (Android 12+)
-  dynamic_color: ^1.7.0
+  dynamic_color: ^2.1.0
 
   # Android native picture-in-picture (small window)
   simple_pip_mode: ^1.1.0
@@ -129,6 +135,7 @@ dependencies:
   audio_service: ^0.18.19
   audio_session: ^0.2.4
 
+  cupertino_ui: any
 dependency_overrides:
   flutter_inappwebview_android:
     path: third_party/flutter_inappwebview_android
