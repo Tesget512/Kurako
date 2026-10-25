@@ -12,6 +12,7 @@ import 'package:kurako/src/widgets/window_caption.dart';
 class _ChannelLog {
   final calls = <String>[];
   bool maximized = false;
+  bool fullscreen = false;
 
   Future<Object?> handle(MethodCall call) async {
     calls.add(call.method);
@@ -22,6 +23,12 @@ class _ChannelLog {
         maximized = true;
       case 'unmaximize':
         maximized = false;
+      case 'isFullScreen':
+        return fullscreen;
+      case 'setFullScreen':
+        final args = call.arguments;
+        fullscreen = args is bool ? args : (args is List && args.isNotEmpty);
+        return null;
     }
     return null;
   }
@@ -94,6 +101,25 @@ void main() {
       1,
       reason: 'two quick taps on empty space must toggle maximize exactly once',
     );
+  });
+
+  testWidgets('double tap in native fullscreen exits fullscreen instead', (
+    tester,
+  ) async {
+    final log = _installChannel()..fullscreen = true;
+    await tester.pumpWidget(
+      _host(
+        const WindowDragArea(child: SizedBox(width: 300, height: 40)),
+      ),
+    );
+    await tester.tap(find.byType(WindowDragArea));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.byType(WindowDragArea));
+    await tester.pumpAndSettle();
+    // The double-click must have left fullscreen, not touched maximize.
+    expect(log.calls, contains('setFullScreen'));
+    expect(log.calls.where((m) => m == 'maximize'), isEmpty);
+    expect(log.fullscreen, isFalse);
   });
 
   testWidgets('panning the drag area starts a window drag', (tester) async {

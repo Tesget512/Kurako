@@ -323,6 +323,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       _pip = SimplePip();
     }
     if (!_isMobile) windowManager.addListener(this);
+    // The fullscreen button icon tracks _fullscreen; fullscreen can also be
+    // left from the window caption (maximize button / title-bar double-click)
+    // without going through _fullscreenController, and window_manager emits
+    // no native fullscreen events to refresh it. Sync on that notification.
+    fullscreenExitNotifier.addListener(_syncFullscreenFromWindow);
     _listen();
     // A back gesture or any other pop we did not initiate still has to restore
     // the system chrome, and it must happen while the route is animating out —
@@ -355,6 +360,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     if (!mounted) return;
     await _syncMediaSession(settings);
     if (mounted) _scheduleOpen(debounceRemote: false);
+  }
+
+  /// The window left fullscreen from outside this page's own toggle (window
+  /// caption maximize button / title-bar double-click) — mirror it so the
+  /// fullscreen button icon stays truthful.
+  void _syncFullscreenFromWindow() {
+    if (!mounted) return;
+    if (_fullscreen.value) _fullscreen.value = false;
   }
 
   @override
@@ -1408,6 +1421,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     }
     _fullscreenController.dispose();
     if (!_isMobile) windowManager.removeListener(this);
+    fullscreenExitNotifier.removeListener(_syncFullscreenFromWindow);
     _route?.animation?.removeStatusListener(_onRouteStatus);
     _fullscreen.dispose();
     super.dispose();

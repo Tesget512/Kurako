@@ -8,7 +8,30 @@ import 'package:window_manager/window_manager.dart';
 bool get useCustomCaption =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
+/// Notifies when the window left native fullscreen through one of the
+/// window-caption entry points (maximize button, title-bar double-click).
+///
+/// window_manager 0.5.2 never emits enter/leave-full-screen events (the
+/// native plugins only report close/maximize/resize/move/focus/blur), so a
+/// page that tracks fullscreen state itself — the player, whose fullscreen
+/// button icon depends on it — cannot learn about fullscreen changes made
+/// outside its own toggle. Subscribing here closes that gap.
+final FullscreenExitNotifier fullscreenExitNotifier = FullscreenExitNotifier();
+
+class FullscreenExitNotifier extends ChangeNotifier {
+  void notifyFullscreenExited() => notifyListeners();
+}
+
 Future<void> _toggleMaximize() async {
+  // In native fullscreen the maximize/restore button must act like the
+  // player's fullscreen button — leaving fullscreen. The plain maximize
+  // calls have no effect while the window fills the screen, which made the
+  // button (and the title-bar double-click) dead in that state.
+  if (await windowManager.isFullScreen()) {
+    await windowManager.setFullScreen(false);
+    fullscreenExitNotifier.notifyFullscreenExited();
+    return;
+  }
   if (await windowManager.isMaximized()) {
     await windowManager.unmaximize();
   } else {
