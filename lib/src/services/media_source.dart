@@ -133,7 +133,7 @@ class LocalMediaSource extends MediaSource {
   @override
   Future<String?> pickFolder() => Platform.isIOS
       ? IosPlatform.pickLibraryFolder()
-      : FilePicker.platform.getDirectoryPath();
+      : FilePicker.getDirectoryPath();
 
   @override
   Future<List<ScannedFile>> enumerate(

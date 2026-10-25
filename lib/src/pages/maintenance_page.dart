@@ -208,7 +208,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
                           return;
                         }
                       } else {
-                        picked = await FilePicker.platform.getDirectoryPath();
+                        picked = await FilePicker.getDirectoryPath();
                         if (picked != null) {
                           try {
                             await SecurityScope.retain(picked);
@@ -290,16 +290,12 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
         now.month.toString().padLeft(2, '0'),
         now.day.toString().padLeft(2, '0'),
       ].join();
-      final mobile = Platform.isAndroid || Platform.isIOS;
-      final path = await FilePicker.platform.saveFile(
+      final saved = await FilePicker.saveFile(
         dialogTitle: '导出 Kurako 配置',
         fileName: 'Kurako-Configuration-$stamp.json',
-        type: FileType.custom,
-        allowedExtensions: const ['json'],
-        bytes: mobile ? bytes : null,
+        bytes: bytes,
       );
-      if (path == null) return;
-      if (!mobile) await File(path).writeAsBytes(bytes, flush: true);
+      if (saved == null) return;
       _snack('配置已导出（含账号、SMB 与 WebDAV 凭证）');
     } catch (error) {
       _snack('导出配置失败：$error');
@@ -313,14 +309,13 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     var reserved = false;
     setState(() => _transferringConfiguration = true);
     try {
-      final result = await FilePicker.platform.pickFiles(
+      final files = await FilePicker.pickFiles(
         dialogTitle: '导入 Kurako 配置',
         type: FileType.custom,
         allowedExtensions: const ['json'],
-        withData: false,
       );
-      if (result == null) return;
-      final file = result.files.single;
+      if (files.isEmpty) return;
+      final file = files.first;
       final bytes = await _readConfigurationFile(file);
       final document = ConfigurationBackupDocument.parse(utf8.decode(bytes));
       if (!mounted) return;
@@ -418,7 +413,10 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   }
 
   Future<Uint8List> _readConfigurationFile(PlatformFile file) async {
-    if (file.size > _maxConfigurationBytes) {
+    // v13 exposes the size asynchronously and may not know it up front; the
+    // streamed read below still enforces the hard cap in that case.
+    final length = await file.length();
+    if (length != null && length > _maxConfigurationBytes) {
       throw const FormatException('配置文件超过 1 MiB 限制');
     }
     final path = file.path;

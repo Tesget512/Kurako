@@ -274,11 +274,11 @@ class PlayerSettingsPage extends ConsumerWidget {
     if (Platform.isMacOS) {
       path = await MacPlayerPicker().pickApplication();
     } else {
-      final result = await FilePicker.platform.pickFiles(
+      final files = await FilePicker.pickFiles(
         type: FileType.any,
         allowedExtensions: Platform.isWindows ? const ['exe'] : null,
       );
-      path = result?.files.single.path;
+      path = files.isEmpty ? null : files.first.path;
     }
     if (path == null) return;
     await ref.read(settingsProvider.notifier).setExternalPlayerPath(path);

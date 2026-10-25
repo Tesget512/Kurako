@@ -153,7 +153,7 @@ class _UpdateDownloadDialogState extends ConsumerState<_UpdateDownloadDialog> {
           throw const FileSystemException('share sheet unavailable');
         }
       } else if (Platform.isAndroid) {
-        final destination = await FilePicker.platform.saveFile(
+        final destination = await FilePicker.saveFile(
           dialogTitle: '导出更新包',
           fileName: p.basename(path),
           bytes: await File(path).readAsBytes(),

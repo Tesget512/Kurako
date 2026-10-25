@@ -34,9 +34,7 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   # Rust bridge
-  flutter_rust_bridge:
-    hosted: https://pub.flutter-io.cn
-    version: 2.13.0
+  flutter_rust_bridge: 2.13.0
 
   # Video player (libmpv, hardware decoding + subtitles)
   media_kit: ^1.2.0
@@ -47,7 +45,7 @@ dependencies:
   media_kit_libs_video: ^1.0.6
   # Keep long scans awake; the player already brings this plugin transitively,
   # but scan_progress_sheet imports it directly so it must be declared here.
-  wakelock_plus: ^1.5.2
+  wakelock_plus: ^1.8.2
   # media_kit_video supplies gesture code but only depends on Android's
   # brightness implementation. Add the federated package so iOS/iPadOS gets
   # its UIScreen brightness plugin too.
@@ -57,7 +55,7 @@ dependencies:
   flutter_riverpod: ^2.6.1
 
   # Folder picker
-  file_picker: ^10.3.3
+  file_picker: ^13.2.0
 
   # Android Storage Access Framework: pick a directory tree, enumerate files,
   # and read via file descriptor. Only used on Android; no-op elsewhere.
@@ -66,7 +64,7 @@ dependencies:
 
   # Android intents — hand a content:// video URI to an external player app
   # via ACTION_VIEW. Android-only.
-  android_intent_plus: ^5.3.0
+  android_intent_plus: ^6.1.0
 
   # Open the system browser (OAuth authorize URL) — cross-platform.
   url_launcher: ^6.3.0
@@ -87,7 +85,7 @@ dependencies:
   # App data directory
   path_provider: ^2.1.5
   path: ^1.9.0
-  package_info_plus: ^9.0.1
+  package_info_plus: ^10.2.2
 
   # SHA-256 verification of downloaded update packages. GitHub publishes a
   # sha256 digest for each release asset; this checks it before publishing the
@@ -109,11 +107,12 @@ dependencies:
 
   # Secure credential storage for the Bangumi personal access token login.
   # Keychain (Apple), Keystore (Android), DPAPI (Windows) and libsecret/
-  # Secret Service (Linux). Pinned to the 10.x stable line: 11.x needs
-  # win32 ^6, which conflicts with package_info_plus 9.x (win32 ^5).
+  # Secret Service (Linux). 11.x rides on win32 6 together with
+  # package_info_plus 10.x; we never used the v10-deprecated options
+  # (encryptedSharedPreferences etc.), so no data migration is needed.
   # No plaintext fallback: if the platform store is unavailable the PAT login
   # path fails with an explicit error.
-  flutter_secure_storage: ^10.3.4
+  flutter_secure_storage: ^11.2.0
 
   # Material You / Monet dynamic color (Android 12+)
   dynamic_color: ^1.7.0

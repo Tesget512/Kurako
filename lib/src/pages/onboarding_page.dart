@@ -133,7 +133,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
       if (Platform.isMacOS) {
         picked = await SecurityScope.pickAndRetainFolder();
       } else {
-        picked = await FilePicker.platform.getDirectoryPath();
+        picked = await FilePicker.getDirectoryPath();
         if (picked != null) {
           // Non-macOS has no bookmark; retain is a no-op there.
           await SecurityScope.retain(picked);

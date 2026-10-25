@@ -2578,9 +2578,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
   /// Manual subtitle pick — any subtitle file on the device.
   Future<void> _pickSubtitleFile() async {
-    FilePickerResult? result;
+    List<PlatformFile> files;
     try {
-      result = await FilePicker.platform.pickFiles(
+      files = await FilePicker.pickFiles(
         type: FileType.custom,
         allowedExtensions: [
           'ass',
@@ -2599,7 +2599,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     } catch (_) {
       return;
     }
-    final path = result?.files.single.path;
+    final path = files.isEmpty ? null : files.first.path;
     if (path == null) return;
     final name = path.replaceAll('\\', '/').split('/').last;
     await _loadExtSub(SubtitleCandidate(fileName: name, uri: path));
