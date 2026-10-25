@@ -292,27 +292,27 @@ fn validate_listing_properties(bytes: &[u8]) -> Result<()> {
     loop {
         match reader.read_event()? {
             Event::Start(tag) => match tag.local_name().as_ref() {
-                b"response" => known_type = false,
-                b"propstat" => {
+                "response" => known_type = false,
+                "propstat" => {
                     in_block = true;
                     block_type = false;
                     block_size = false;
                     status.clear();
                 }
-                b"status" if in_block => in_status = true,
-                b"resourcetype" if in_block => block_type = true,
-                b"getcontentlength" if in_block => block_size = true,
+                "status" if in_block => in_status = true,
+                "resourcetype" if in_block => block_type = true,
+                "getcontentlength" if in_block => block_size = true,
                 _ => {}
             },
             Event::Empty(tag) if in_block => match tag.local_name().as_ref() {
-                b"resourcetype" => block_type = true,
-                b"getcontentlength" => block_size = true,
+                "resourcetype" => block_type = true,
+                "getcontentlength" => block_size = true,
                 _ => {}
             },
-            Event::Text(text) if in_status => status.push_str(&text.decode()?),
+            Event::Text(text) if in_status => status.push_str(text.as_ref()),
             Event::End(tag) => match tag.local_name().as_ref() {
-                b"status" => in_status = false,
-                b"propstat" => {
+                "status" => in_status = false,
+                "propstat" => {
                     let success = status
                         .split_whitespace()
                         .nth(1)
@@ -324,7 +324,7 @@ fn validate_listing_properties(bytes: &[u8]) -> Result<()> {
                     known_type |= success && block_type;
                     in_block = false;
                 }
-                b"response" if !known_type => {
+                "response" if !known_type => {
                     anyhow::bail!("WebDAV 项目缺少成功的资源类型，保留既有索引")
                 }
                 _ => {}

@@ -25,9 +25,9 @@ const TCP_PROBE_CONCURRENCY: usize = 64;
 const MAX_SCAN_NETWORKS: usize = 3;
 const MAX_DATAGRAM_BYTES: usize = 64 * 1024;
 const MAX_RESULTS: usize = 64;
-const SOAP_ENVELOPE_NS: &[u8] = b"http://www.w3.org/2003/05/soap-envelope";
-const WS_ADDRESSING_NS: &[u8] = b"http://schemas.xmlsoap.org/ws/2004/08/addressing";
-const WS_DISCOVERY_NS: &[u8] = b"http://schemas.xmlsoap.org/ws/2005/04/discovery";
+const SOAP_ENVELOPE_NS: &str = "http://www.w3.org/2003/05/soap-envelope";
+const WS_ADDRESSING_NS: &str = "http://schemas.xmlsoap.org/ws/2004/08/addressing";
+const WS_DISCOVERY_NS: &str = "http://schemas.xmlsoap.org/ws/2005/04/discovery";
 const PROBE_MATCHES_ACTION: &str = "http://schemas.xmlsoap.org/ws/2005/04/discovery/ProbeMatches";
 static PROBE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -262,16 +262,16 @@ fn probe_message() -> (String, String) {
 fn parse_probe_response(bytes: &[u8], expected_message_id: &str) -> Vec<DiscoveredServer> {
     #[derive(Clone)]
     struct Element {
-        local: Vec<u8>,
-        namespace: Option<Vec<u8>>,
+        local: String,
+        namespace: Option<String>,
     }
 
-    fn suffix_is(stack: &[Element], suffix: &[&[u8]]) -> bool {
+    fn suffix_is(stack: &[Element], suffix: &[&str]) -> bool {
         stack.len() >= suffix.len()
             && stack[stack.len() - suffix.len()..]
                 .iter()
                 .zip(suffix)
-                .all(|(element, local)| element.local.as_slice() == *local)
+                .all(|(element, local)| element.local.as_str() == *local)
     }
 
     let mut reader = NsReader::from_reader(bytes);
@@ -286,18 +286,18 @@ fn parse_probe_response(bytes: &[u8], expected_message_id: &str) -> Vec<Discover
         match reader.read_resolved_event() {
             Ok((resolved, Event::Start(start))) => {
                 let namespace = match resolved {
-                    ResolveResult::Bound(Namespace(value)) => Some(value.to_vec()),
+                    ResolveResult::Bound(Namespace(value)) => Some(value.to_string()),
                     _ => None,
                 };
                 stack.push(Element {
-                    local: start.local_name().as_ref().to_vec(),
+                    local: start.local_name().as_ref().to_string(),
                     namespace,
                 });
                 if stack.len() == 1 {
-                    valid_envelope = stack[0].local == b"Envelope"
+                    valid_envelope = stack[0].local == "Envelope"
                         && stack[0].namespace.as_deref() == Some(SOAP_ENVELOPE_NS);
                 }
-                if suffix_is(&stack, &[b"Body", b"ProbeMatches"])
+                if suffix_is(&stack, &["Body", "ProbeMatches"])
                     && stack
                         .last()
                         .and_then(|element| element.namespace.as_deref())
@@ -307,28 +307,23 @@ fn parse_probe_response(bytes: &[u8], expected_message_id: &str) -> Vec<Discover
                 }
             }
             Ok((_, Event::Text(text))) => {
-                let Ok(value) = text.decode() else {
-                    continue;
-                };
-                let value = value.trim();
+                let value = text.as_ref().trim();
                 if value.is_empty() {
                     continue;
                 }
                 let Some(element) = stack.last() else {
                     continue;
                 };
-                if suffix_is(&stack, &[b"Header", b"Action"])
+                if suffix_is(&stack, &["Header", "Action"])
                     && element.namespace.as_deref() == Some(WS_ADDRESSING_NS)
                 {
                     action.push_str(value);
-                } else if suffix_is(&stack, &[b"Header", b"RelatesTo"])
+                } else if suffix_is(&stack, &["Header", "RelatesTo"])
                     && element.namespace.as_deref() == Some(WS_ADDRESSING_NS)
                 {
                     relates_to.push_str(value);
-                } else if suffix_is(
-                    &stack,
-                    &[b"Body", b"ProbeMatches", b"ProbeMatch", b"XAddrs"],
-                ) && element.namespace.as_deref() == Some(WS_DISCOVERY_NS)
+                } else if suffix_is(&stack, &["Body", "ProbeMatches", "ProbeMatch", "XAddrs"])
+                    && element.namespace.as_deref() == Some(WS_DISCOVERY_NS)
                 {
                     xaddrs.extend(value.split_whitespace().map(str::to_string));
                 }

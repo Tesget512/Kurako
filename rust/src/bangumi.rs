@@ -1967,8 +1967,6 @@ struct CollectionPage {
     data: Vec<RawUserCollection>,
     total: i64,
     #[serde(default)]
-    limit: i64,
-    #[serde(default)]
     offset: i64,
 }
 
