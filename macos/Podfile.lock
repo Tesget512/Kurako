@@ -6,7 +6,7 @@ PODS:
     - FlutterMacOS
   - desktop_webview_window (0.0.1):
     - FlutterMacOS
-  - dynamic_color (0.0.2):
+  - dynamic_color (0.0.3):
     - FlutterMacOS
   - file_picker (0.0.1):
     - FlutterMacOS
@@ -42,7 +42,7 @@ PODS:
     - FlutterMacOS
   - url_launcher_macos (0.0.1):
     - FlutterMacOS
-  - volume_controller (0.0.1):
+  - volume_controller (3.7.0):
     - FlutterMacOS
   - wakelock_plus (0.0.1):
     - FlutterMacOS
@@ -132,12 +132,12 @@ SPEC CHECKSUMS:
   audio_service: cab6c1a0eaf01b5a35b567e11fa67d3cc1956910
   audio_session: 728ae3823d914f809c485d390274861a24b0904e
   desktop_webview_window: 96a659f19029a9a60377e41be01ee09457d73d35
-  dynamic_color: 5fdff3953fb3457311091863f72914fc76ea3209
+  dynamic_color: b0b28f4bc541eb1a011f49579adedf0ff836adee
   file_picker: e716a70a9fe5fd9e09ebc922d7541464289443af
   flutter_inappwebview_macos: bdf207b8f4ebd58e86ae06cd96b147de99a67c9b
   flutter_secure_storage_darwin: 557817588b80e60213cbecb573c45c76b788018d
   flutter_web_auth_2: 3fe7e46bdb854095fec46ef73e376ddf4f2ccb73
-  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
   media_kit_libs_macos_video: b3e2bbec2eef97c285f2b1baa7963c67c753fb82
   media_kit_video: c75b07f14d59706c775778e4dd47dd027de8d1e5
   nsd_macos: b1efff8f5ccfba511f8cf35c3fd91e333657927f
@@ -146,14 +146,14 @@ SPEC CHECKSUMS:
   rust_lib_kurako: 0f0b2608e4d0ef5d7f44824969eb7692d5d76582
   screen_brightness_macos: ffe1baaf6e68589b8bd446385adbbe69697cfc09
   screen_retriever_macos: 038d3f7b34a779b06f536842003e41e8ec1fb4b7
-  shared_preferences_foundation: 5086985c1d43c5ba4d5e69a4e8083a389e2909e6
+  shared_preferences_foundation: 9a36184bb1299692bf7b972bd6c60ab373084504
   sqflite_darwin: 5a7236e3b501866c1c9befc6771dfd73ffb8702d
   url_launcher_macos: 175a54c831f4375a6cf895875f716ee5af3888ce
-  volume_controller: 90a5978956cf18ebb7739bf5382fc1b0cfef66d0
+  volume_controller: ba99c2eeeb26274404153a7624fb9334f45447f1
   wakelock_plus: 9d63063ffb7af1c215209769067c57103bde719d
   window_manager: e25faf20d88283a0d46e7b1a759d07261ca27575
   window_to_front: cab51effb75e4d4236ca4fcb50998880d4deb888
 
-PODFILE CHECKSUM: 54d867c82ac51cbd61b565781b9fada492027009
+PODFILE CHECKSUM: 1e95c36afbfd1cb6423ceca4de7a8e1b256fb6ac
 
 COCOAPODS: 1.17.0

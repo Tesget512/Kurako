@@ -18,6 +18,11 @@ analyzer:
     - third_party/flutter_inappwebview_android/**
     # Local-only AI notes and rollback backups; never part of the build.
     - to codex/**
+    - android/**
+    - ios/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   # The lint rules applied to this project can be customized in the
