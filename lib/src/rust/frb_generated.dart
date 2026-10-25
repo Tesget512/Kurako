@@ -6,13 +6,17 @@
 import 'api.dart';
 import 'api/mirror.dart';
 import 'api/update.dart';
+
 import 'dart:async';
 import 'dart:convert';
+
 import 'frb_generated.dart';
 import 'frb_generated.io.dart'
     if (dart.library.js_interop) 'frb_generated.web.dart';
 import 'models.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
+
 import 'update.dart';
 
 /// Main entrypoint of the Rust API

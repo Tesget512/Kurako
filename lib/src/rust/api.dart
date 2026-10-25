@@ -5,6 +5,7 @@
 
 import 'frb_generated.dart';
 import 'models.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `binding_survivor`, `configured_download_directory`, `download_error`, `download_match_is_valid`, `ensure_anime_for_subject`, `finish_scan_session`, `import_scan_manual_matches`, `now_secs`, `persist_match`, `process_groups`, `process_scanned_folder`, `prune_prefixes_for`, `reconcile_existing_folder`, `recover_download_records`, `recover_exact_download`, `refresh_one`, `smb_subdir_of`, `store_subject_binding`, `sync_collections_inner`, `tokio_file_from_fd`

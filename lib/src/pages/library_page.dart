@@ -230,9 +230,8 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
                 children: [
                   Text(
                     section.label,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(width: 8),
                   Text(
@@ -322,24 +321,21 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
   }
 
   Future<void> _syncCollections(BuildContext context, WidgetRef ref) async {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('正在同步 Bangumi 收藏状态…')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('正在同步 Bangumi 收藏状态…')));
     try {
       final n = await rust.syncCollections();
       ref.invalidate(animeListProvider);
       if (context.mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('收藏状态已同步（$n 部）')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('收藏状态已同步（$n 部）')));
       }
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('同步失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('同步失败: $e')));
       }
     }
   }

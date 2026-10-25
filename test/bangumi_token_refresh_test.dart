@@ -252,31 +252,25 @@ void main() {
     expect(notifier.state.bangumiToken, 'current-access');
   });
 
-  test(
-    'opening login invalidates renewal and pauses resume until authorization ends',
-    () async {
-      _seed();
-      final response = Completer<OAuthResult>();
-      final backend = _Backend()..request = (_) => response.future;
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
-      );
-      addTearDown(notifier.dispose);
-      final refresh = notifier.ensureFreshBangumiToken(force: true);
-      await _settle();
-      notifier.beginBangumiLogin();
-      await notifier.ensureFreshBangumiToken(force: true);
-      response.complete(_result('stale'));
-      await refresh;
-      expect(notifier.state.bangumiToken, 'old-access');
-      expect(backend.requests, hasLength(1));
-      notifier.endBangumiLogin();
-      backend.request = (_) async => _result('resumed');
-      await notifier.ensureFreshBangumiToken(force: true);
-      expect(notifier.state.bangumiToken, 'resumed-access');
-    },
-  );
+  test('opening login invalidates renewal and pauses resume until authorization ends', () async {
+    _seed();
+    final response = Completer<OAuthResult>();
+    final backend = _Backend()..request = (_) => response.future;
+    final notifier = SettingsNotifier(refreshBackend: backend, now: () => _now);
+    addTearDown(notifier.dispose);
+    final refresh = notifier.ensureFreshBangumiToken(force: true);
+    await _settle();
+    notifier.beginBangumiLogin();
+    await notifier.ensureFreshBangumiToken(force: true);
+    response.complete(_result('stale'));
+    await refresh;
+    expect(notifier.state.bangumiToken, 'old-access');
+    expect(backend.requests, hasLength(1));
+    notifier.endBangumiLogin();
+    backend.request = (_) async => _result('resumed');
+    await notifier.ensureFreshBangumiToken(force: true);
+    expect(notifier.state.bangumiToken, 'resumed-access');
+  });
 
   test(
     'dispose during request does not update state, disk, runtime or metadata',

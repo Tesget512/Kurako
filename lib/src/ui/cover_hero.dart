@@ -109,16 +109,14 @@ Rect? _boxRectInRoute(BuildContext context) {
 Rect? _viewportRectInRoute(BuildContext heroContext) {
   final heroBox = heroContext.findRenderObject();
   final viewport = RenderAbstractViewport.maybeOf(heroBox);
-  final routeBox = ModalRoute.of(
-    heroContext,
-  )?.subtreeContext?.findRenderObject();
+  final routeBox = ModalRoute.of(heroContext)?.subtreeContext
+      ?.findRenderObject();
   return _boxRectInAncestor(viewport, routeBox);
 }
 
 Rect? _navigatorRect(BuildContext flightContext) {
-  final navigatorBox = Navigator.maybeOf(
-    flightContext,
-  )?.context.findRenderObject();
+  final navigatorBox = Navigator.maybeOf(flightContext)?.context
+      .findRenderObject();
   if (navigatorBox is! RenderBox ||
       !navigatorBox.attached ||
       !navigatorBox.hasSize ||

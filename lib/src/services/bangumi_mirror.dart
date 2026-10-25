@@ -129,12 +129,11 @@ String normalizeBangumiCoverUrl(String raw, {required bool mirror}) {
       .toString();
 }
 
-typedef ConfigureMirrorProof =
-    Future<void> Function({
-      required String apiCookie,
-      required String imageCookie,
-      required String userAgent,
-    });
+typedef ConfigureMirrorProof = Future<void> Function({
+  required String apiCookie,
+  required String imageCookie,
+  required String userAgent,
+});
 
 /// Main binds the FRB functions once after RustLib.init; this module never calls
 /// generated interfaces before that initialization or invokes OAuth endpoints.

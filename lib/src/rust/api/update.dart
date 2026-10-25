@@ -5,6 +5,7 @@
 
 import '../frb_generated.dart';
 import '../update.dart';
+
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 /// Fetch the latest stable official release. None means no stable release exists.

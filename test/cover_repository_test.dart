@@ -21,12 +21,11 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     BangumiMirrorService.instance.bindBackend(
       BangumiMirrorBackend(
-        configure:
-            ({
-              required apiCookie,
-              required imageCookie,
-              required userAgent,
-            }) async {},
+        configure: ({
+          required apiCookie,
+          required imageCookie,
+          required userAgent,
+        }) async {},
         probeApi: () async => mirror,
         probeImage: (_) async {},
         setEnabled: (_) async {},

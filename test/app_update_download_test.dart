@@ -357,14 +357,13 @@ void main() {
       url: 'https://example.com/$_assetName',
     );
     await expectLater(
-      downloader(
-        (_) async => _FakeResponse(statusCode: 200, contentLength: 12),
-      ).download(
-        release: releaseWith([bad]),
-        asset: bad,
-        operation: UpdateDownloadOperation(),
-        onProgress: (_, _) {},
-      ),
+      downloader((_) async => _FakeResponse(statusCode: 200, contentLength: 12))
+          .download(
+            release: releaseWith([bad]),
+            asset: bad,
+            operation: UpdateDownloadOperation(),
+            onProgress: (_, _) {},
+          ),
       throwsA(isA<FormatException>()),
     );
   });

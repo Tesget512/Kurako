@@ -68,19 +68,22 @@ abstract interface class MirrorWebHost {
 }
 
 typedef MirrorLoadCallback = void Function(int generation, Uri? uri);
-typedef MirrorLoadErrorCallback =
-    void Function(int generation, MirrorWebLoadError error);
-typedef MirrorNavigationBlockedCallback =
-    void Function(int generation, Uri uri);
+typedef MirrorLoadErrorCallback = void Function(
+  int generation,
+  MirrorWebLoadError error,
+);
+typedef MirrorNavigationBlockedCallback = void Function(
+  int generation,
+  Uri uri,
+);
 
-typedef MirrorWebHostFactory =
-    Future<MirrorWebHost> Function({
-      required Uri initialUri,
-      required MirrorLoadCallback onLoadStart,
-      required MirrorLoadCallback onLoadStop,
-      required MirrorLoadErrorCallback onError,
-      required MirrorNavigationBlockedCallback onNavigationBlocked,
-    });
+typedef MirrorWebHostFactory = Future<MirrorWebHost> Function({
+  required Uri initialUri,
+  required MirrorLoadCallback onLoadStart,
+  required MirrorLoadCallback onLoadStop,
+  required MirrorLoadErrorCallback onError,
+  required MirrorNavigationBlockedCallback onNavigationBlocked,
+});
 
 String mirrorWebLoadErrorMessage(MirrorWebLoadError error) {
   return switch (error.kind) {

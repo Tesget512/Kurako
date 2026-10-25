@@ -236,8 +236,7 @@ void main() {
         AppUpdateAsset(
           name: 'Kurako-Android-arm64-v8a-1.2.0-release.apk',
           size: 1024,
-          url:
-              'https://github.com/Tesget512/Kurako/releases/download/v1.2.0/Kurako-Android-arm64-v8a-1.2.0-release.apk',
+          url: 'https://github.com/Tesget512/Kurako/releases/download/v1.2.0/Kurako-Android-arm64-v8a-1.2.0-release.apk',
         ),
       ],
     );
@@ -252,9 +251,9 @@ void main() {
   });
 
   test('SemVer compares numbers, build metadata and prerelease precedence', () {
-    int compare(String a, String b) => AppSemanticVersion.tryParse(
-      a,
-    )!.compareTo(AppSemanticVersion.tryParse(b)!);
+    int compare(String a, String b) =>
+        AppSemanticVersion.tryParse(a)!
+            .compareTo(AppSemanticVersion.tryParse(b)!);
     expect(compare('v1.10.0', '1.9.0'), greaterThan(0));
     expect(compare('1.0.2+99', '1.0.2+3'), 0);
     expect(compare('1.0.2', '1.0.3'), lessThan(0));

@@ -62,7 +62,10 @@ void main() {
     expect(source, isNot(contains('bangumi_auth_kind')));
     final root = jsonDecode(source) as Map<String, dynamic>;
     final account = root['account'] as Map<String, dynamic>;
-    expect(account.keys, unorderedEquals(['accessToken', 'refreshToken', 'expiresAt']));
+    expect(
+      account.keys,
+      unorderedEquals(['accessToken', 'refreshToken', 'expiresAt']),
+    );
   });
 
   test(
@@ -111,9 +114,9 @@ void main() {
     'fresh playback defaults keep gesture at 10 and toolbar seek at 40',
     () async {
       SharedPreferences.setMockInitialValues({});
-      final root =
-          jsonDecode(await ConfigurationBackupDocument.exportJson())
-              as Map<String, dynamic>;
+      final root = jsonDecode(
+        await ConfigurationBackupDocument.exportJson(),
+      ) as Map<String, dynamic>;
       final settings = root['settings'] as Map<String, dynamic>;
 
       expect(settings['gesture_seek_duration_sec'], 10);

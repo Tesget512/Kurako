@@ -21,9 +21,8 @@ OnboardingPlatform currentOnboardingPlatform() {
 
 bool get androidUsesLegacyPrivateStorage {
   if (!Platform.isAndroid) return false;
-  final match = RegExp(
-    r'API (\d+)',
-  ).firstMatch(Platform.operatingSystemVersion);
+  final match = RegExp(r'API (\d+)')
+      .firstMatch(Platform.operatingSystemVersion);
   final sdk = int.tryParse(match?.group(1) ?? '');
   return sdk != null && sdk < 29;
 }

@@ -40,9 +40,8 @@ class _HomePageState extends ConsumerState<HomePage> {
       final n = await rust.refreshAllMetadata();
       if (!mounted || n <= 0) return;
       ref.invalidate(animeListProvider);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('已自动更新 $n 部番剧的 Bangumi 元数据')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('已自动更新 $n 部番剧的 Bangumi 元数据')));
     } catch (_) {
       _metadataRefreshedThisRun = false;
     }

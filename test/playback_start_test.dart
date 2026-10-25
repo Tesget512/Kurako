@@ -54,12 +54,18 @@ void main() {
   test('the load phase can swap the generic tail for a corruption hint', () {
     const loadReason = '视频加载失败，文件可能已损坏或不完整。';
     expect(
-      playbackErrorNotice('mpv: some unknown failure', defaultReason: loadReason),
+      playbackErrorNotice(
+        'mpv: some unknown failure',
+        defaultReason: loadReason,
+      ),
       loadReason,
     );
     // Classified causes keep their specific wording either way.
     expect(
-      playbackErrorNotice('Failed to open /tmp/x.mkv', defaultReason: loadReason),
+      playbackErrorNotice(
+        'Failed to open /tmp/x.mkv',
+        defaultReason: loadReason,
+      ),
       '无法读取视频文件，可能已被移动、删除或访问权限失效。',
     );
   });

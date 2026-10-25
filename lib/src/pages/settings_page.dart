@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
@@ -173,9 +174,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             title: const Text('下载管理'),
             subtitle: const Text('播放与管理已下载到本地的网络视频'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
+            onTap: () => Navigator.of(context)
+                .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
           ),
           const Divider(height: 32),
           ListTile(
@@ -195,9 +195,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             title: const Text('关于 Kurako'),
             subtitle: const Text('版本信息、开源许可、致谢与项目主页'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const AboutPage())),
+            onTap: () =>
+                Navigator.of(context)
+                    .push(MaterialPageRoute(builder: (_) => const AboutPage())),
           ),
         ],
       ),
@@ -300,7 +300,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                     ? _login
                                     : () => ref
                                           .read(settingsProvider.notifier)
-                                          .ensureFreshBangumiToken(force: true)),
+                                          .ensureFreshBangumiToken(
+                                            force: true,
+                                          )),
                         ),
                       ],
                       TextButton(
@@ -596,11 +598,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 Text(
                   Platform.isMacOS
                       ? '令牌保存在应用沙盒内的本地文件中（仅当前用户可访问），'
-                        '不会写入配置备份。个人令牌没有自动续期，有效期由官网'
-                        '选项决定，应用无法查询；失效后需要重新生成并粘贴。'
+                            '不会写入配置备份。个人令牌没有自动续期，有效期由官网'
+                            '选项决定，应用无法查询；失效后需要重新生成并粘贴。'
                       : '令牌只保存在本机系统安全存储中，不会写入配置备份。'
-                        '个人令牌没有自动续期，有效期由官网选项决定，应用无法查询；'
-                        '失效后需要重新生成并粘贴。',
+                            '个人令牌没有自动续期，有效期由官网选项决定，应用无法查询；'
+                            '失效后需要重新生成并粘贴。',
                   style: const TextStyle(fontSize: 12),
                 ),
                 if (viaMirror) ...[
@@ -619,7 +621,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           actions: [
             TextButton(
-              onPressed: busy ? null : () => Navigator.of(dialogContext).pop(false),
+              onPressed: busy
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(false),
               child: const Text('取消'),
             ),
             FilledButton(

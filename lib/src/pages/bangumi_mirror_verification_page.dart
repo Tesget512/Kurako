@@ -429,18 +429,18 @@ class _BangumiMirrorVerificationPageState
                                   Icon(
                                     Icons.verified_outlined,
                                     size: 64,
-                                    color: Theme.of(
-                                      context,
-                                    ).colorScheme.primary,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
                                   ),
                                   const SizedBox(height: 20),
                                   Text(
                                     _challengeVisible
                                         ? '请先完成页面上的验证'
                                         : 'API 已可直接访问',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleLarge,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleLarge,
                                   ),
                                   const SizedBox(height: 12),
                                   Text(

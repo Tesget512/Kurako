@@ -26,15 +26,16 @@ void launchSecureStorageProbe() {
       final readBack = await store.readPersonalToken();
       await store.deletePersonalToken();
       final afterDelete = await store.readPersonalToken();
-      verdict = readBack == probeKeyNote && (afterDelete == null || afterDelete.isEmpty)
+      verdict =
+          readBack == probeKeyNote &&
+              (afterDelete == null || afterDelete.isEmpty)
           ? 'PASS (write/read/delete round trip ok)'
           : 'FAIL (read back: ${readBack == probeKeyNote ? "ok" : "mismatch"}, '
                 'after delete: ${afterDelete == null ? "null" : "still present"})';
     } catch (error) {
       var code = '';
-      final match = RegExp(
-        r'PlatformException\(([^,\s]+)',
-      ).firstMatch(error.toString());
+      final match = RegExp(r'PlatformException\(([^,\s]+)')
+          .firstMatch(error.toString());
       code = match?.group(1) ?? '';
       verdict = 'FAIL (exception${code.isEmpty ? '' : ' code $code'})';
       // Never log the error object itself; its message may quote store paths.

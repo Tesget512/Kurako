@@ -79,15 +79,13 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
       ref.invalidate(episodesProvider);
       if (!mounted) return;
       _reload();
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已删除本地副本')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('已删除本地副本')));
     } catch (err, stackTrace) {
       debugPrint('Failed to delete download ${e.id}: $err\n$stackTrace');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('删除失败: $err')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('删除失败: $err')));
       }
     } finally {
       if (mounted) {
@@ -309,9 +307,9 @@ class _AnimeGroup extends StatelessWidget {
                     child: group.coverUrl != null
                         ? CoverImage(url: group.coverUrl!)
                         : Container(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.surfaceContainerHighest,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
                             child: const Icon(Icons.movie_outlined),
                           ),
                   ),

@@ -11,8 +11,10 @@ import 'package:path_provider/path_provider.dart';
 
 import 'bangumi_mirror.dart';
 
-typedef CoverFetcher =
-    Future<Uint8List> Function(Uri uri, Map<String, String> headers);
+typedef CoverFetcher = Future<Uint8List> Function(
+  Uri uri,
+  Map<String, String> headers,
+);
 
 String coverIdentity(String url) =>
     normalizeBangumiCoverUrl(url, mirror: false);
@@ -252,11 +254,7 @@ class CoverRepository {
     Uri uri,
     Map<String, String> headers,
   ) async {
-    const hosts = {
-      'lain.bgm.tv',
-      'bgmimg.anibt.net',
-      bangumiMirrorImageHost,
-    };
+    const hosts = {'lain.bgm.tv', 'bgmimg.anibt.net', bangumiMirrorImageHost};
     if (uri.scheme != 'https' ||
         !hosts.contains(uri.host) ||
         uri.hasPort ||

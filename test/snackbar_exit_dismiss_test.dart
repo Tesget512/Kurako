@@ -12,7 +12,9 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: const Center(child: Text('detail')))),
+      MaterialApp(
+        home: Scaffold(body: const Center(child: Text('detail'))),
+      ),
     );
     await tester.pumpAndSettle();
 

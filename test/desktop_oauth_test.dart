@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurako/src/services/bangumi_oauth.dart';
@@ -25,33 +26,30 @@ void main() {
     channel.setMethodCallHandler(null);
   });
 
-  test(
-    'desktop registers before launch, rejects old state, cleans up native handshake',
-    () async {
-      final methods = <String>[];
-      messenger.setMockMethodCallHandler(channel, (call) async {
-        methods.add(call.method);
-        return null;
-      });
-      final session = DesktopOAuthSession(
-        channel: channel,
-        nativeHandshake: true,
-        launch: (_) async {
-          expect(methods, ['beginOAuth']);
-          await callback('kurako://oauth/callback?code=old&state=old');
-          await callback('kurako://oauth/callback?code=valid&state=current');
-          return true;
-        },
-      );
-      final result = await session.authenticate(
-        'https://bgm.tv/oauth/authorize',
-        'current',
-        const Duration(seconds: 1),
-      );
-      expect(parseBangumiOAuthCode(result, expectedState: 'current'), 'valid');
-      expect(methods, ['beginOAuth', 'endOAuth']);
-    },
-  );
+  test('desktop registers before launch, rejects old state, cleans up native handshake', () async {
+    final methods = <String>[];
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      methods.add(call.method);
+      return null;
+    });
+    final session = DesktopOAuthSession(
+      channel: channel,
+      nativeHandshake: true,
+      launch: (_) async {
+        expect(methods, ['beginOAuth']);
+        await callback('kurako://oauth/callback?code=old&state=old');
+        await callback('kurako://oauth/callback?code=valid&state=current');
+        return true;
+      },
+    );
+    final result = await session.authenticate(
+      'https://bgm.tv/oauth/authorize',
+      'current',
+      const Duration(seconds: 1),
+    );
+    expect(parseBangumiOAuthCode(result, expectedState: 'current'), 'valid');
+    expect(methods, ['beginOAuth', 'endOAuth']);
+  });
 
   test('failed browser launch releases the session for a retry', () async {
     var opened = false;

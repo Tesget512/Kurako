@@ -37,9 +37,8 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
     }
     if (!mounted) return;
     _reload();
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已解除屏蔽，重新扫描后条目将恢复')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已解除屏蔽，重新扫描后条目将恢复')));
   }
 
   @override
@@ -144,9 +143,8 @@ Future<bool> confirmAndBlacklist(
   if (ok != true || !context.mounted) return false;
   final lock = ref.read(libraryMutationBusyProvider.notifier);
   if (ref.read(scanCoordinatorProvider).running || lock.state) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再修改屏蔽记录')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再修改屏蔽记录')));
     return false;
   }
   lock.state = true;

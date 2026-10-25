@@ -16,8 +16,8 @@ enum BangumiAuthKind {
 
   static BangumiAuthKind fromPersisted(String? value) =>
       value == BangumiAuthKind.personalAccessToken.name
-          ? BangumiAuthKind.personalAccessToken
-          : BangumiAuthKind.oauth;
+      ? BangumiAuthKind.personalAccessToken
+      : BangumiAuthKind.oauth;
 }
 
 /// The non-secret identity of a logged-in account, for display only.
@@ -120,9 +120,7 @@ class FileBangumiCredentialStore implements BangumiCredentialStore {
 
   Future<File> _file() async {
     if (_resolved != null) return _resolved!;
-    final dir =
-        _directoryPath ??
-        (await getApplicationSupportDirectory()).path;
+    final dir = _directoryPath ?? (await getApplicationSupportDirectory()).path;
     _resolved = File('$dir/$_fileName');
     return _resolved!;
   }
@@ -217,9 +215,8 @@ String personalAccessTokenFailureMessage(Object error) {
     // marker that identifies *why* the store refused the write.
     var code = '';
     if (error is Exception) {
-      final match = RegExp(r'PlatformException\(([^,\s]+)').firstMatch(
-        error.toString(),
-      );
+      final match = RegExp(r'PlatformException\(([^,\s]+)')
+          .firstMatch(error.toString());
       code = match?.group(1) ?? '';
     }
     return '本机安全存储不可用${code.isEmpty ? '' : '（错误码 $code）'}，'

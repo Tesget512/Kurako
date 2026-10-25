@@ -344,16 +344,14 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       ref.invalidate(animeListProvider);
       await _reloadAnimeSnapshot();
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('元数据已刷新')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('元数据已刷新')));
       }
     } catch (e) {
       BangumiMirrorService.instance.reportApiFailure(e);
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('刷新失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('刷新失败: $e')));
       }
     } finally {
       if (mounted) setState(() => _refreshing = false);
@@ -368,9 +366,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       await _reloadAnimeSnapshot();
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('更新收藏状态失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('更新收藏状态失败: $e')));
       }
     }
   }
@@ -393,9 +390,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('取消收藏失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('取消收藏失败: $e')));
       }
     }
   }
@@ -449,9 +445,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         await launchExternalPlayer(settings.externalPlayerPath, locator);
       } catch (e) {
         if (context.mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('无法启动外部播放器: $e')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('无法启动外部播放器: $e')));
         }
       }
       return;
@@ -485,9 +480,8 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     ref
         .read(downloadManagerProvider.notifier)
         .start(ep, animeId: widget.animeId);
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('已开始后台下载，可在右上角图标查看进度')));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已开始后台下载，可在右上角图标查看进度')));
   }
 
   /// The episode the play button should resume: an in-progress one if any,
@@ -1211,9 +1205,8 @@ class _EpisodeTile extends ConsumerWidget {
   Future<void> _detachEpisode(BuildContext context, WidgetRef ref) async {
     final lock = ref.read(libraryMutationBusyProvider.notifier);
     if (ref.read(scanCoordinatorProvider).running || lock.state) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再调整匹配')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再调整匹配')));
       return;
     }
     lock.state = true;
@@ -1232,9 +1225,8 @@ class _EpisodeTile extends ConsumerWidget {
       onRematched(miscId.toInt());
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('移出失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('移出失败: $e')));
       }
     } finally {
       lock.state = false;
@@ -1251,15 +1243,13 @@ class _EpisodeTile extends ConsumerWidget {
       }
       ref.invalidate(episodesProvider(episode.animeId.toInt()));
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已删除本地副本，播放将恢复走网络')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已删除本地副本，播放将恢复走网络')));
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('删除失败: $e')));
       }
     }
   }

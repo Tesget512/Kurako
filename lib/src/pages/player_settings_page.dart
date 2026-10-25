@@ -189,9 +189,8 @@ class PlayerSettingsPage extends ConsumerWidget {
         const SizedBox(height: 2),
         Text(
           description,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
         Slider(
           value: value.toDouble(),
@@ -251,9 +250,8 @@ class PlayerSettingsPage extends ConsumerWidget {
         const SizedBox(height: 2),
         Text(
           '轻度适合续航优先；标准会使用更多 GPU。两者都会增加耗电、发热与掉帧风险。',
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Theme.of(context).colorScheme.onSurfaceVariant,
-          ),
+          style: Theme.of(context).textTheme.bodySmall
+              ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
         const SizedBox(height: 8),
         SegmentedButton<String>(
@@ -309,9 +307,8 @@ class PlayerSettingsPage extends ConsumerWidget {
     await ref.read(seekDurationProvider.notifier).set(40);
     await ref.read(decodeModeProvider.notifier).set('auto');
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('已恢复播放器初始设置')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('已恢复播放器初始设置')));
     }
   }
 }

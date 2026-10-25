@@ -216,17 +216,19 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
     }
     try {
       final result = await BangumiOAuth.login();
-      await ref.read(settingsProvider.notifier).setOAuthSession(
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresAt: result.expiresAt,
-        userId: result.userId,
-      );
+      await ref
+          .read(settingsProvider.notifier)
+          .setOAuthSession(
+            accessToken: result.accessToken,
+            refreshToken: result.refreshToken,
+            expiresAt: result.expiresAt,
+            userId: result.userId,
+          );
       await report('login: OK userId=${result.userId}');
       await Future<void>.delayed(const Duration(milliseconds: 800));
-      await ref.read(settingsProvider.notifier).ensureFreshBangumiToken(
-        force: true,
-      );
+      await ref
+          .read(settingsProvider.notifier)
+          .ensureFreshBangumiToken(force: true);
       final status = ref.read(bangumiRefreshStateProvider).status.name;
       await report('forced-renewal status: $status');
     } catch (error) {

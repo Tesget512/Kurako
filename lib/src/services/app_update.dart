@@ -221,9 +221,8 @@ class UpdateCheckResult {
   bool get hasNewVersion {
     final latest = release;
     if (latest == null) return false;
-    return AppSemanticVersion.tryParse(
-          latest.tagName,
-        )!.compareTo(AppSemanticVersion.tryParse(currentVersion)!) >
+    return AppSemanticVersion.tryParse(latest.tagName)!
+            .compareTo(AppSemanticVersion.tryParse(currentVersion)!) >
         0;
   }
 }

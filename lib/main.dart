@@ -51,8 +51,12 @@ Future<void> main() async {
   final prefs = await SharedPreferences.getInstance();
   if (isDesktop) {
     await windowManager.ensureInitialized();
-    final minSize = Platform.isLinux ? const Size(960, 640) : const Size(800, 600);
-    var initialSize = Platform.isLinux ? const Size(1440, 900) : const Size(1280, 800);
+    final minSize = Platform.isLinux
+        ? const Size(960, 640)
+        : const Size(800, 600);
+    var initialSize = Platform.isLinux
+        ? const Size(1440, 900)
+        : const Size(1280, 800);
     // "Remember window size" (appearance setting): reuse the size from the
     // previous session when it still clears the minimum, so the window opens
     // exactly as it was left. Smaller values (corrupted prefs, older builds)

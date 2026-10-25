@@ -711,21 +711,18 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           }
           if (!mounted) return;
           if (savedToPhotos) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('截图已保存到系统相册')));
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('截图已保存到系统相册')));
             return;
           }
         }
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('截图已保存到 ${file.path}')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('截图已保存到 ${file.path}')));
       }
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('截图失败：$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('截图失败：$error')));
       }
     } finally {
       if (mounted) setState(() => _takingScreenshot = false);
@@ -877,9 +874,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         _activeExtSub = previousSource;
       }
       if (notifyError && mounted && seq == _openSeq) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('无法加载字幕：$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('无法加载字幕：$error')));
       }
     }
   }
@@ -892,9 +888,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     }
     if (seq != _openSeq) return;
     try {
-      final raw =
-          await (_player.platform as dynamic)?.getProperty('chapter-list')
-              as String?;
+      final raw = await (_player.platform as dynamic)?.getProperty(
+        'chapter-list',
+      ) as String?;
       if (raw == null || raw.isEmpty || !mounted || seq != _openSeq) return;
       final list = jsonDecode(raw) as List<dynamic>;
       final chapters = <_Chapter>[];
@@ -1304,9 +1300,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   Future<void> _playNext({bool auto = false}) async {
     if (!_hasNext) {
       if (auto && mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('已经是最后一集了')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已经是最后一集了')));
       }
       return;
     }
@@ -2877,9 +2872,9 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
 
   Future<String?> _stringProperty(String name) async {
     try {
-      final value =
-          await (widget.player.platform as dynamic)?.getProperty(name)
-              as String?;
+      final value = await (widget.player.platform as dynamic)?.getProperty(
+        name,
+      ) as String?;
       return nonEmptyMediaProperty(value);
     } catch (_) {
       return null;

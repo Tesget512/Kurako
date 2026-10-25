@@ -70,60 +70,63 @@ void main() {
     }
   });
 
-  test('native cookie extraction filters account and respects scope/expiry', () {
-    final proof = collectBangumiMirrorProof(
-      queriedUri: Uri.parse(bangumiMirrorApiProbe),
-      userAgent: 'Browser-UA',
-      nowMilliseconds: 100,
-      cookies: [
-        MirrorCookie(
-          name: 'account_session',
-          value: 'never-store',
-          domain: '.bangumi.lat',
-          path: '/',
-        ),
-        MirrorCookie(
-          name: 'techaro.lol-anubis-auth',
-          value: 'host-proof',
-          domain: 'api.bangumi.lat',
-          path: '/',
-          httpOnly: true,
-        ),
-        MirrorCookie(
-          name: 'techaro.lol-anubis-auth',
-          value: 'other-host',
-          domain: 'lain.bangumi.lat',
-          path: '/',
-        ),
-        MirrorCookie(
-          name: 'techaro.lol-anubis-cookie-verification',
-          value: 'parent-proof',
-          domain: '.bangumi.lat',
-          path: '/',
-          expiresAt: 10000,
-        ),
-        MirrorCookie(
-          name: 'techaro.lol-anubis-auth',
-          value: 'expired',
-          domain: '.bangumi.lat',
-          path: '/',
-          expiresAt: 99,
-        ),
-        MirrorCookie(
-          name: 'techaro.lol-anubis-auth',
-          value: 'evil',
-          domain: '.lat.evil.test',
-          path: '/',
-        ),
-      ],
-    );
-    expect(
-      proof.cookie,
-      'techaro.lol-anubis-auth=host-proof; techaro.lol-anubis-cookie-verification=parent-proof',
-    );
-    expect(proof.expiresAt, 10000);
-    expect(proof.host, 'api.bangumi.lat');
-  });
+  test(
+    'native cookie extraction filters account and respects scope/expiry',
+    () {
+      final proof = collectBangumiMirrorProof(
+        queriedUri: Uri.parse(bangumiMirrorApiProbe),
+        userAgent: 'Browser-UA',
+        nowMilliseconds: 100,
+        cookies: [
+          MirrorCookie(
+            name: 'account_session',
+            value: 'never-store',
+            domain: '.bangumi.lat',
+            path: '/',
+          ),
+          MirrorCookie(
+            name: 'techaro.lol-anubis-auth',
+            value: 'host-proof',
+            domain: 'api.bangumi.lat',
+            path: '/',
+            httpOnly: true,
+          ),
+          MirrorCookie(
+            name: 'techaro.lol-anubis-auth',
+            value: 'other-host',
+            domain: 'lain.bangumi.lat',
+            path: '/',
+          ),
+          MirrorCookie(
+            name: 'techaro.lol-anubis-cookie-verification',
+            value: 'parent-proof',
+            domain: '.bangumi.lat',
+            path: '/',
+            expiresAt: 10000,
+          ),
+          MirrorCookie(
+            name: 'techaro.lol-anubis-auth',
+            value: 'expired',
+            domain: '.bangumi.lat',
+            path: '/',
+            expiresAt: 99,
+          ),
+          MirrorCookie(
+            name: 'techaro.lol-anubis-auth',
+            value: 'evil',
+            domain: '.lat.evil.test',
+            path: '/',
+          ),
+        ],
+      );
+      expect(
+        proof.cookie,
+        'techaro.lol-anubis-auth=host-proof; techaro.lol-anubis-cookie-verification=parent-proof',
+      );
+      expect(proof.expiresAt, 10000);
+      expect(proof.host, 'api.bangumi.lat');
+    },
+  );
 
   test('Anubis dynamic cookie suffixes and parent domains are accepted', () {
     final proof = collectBangumiMirrorProof(
@@ -266,59 +269,52 @@ void main() {
     );
   }
 
-  test(
-    'restore only enables after both actual probes, private headers only mirror',
-    () async {
-      final calls = <String>[];
-      final s = await service(calls: calls);
-      expect(s.enabled, false);
-      expect(await s.restore(requestedEnabled: true), true);
-      expect(calls, [
-        'enabled=false',
-        'configure',
-        'api',
-        'image',
-        'enabled=true',
-      ]);
-      expect(
-        s.headersForCover('https://lain.bangumi.lat/a.jpg')['Cookie'],
-        'techaro.lol-anubis-auth=image',
-      );
-      expect(
-        s.headersForCover('https://lain.bgm.tv/a.jpg').containsKey('Cookie'),
-        false,
-      );
-      expect(
-        s
-            .headersForCover('https://lain.bangumi.lat.evil.test/a.jpg')
-            .containsKey('Cookie'),
-        false,
-      );
-      expect(
-        s
-            .headersForCover('http://lain.bangumi.lat/a.jpg')
-            .containsKey('Cookie'),
-        false,
-      );
-      expect(
-        s
-            .headersForCover('https://user@lain.bangumi.lat/a.jpg')
-            .containsKey('Cookie'),
-        false,
-      );
-      expect(
-        s
-            .headersForCover('https://lain.bangumi.vip/a.jpg')
-            .containsKey('Cookie'),
-        false,
-      );
-      await s.disable();
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getBool('bangumi_mirror'), false);
-      expect(prefs.getString(BangumiMirrorService.proofPreferenceKey), null);
-      s.dispose();
-    },
-  );
+  test('restore only enables after both actual probes, private headers only mirror', () async {
+    final calls = <String>[];
+    final s = await service(calls: calls);
+    expect(s.enabled, false);
+    expect(await s.restore(requestedEnabled: true), true);
+    expect(calls, [
+      'enabled=false',
+      'configure',
+      'api',
+      'image',
+      'enabled=true',
+    ]);
+    expect(
+      s.headersForCover('https://lain.bangumi.lat/a.jpg')['Cookie'],
+      'techaro.lol-anubis-auth=image',
+    );
+    expect(
+      s.headersForCover('https://lain.bgm.tv/a.jpg').containsKey('Cookie'),
+      false,
+    );
+    expect(
+      s
+          .headersForCover('https://lain.bangumi.lat.evil.test/a.jpg')
+          .containsKey('Cookie'),
+      false,
+    );
+    expect(
+      s.headersForCover('http://lain.bangumi.lat/a.jpg').containsKey('Cookie'),
+      false,
+    );
+    expect(
+      s
+          .headersForCover('https://user@lain.bangumi.lat/a.jpg')
+          .containsKey('Cookie'),
+      false,
+    );
+    expect(
+      s.headersForCover('https://lain.bangumi.vip/a.jpg').containsKey('Cookie'),
+      false,
+    );
+    await s.disable();
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('bangumi_mirror'), false);
+    expect(prefs.getString(BangumiMirrorService.proofPreferenceKey), null);
+    s.dispose();
+  });
 
   test(
     'legacy true without proof migrates off, failed image never enables',

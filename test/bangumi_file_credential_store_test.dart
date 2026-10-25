@@ -20,9 +20,8 @@ class _RefreshBackend implements BangumiRefreshBackend {
   final tokens = <String?>[];
 
   @override
-  Future<OAuthResult> refresh(String refreshToken) async => throw const OAuthException(
-    'oauth token request failed',
-  );
+  Future<OAuthResult> refresh(String refreshToken) async =>
+      throw const OAuthException('oauth token request failed');
 
   @override
   Future<void> setAccessToken(String? token) async => tokens.add(token);
@@ -30,10 +29,8 @@ class _RefreshBackend implements BangumiRefreshBackend {
 
 class _TokenBackend implements BangumiPersonalTokenBackend {
   @override
-  Future<({int userId, String username})> validate(String token) async => (
-    userId: 7,
-    username: 'file-user',
-  );
+  Future<({int userId, String username})> validate(String token) async =>
+      (userId: 7, username: 'file-user');
 }
 
 void main() {

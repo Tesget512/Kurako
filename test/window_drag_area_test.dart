@@ -42,8 +42,9 @@ _ChannelLog _installChannel() {
   return log;
 }
 
-Widget _host(Widget child) =>
-    MaterialApp(home: Scaffold(body: Center(child: child)));
+Widget _host(Widget child) => MaterialApp(
+  home: Scaffold(body: Center(child: child)),
+);
 
 void main() {
   // The drag area is a desktop-only feature; these tests run on the macOS
@@ -88,9 +89,7 @@ void main() {
   testWidgets('double tap on the drag area maximizes once', (tester) async {
     final log = _installChannel();
     await tester.pumpWidget(
-      _host(
-        const WindowDragArea(child: SizedBox(width: 300, height: 40)),
-      ),
+      _host(const WindowDragArea(child: SizedBox(width: 300, height: 40))),
     );
     await tester.tap(find.byType(WindowDragArea));
     await tester.pump(const Duration(milliseconds: 50));
@@ -108,9 +107,7 @@ void main() {
   ) async {
     final log = _installChannel()..fullscreen = true;
     await tester.pumpWidget(
-      _host(
-        const WindowDragArea(child: SizedBox(width: 300, height: 40)),
-      ),
+      _host(const WindowDragArea(child: SizedBox(width: 300, height: 40))),
     );
     await tester.tap(find.byType(WindowDragArea));
     await tester.pump(const Duration(milliseconds: 50));
@@ -125,9 +122,7 @@ void main() {
   testWidgets('panning the drag area starts a window drag', (tester) async {
     final log = _installChannel();
     await tester.pumpWidget(
-      _host(
-        const WindowDragArea(child: SizedBox(width: 300, height: 40)),
-      ),
+      _host(const WindowDragArea(child: SizedBox(width: 300, height: 40))),
     );
     await tester.drag(find.byType(WindowDragArea), const Offset(40, 0));
     await tester.pumpAndSettle();
@@ -180,7 +175,8 @@ void main() {
     expect(
       log.calls.where((m) => m == 'maximize'),
       isEmpty,
-      reason: 'the child recognizer wins the arena, so the parent tap '
+      reason:
+          'the child recognizer wins the arena, so the parent tap '
           'that drives manual double-click detection never fires',
     );
   });

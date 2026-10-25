@@ -74,9 +74,8 @@ class _MatchCorrectionDialogState extends ConsumerState<MatchCorrectionDialog> {
     if (_binding) return;
     if (ref.read(scanCoordinatorProvider).running ||
         ref.read(libraryMutationBusyProvider)) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('扫描或维护正在进行，请完成后再修改匹配')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('扫描或维护正在进行，请完成后再修改匹配')));
       return;
     }
     final reservation = ref.read(libraryMutationBusyProvider.notifier);
@@ -105,9 +104,8 @@ class _MatchCorrectionDialogState extends ConsumerState<MatchCorrectionDialog> {
       BangumiMirrorService.instance.reportApiFailure(e);
       if (mounted) {
         setState(() => _binding = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('绑定失败: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('绑定失败: $e')));
       }
     } finally {
       reservation.state = false;

@@ -1133,13 +1133,16 @@ class Settings {
   /// Which credential is active. A personal access token is not an OAuth
   /// session: no refresh token, no queryable expiry, nothing auto-renews it.
   final BangumiAuthKind bangumiAuthKind;
+
   /// Display-only identity of the logged-in account (both kinds fill it when
   /// known). Not a secret; safe for the settings card.
   final int bangumiUserId;
   final String bangumiUsername;
+
   /// Whether a personal-token credential was actually restored from the
   /// secure store this session. Runtime state, never persisted here.
   final bool personalTokenActive;
+
   /// `off` or `anime4k-lite`. Applied the next time a video is opened.
   final String superResolutionMode;
   final bool autoResumePlayback;
@@ -1791,9 +1794,8 @@ class SettingsNotifier extends StateNotifier<Settings> {
         text.contains('timeoutexception') ||
         text.contains('connection reset') ||
         RegExp(r'http (408|429|5\d\d)\b').hasMatch(text) ||
-        RegExp(
-          r'oauth error:\s*(server_error|temporarily_unavailable)\b',
-        ).hasMatch(text);
+        RegExp(r'oauth error:\s*(server_error|temporarily_unavailable)\b')
+            .hasMatch(text);
     return (status: BangumiRefreshStatus.networkFailure, retryable: retryable);
   }
 

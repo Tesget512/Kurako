@@ -30,9 +30,8 @@ class _AboutPageState extends State<AboutPage> {
       mode: LaunchMode.externalApplication,
     );
     if (!opened && context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('无法打开 GitHub 项目主页')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('无法打开 GitHub 项目主页')));
     }
   }
 
