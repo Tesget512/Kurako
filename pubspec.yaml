@@ -34,7 +34,9 @@ dependencies:
   cupertino_icons: ^1.0.8
 
   # Rust bridge
-  flutter_rust_bridge: 2.12.0
+  flutter_rust_bridge:
+    hosted: https://pub.flutter-io.cn
+    version: 2.13.0
 
   # Video player (libmpv, hardware decoding + subtitles)
   media_kit: ^1.2.0
