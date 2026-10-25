@@ -3,7 +3,10 @@ import 'dart:io' show File, Platform;
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:window_manager/window_manager.dart';
 
 import 'pages/home_page.dart';
 import 'pages/onboarding_page.dart';
@@ -19,6 +22,10 @@ const kMirrorOAuthAcceptanceEnabled = bool.fromEnvironment(
   'KURAKO_MIRROR_OAUTH_ACCEPTANCE',
   defaultValue: false,
 );
+
+/// Whether this build runs on a desktop platform with our custom window chrome.
+final bool _isDesktopPlatform =
+    Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
 class AnimeBdApp extends ConsumerStatefulWidget {
   const AnimeBdApp({super.key});
@@ -47,11 +54,18 @@ class _StartupGate extends ConsumerWidget {
 }
 
 class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, WindowListener {
+  Timer? _windowSizeSaveDebounce;
+  bool _windowMaximized = false;
+  bool _windowShown = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (_isDesktopPlatform) {
+      windowManager.addListener(this);
+    }
     // Reading the notifier constructs SettingsNotifier (its _load restores the
     // token and starts the renewal timer) and drives one renewal check right at
     // startup, instead of waiting for some widget to happen to read settings.
@@ -64,7 +78,101 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
       if (kMirrorOAuthAcceptanceEnabled) {
         unawaited(_runMirrorOAuthAcceptance());
       }
+      if (_isDesktopPlatform) {
+        // The macOS window starts fully transparent and is revealed by the
+        // native side (MainFlutterWindow.swift) as soon as this — the first
+        // painted frame — happens. The Timer below is registered directly in
+        // initState, NOT here: a first frame that never arrives must not
+        // swallow the fallback.
+        debugPrint('KurakoWindow: first frame painted, revealing window');
+        unawaited(_revealWindowOnce());
+      }
     });
+    if (_isDesktopPlatform) {
+      // Independent of frame scheduling: reveal (and thereby restore the
+      // maximized state) no later than two seconds after startup.
+      Timer(const Duration(seconds: 2), _revealWindowOnce);
+    }
+  }
+
+  /// Reveal the window exactly once: after the first painted frame (or the
+  /// fallback timeout), then re-apply the saved maximized state.
+  Future<void> _revealWindowOnce() async {
+    if (!_isDesktopPlatform || _windowShown || !mounted) return;
+    _windowShown = true;
+    try {
+      // macOS: lift the transparent launch window. The channel only exists
+      // there; elsewhere fall back to window_manager.
+      await const MethodChannel('kurako/window').invokeMethod<void>('reveal');
+    } catch (_) {
+      try {
+        await windowManager.show();
+      } catch (_) {
+        // Never let window bookkeeping break startup.
+      }
+    }
+    try {
+      await windowManager.focus();
+      final prefs = await SharedPreferences.getInstance();
+      if ((prefs.getBool('remember_window_size') ?? true) &&
+          (prefs.getBool('window_maximized') ?? false)) {
+        await windowManager.maximize();
+      }
+    } catch (_) {
+      // Never let window bookkeeping break startup.
+    }
+  }
+
+  // ---- Window size persistence ("remember window size" appearance toggle) ----
+  // Size changes are debounced; maximized/fullscreen/minimized states are
+  // excluded so we always keep the last *normal* window geometry.
+
+  void _scheduleWindowSizeSave() {
+    _windowSizeSaveDebounce?.cancel();
+    _windowSizeSaveDebounce = Timer(
+      const Duration(milliseconds: 500),
+      _saveWindowSize,
+    );
+  }
+
+  Future<void> _saveWindowSize() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool('remember_window_size') ?? true)) return;
+      if (await windowManager.isFullScreen()) return;
+      if (await windowManager.isMinimized()) return;
+      if (_windowMaximized) return;
+      final size = await windowManager.getSize();
+      await prefs.setDouble('window_width', size.width);
+      await prefs.setDouble('window_height', size.height);
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  Future<void> _saveMaximizedFlag(bool value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (!(prefs.getBool('remember_window_size') ?? true)) return;
+      await prefs.setBool('window_maximized', value);
+    } catch (_) {
+      // Best-effort only.
+    }
+  }
+
+  @override
+  void onWindowResize() => _scheduleWindowSizeSave();
+
+  @override
+  void onWindowMaximize() {
+    _windowMaximized = true;
+    unawaited(_saveMaximizedFlag(true));
+  }
+
+  @override
+  void onWindowUnmaximize() {
+    _windowMaximized = false;
+    unawaited(_saveMaximizedFlag(false));
   }
 
   /// Dev-only acceptance driver: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
@@ -129,6 +237,8 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (_isDesktopPlatform) windowManager.removeListener(this);
+    _windowSizeSaveDebounce?.cancel();
     super.dispose();
   }
 
@@ -138,6 +248,10 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
     // token that may have crossed its expiry window while backgrounded.
     if (state == AppLifecycleState.resumed) {
       ref.read(settingsProvider.notifier).ensureFreshBangumiToken();
+    } else if (state == AppLifecycleState.detached && _isDesktopPlatform) {
+      // The process is going away: flush a pending debounced size save.
+      _windowSizeSaveDebounce?.cancel();
+      unawaited(_saveWindowSize());
     }
   }
 

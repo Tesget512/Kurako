@@ -275,6 +275,17 @@ final uiScaleProvider = StateNotifierProvider<_IntPrefNotifier, int>((ref) {
   );
 });
 
+// ---- Remember window size (desktop), persisted ----
+
+/// Desktop-only appearance toggle: reopen the window with the size (and
+/// maximized state) it had when last used, instead of the fixed default.
+/// The geometry itself lives in the `window_width` / `window_height` /
+/// `window_maximized` prefs, written by the app root's WindowListener.
+final rememberWindowSizeProvider =
+    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
+      return _BoolPrefNotifier('remember_window_size', defaultValue: true);
+    });
+
 /// On desktop, use touch gestures instead of mouse-hover controls. On iPad,
 /// this is inverted at the presentation layer: false keeps the touch-first
 /// default and true opts into desktop controls for a mouse/keyboard setup.
@@ -1377,6 +1388,11 @@ class SettingsNotifier extends StateNotifier<Settings> {
     if (authKind == BangumiAuthKind.personalAccessToken) {
       final store = credentialStore;
       if (store != null) {
+        // macOS: the token may still live in the (prompt-happy) keychain
+        // from an older build — move it to the container file once.
+        if (store is FileBangumiCredentialStore) {
+          await store.migrateFromKeychainOnce(prefs);
+        }
         try {
           personalToken = await store.readPersonalToken();
         } catch (_) {
@@ -1856,7 +1872,7 @@ final settingsProvider = StateNotifierProvider<SettingsNotifier, Settings>((
 ) {
   return SettingsNotifier(
     refreshBackend: ref.read(bangumiRefreshBackendProvider),
-    credentialStore: SecureStorageBangumiCredentialStore(),
+    credentialStore: createPlatformCredentialStore(),
     onRefreshStateChanged: ref
         .read(bangumiRefreshStateProvider.notifier)
         .update,
@@ -1878,9 +1894,9 @@ Future<void> resetPersistedAppSettings() async {
   await rust.setBangumiToken(token: null);
   await rust.setBangumiMirror(enabled: false);
   // The personal access token lives outside SharedPreferences: clear the
-  // secure store too so a settings reset really logs the account out.
+  // credential store too so a settings reset really logs the account out.
   try {
-    await SecureStorageBangumiCredentialStore().deletePersonalToken();
+    await createPlatformCredentialStore().deletePersonalToken();
   } catch (_) {
     // An unavailable store holds nothing to clear.
   }

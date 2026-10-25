@@ -18,19 +18,51 @@ Future<void> _toggleMaximize() async {
 
 /// Wrap [child] so dragging it moves the frameless window and double-clicking
 /// toggles maximize (desktop only; a passthrough on mobile). Lets pages make an
-/// arbitrary region (e.g. a floating toolbar) act as the title bar.
-class WindowDragArea extends StatelessWidget {
+/// arbitrary region (e.g. a full top bar) act as the title bar.
+///
+/// Deliberately does NOT use [GestureDetector.onDoubleTap]: a
+/// DoubleTapGestureRecognizer holds every pointer-down in its arena for the
+/// ~300ms disambiguation window, which used to delay clicks on descendant
+/// buttons (window buttons, toolbar icons). With only a pan recognizer plus
+/// this widget's own tap recognizer, a tap that lands on a descendant button
+/// resolves immediately in the child's favor — the parent [onTapUp] never
+/// fires there — so the manual double-click check below only ever sees taps
+/// on non-interactive areas.
+class WindowDragArea extends StatefulWidget {
   final Widget child;
   const WindowDragArea({super.key, required this.child});
 
   @override
+  State<WindowDragArea> createState() => _WindowDragAreaState();
+}
+
+class _WindowDragAreaState extends State<WindowDragArea> {
+  DateTime? _lastTapAt;
+  Offset? _lastTapPosition;
+
+  void _handleTapUp(TapUpDetails details) {
+    final now = DateTime.now();
+    final lastAt = _lastTapAt;
+    final lastPos = _lastTapPosition;
+    _lastTapAt = now;
+    _lastTapPosition = details.globalPosition;
+    if (lastAt != null &&
+        lastPos != null &&
+        now.difference(lastAt) <= const Duration(milliseconds: 400) &&
+        (details.globalPosition - lastPos).distance <= 24) {
+      _lastTapAt = null;
+      _toggleMaximize();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (!useCustomCaption) return child;
+    if (!useCustomCaption) return widget.child;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onPanStart: (_) => windowManager.startDragging(),
-      onDoubleTap: _toggleMaximize,
-      child: child,
+      onTapUp: _handleTapUp,
+      child: widget.child,
     );
   }
 }
@@ -63,10 +95,7 @@ class WindowCaption extends StatelessWidget {
         children: [
           // The draggable region fills the remaining width.
           Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.translucent,
-              onPanStart: (_) => windowManager.startDragging(),
-              onDoubleTap: _toggleMaximize,
+            child: WindowDragArea(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Align(
@@ -234,13 +263,11 @@ class SysAppBar extends StatelessWidget implements PreferredSizeWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Only the title drags/double-click-maximizes — never wrap the whole
-    // AppBar (title+actions+buttons) in that GestureDetector. onDoubleTap
-    // forces every tap landing in its hit-test area to wait out the
-    // double-tap disambiguation window (~300ms) before it resolves, and
-    // descendants' own tap recognizers (the window buttons') share that same
-    // gesture arena, so they were getting delayed too. Same fix as
-    // WindowCaption/player_page, which only ever wrap the draggable title.
+    // The title itself drags/double-click-maximizes, and a drag area laid
+    // out in the flexibleSpace makes the empty stretches of the toolbar
+    // draggable too. Neither uses an onDoubleTap recognizer — that made
+    // every tap in the region wait out the double-tap disambiguation window
+    // (~300ms) and delayed the window buttons — see WindowDragArea.
     final draggableTitle = useCustomCaption && title != null
         ? WindowDragArea(child: title!)
         : title;
@@ -248,6 +275,9 @@ class SysAppBar extends StatelessWidget implements PreferredSizeWidget {
       title: draggableTitle,
       leading: leading,
       bottom: bottom,
+      flexibleSpace: useCustomCaption
+          ? WindowDragArea(child: const SizedBox.expand())
+          : null,
       actions: [
         ...actions,
         if (useCustomCaption) ...[

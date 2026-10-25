@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurako/src/services/media_source.dart';
 import 'package:kurako/src/services/playback_start.dart';
@@ -48,6 +49,50 @@ void main() {
       expect(notice.contains('番剧'), isFalse);
       expect(notice.contains('/Volumes'), isFalse);
     }
+  });
+
+  test('the load phase can swap the generic tail for a corruption hint', () {
+    const loadReason = '视频加载失败，文件可能已损坏或不完整。';
+    expect(
+      playbackErrorNotice('mpv: some unknown failure', defaultReason: loadReason),
+      loadReason,
+    );
+    // Classified causes keep their specific wording either way.
+    expect(
+      playbackErrorNotice('Failed to open /tmp/x.mkv', defaultReason: loadReason),
+      '无法读取视频文件，可能已被移动、删除或访问权限失效。',
+    );
+  });
+
+  testWidgets('a retry-action snackbar with persist:false auto-dismisses', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: SizedBox.shrink())),
+    );
+    final messenger = tester.state<ScaffoldMessengerState>(
+      find.byType(ScaffoldMessenger).first,
+    );
+    // Same shape as the player failure notices. Without persist:false the
+    // framework default for action snackbars is to stay forever.
+    messenger.showSnackBar(
+      SnackBar(
+        persist: false,
+        duration: const Duration(seconds: 5),
+        content: const Text('视频加载失败，文件可能已损坏或不完整。'),
+        action: SnackBarAction(label: '重试', onPressed: () {}),
+      ),
+    );
+    // Step the clock in small ticks: the dismiss timer is created by the
+    // build that runs after the entrance animation completes, and a single
+    // large pump can jump past that frame's timestamp handling.
+    var dismissed = false;
+    for (var t = 0; t <= 8000 && !dismissed; t += 500) {
+      await tester.pump(const Duration(milliseconds: 500));
+      dismissed = find.text('视频加载失败，文件可能已损坏或不完整。').evaluate().isEmpty;
+    }
+    expect(dismissed, isTrue, reason: 'snackbar must auto-dismiss within 8s');
+    await tester.pumpAndSettle();
   });
 
   test('system proxy bypasses IPv4, IPv6, and localhost loopback targets', () {

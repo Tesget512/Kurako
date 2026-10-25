@@ -152,6 +152,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   StreamSubscription? _durationSub;
   StreamSubscription? _tracksSub;
   StreamSubscription? _completedSub;
+  // Root messenger, captured for dispose() (see didChangeDependencies).
+  ScaffoldMessengerState? _messenger;
+  // Belt-and-braces dismissal for the failure notices: if the framework's
+  // own auto-dismiss timer somehow never fires, this one removes the notice
+  // anyway (a stuck "文件可能已损坏" bar has been reported in the wild).
+  Timer? _noticeFallbackTimer;
   StreamSubscription? _logSub;
   StreamSubscription? _errorSub;
   // A demux/decode error that arrives mid-playback is reported once per open,
@@ -468,6 +474,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     await old?.release();
     if (seq != _openSeq) return;
 
+    // Last mpv error text seen across open attempts (classified, never raw).
+    String? startError;
     for (var attempt = 1; attempt <= _maxOpenAttempts; attempt++) {
       PlayableHandle? handle;
       try {
@@ -498,6 +506,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         } finally {
           await waiter.dispose();
         }
+        // Classified mpv error text (if any) survives the waiter so the
+        // final failure notice can name the likely cause — a damaged file
+        // used to fall into the generic "check network/permissions" copy.
+        startError = waiter.error;
         if (seq != _openSeq || !mounted) {
           if (identical(_handle, handle)) _handle = null;
           try {
@@ -533,12 +545,27 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           continue;
         }
         if (mounted && seq == _openSeq) {
-          ScaffoldMessenger.of(context).showSnackBar(
+          _showNoticeWithGuaranteedDismissal(
             SnackBar(
+              // A SnackBar with an action persists forever by default
+              // (persist ?? action != null) — opt back into the 5s timeout.
+              persist: false,
+              duration: const Duration(seconds: 5),
               content: Text(
                 startResult == PlaybackStartResult.failed
-                    ? '视频加载失败，请检查媒体来源、网络或文件访问权限。'
+                    ? (startError == null
+                          ? '视频加载失败，请检查媒体来源、网络或文件访问权限。'
+                          : playbackErrorNotice(
+                              startError,
+                              defaultReason: '视频加载失败，文件可能已损坏或不完整。',
+                            ))
                     : '视频加载超时，请检查媒体来源、网络或文件访问权限后重试。',
+              ),
+              action: SnackBarAction(
+                label: '重试',
+                onPressed: () {
+                  if (mounted) _scheduleOpen(debounceRemote: false);
+                },
               ),
             ),
           );
@@ -993,8 +1020,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         // Any progress since the error means it was transient.
         if (_positionMs != _positionAtRuntimeError) return;
         _runtimeErrorAlertShown = true;
-        ScaffoldMessenger.of(context).showSnackBar(
+        _showNoticeWithGuaranteedDismissal(
           SnackBar(
+            // See the load-failure notice: action snackbars persist forever
+            // unless persist is explicitly false.
+            persist: false,
+            duration: const Duration(seconds: 5),
             content: Text(playbackErrorNotice(message)),
             action: SnackBarAction(
               label: '重试',
@@ -1312,7 +1343,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Captured for dispose(): a failure SnackBar shown here survives the pop
+    // to the detail page (ScaffoldMessenger design), and when its state is
+    // torn down mid-display the framework loses its auto-dismiss timer — it
+    // then stays on the detail page forever. Removing it on the way out
+    // closes that hole. No-op when nothing is showing.
+    _messenger = ScaffoldMessenger.of(context);
+  }
+
+  @override
   void dispose() {
+    // NOTE: no removeCurrentSnackBar here — removing during route teardown
+    // leaves a ghost bar on the next page (see _leavePlayer). The exit paths
+    // remove the notice before popping.
+    _noticeFallbackTimer?.cancel();
+    _noticeFallbackTimer = null;
     _seekDurationSubscription?.close();
     _themeSubscription?.close();
     _settingsSubscription?.close();
@@ -1480,6 +1527,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       await WidgetsBinding.instance.endOfFrame;
     }
     await _restoreWindowState();
+    // Remove any open notice BEFORE the pop. Removing during route teardown
+    // (dispose) leaves the snackbar rendered on the next page's scaffold —
+    // the messenger reports it closed but the widget stays visible (a
+    // framework quirk with two registered scaffolds). While this page is
+    // still mounted, removal detaches cleanly everywhere.
+    _noticeFallbackTimer?.cancel();
+    _noticeFallbackTimer = null;
+    _messenger?.removeCurrentSnackBar();
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -1708,39 +1763,47 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       },
       // Top bar: back + title + secondary-menu buttons (each opens the right
       // drawer) + window buttons. Playback controls live below the seek bar.
+      // The whole bar is wrapped in WindowDragArea so any blank stretch drags
+      // the frameless window (double-click blanks to maximize); the buttons'
+      // own recognizers still win in the arena, so they stay instant.
       topButtonBar: [
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _popSelf,
-        ),
-        const SizedBox(width: 8),
-        // Dragging the title moves the frameless window (double-click to
-        // maximize) — otherwise there's no way to reposition it while the
-        // player fills the route. No-op on mobile.
-        Expanded(child: WindowDragArea(child: _episodeTitleText())),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.subtitles_outlined),
-          onPressed: () => _openPanel(_Panel.tracks),
-        ),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.more_time_outlined),
-          onPressed: () => _openPanel(_Panel.subDelay),
-        ),
-        if (_chapters.isNotEmpty)
-          MaterialDesktopCustomButton(
-            icon: const Icon(Icons.bookmarks_outlined),
-            onPressed: () => _openPanel(_Panel.chapters),
+        Expanded(
+          child: WindowDragArea(
+            child: Row(
+              children: [
+                MaterialDesktopCustomButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: _popSelf,
+                ),
+                const SizedBox(width: 8),
+                Expanded(child: _episodeTitleText()),
+                MaterialDesktopCustomButton(
+                  icon: const Icon(Icons.subtitles_outlined),
+                  onPressed: () => _openPanel(_Panel.tracks),
+                ),
+                MaterialDesktopCustomButton(
+                  icon: const Icon(Icons.more_time_outlined),
+                  onPressed: () => _openPanel(_Panel.subDelay),
+                ),
+                if (_chapters.isNotEmpty)
+                  MaterialDesktopCustomButton(
+                    icon: const Icon(Icons.bookmarks_outlined),
+                    onPressed: () => _openPanel(_Panel.chapters),
+                  ),
+                MaterialDesktopCustomButton(
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => _openPanel(_Panel.info),
+                ),
+                if (widget.episodes.length > 1)
+                  MaterialDesktopCustomButton(
+                    icon: const Icon(Icons.playlist_play),
+                    onPressed: () => _openPanel(_Panel.episodes),
+                  ),
+                if (!_isMobile) const WindowButtons(light: true),
+              ],
+            ),
           ),
-        MaterialDesktopCustomButton(
-          icon: const Icon(Icons.info_outline),
-          onPressed: () => _openPanel(_Panel.info),
         ),
-        if (widget.episodes.length > 1)
-          MaterialDesktopCustomButton(
-            icon: const Icon(Icons.playlist_play),
-            onPressed: () => _openPanel(_Panel.episodes),
-          ),
-        if (!_isMobile) const WindowButtons(light: true),
       ],
       // Under the seek bar: pure playback controls — prev/play/next, rate,
       // quick-seek, volume, position, fullscreen.
@@ -1964,42 +2027,49 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   );
 
   Widget _readableTopBar() => _readableBar(
-    child: Row(
-      children: [
-        MaterialCustomButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: _popSelf,
-        ),
-        Expanded(child: WindowDragArea(child: _episodeTitleText())),
-        _seekButton(),
-        if (Platform.isAndroid)
+    // Whole bar drags on desktop (blank stretches included); the buttons'
+    // own recognizers keep working — see WindowDragArea.
+    child: WindowDragArea(
+      child: Row(
+        children: [
           MaterialCustomButton(
-            icon: const Icon(Icons.picture_in_picture_alt, color: Colors.white),
-            onPressed: _enterPip,
+            icon: const Icon(Icons.arrow_back, color: Colors.white),
+            onPressed: _popSelf,
           ),
-        _rateButton(),
-        MaterialCustomButton(
-          icon: Icon(
-            _takingScreenshot
-                ? Icons.hourglass_top
-                : Icons.photo_camera_outlined,
-            color: Colors.white,
+          Expanded(child: _episodeTitleText()),
+          _seekButton(),
+          if (Platform.isAndroid)
+            MaterialCustomButton(
+              icon: const Icon(
+                Icons.picture_in_picture_alt,
+                color: Colors.white,
+              ),
+              onPressed: _enterPip,
+            ),
+          _rateButton(),
+          MaterialCustomButton(
+            icon: Icon(
+              _takingScreenshot
+                  ? Icons.hourglass_top
+                  : Icons.photo_camera_outlined,
+              color: Colors.white,
+            ),
+            onPressed: _takingScreenshot ? () {} : _takeScreenshot,
           ),
-          onPressed: _takingScreenshot ? () {} : () => _takeScreenshot(),
-        ),
-        MaterialCustomButton(
-          icon: Icon(
-            _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
-            color: Colors.white,
+          MaterialCustomButton(
+            icon: Icon(
+              _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
+              color: Colors.white,
+            ),
+            onPressed: () => _setControlsLocked(!_controlsLocked),
           ),
-          onPressed: () => _setControlsLocked(!_controlsLocked),
-        ),
-        MaterialCustomButton(
-          icon: const Icon(Icons.tune, color: Colors.white),
-          onPressed: () => _openPanel(_Panel.menu),
-        ),
-        if (!_isMobile) const WindowButtons(light: true),
-      ],
+          MaterialCustomButton(
+            icon: const Icon(Icons.tune, color: Colors.white),
+            onPressed: () => _openPanel(_Panel.menu),
+          ),
+          if (!_isMobile) const WindowButtons(light: true),
+        ],
+      ),
     ),
   );
 
@@ -2148,6 +2218,30 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       onPressed: _toggleFullscreen,
     ),
   );
+
+  /// Show a player notice with guaranteed dismissal. The framework timer
+  /// (persist:false + duration) normally closes it; the fallback timer force
+  /// removes it if that never fires. Both paths log so a stuck notice can be
+  /// diagnosed from the run log.
+  void _showNoticeWithGuaranteedDismissal(SnackBar bar) {
+    final messenger = _messenger ?? ScaffoldMessenger.of(context);
+    final controller = messenger.showSnackBar(bar);
+    debugPrint('KurakoNotice: shown');
+    var closed = false;
+    unawaited(
+      controller.closed.then((reason) {
+        closed = true;
+        debugPrint('KurakoNotice: closed reason=$reason');
+      }),
+    );
+    _noticeFallbackTimer?.cancel();
+    _noticeFallbackTimer = Timer(const Duration(seconds: 8), () {
+      if (!closed) {
+        debugPrint('KurakoNotice: auto-dismiss missed, forcing removal');
+        messenger.removeCurrentSnackBar();
+      }
+    });
+  }
 
   void _popSelf() {
     if (mounted) unawaited(_leavePlayer());

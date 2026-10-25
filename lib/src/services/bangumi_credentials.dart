@@ -1,4 +1,8 @@
+import 'dart:io' show File, Platform;
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// How the app is logged into Bangumi. A personal access token is a
 /// completely different credential from an OAuth session: it has no refresh
@@ -93,6 +97,101 @@ class MemoryBangumiCredentialStore implements BangumiCredentialStore {
 
   @override
   Future<void> deletePersonalToken() async => _token = null;
+}
+
+/// macOS credential store: a plain file inside the app-sandbox container.
+///
+/// Why not the keychain: Kurako ships ad-hoc signed (no paid developer
+/// program), and an ad-hoc signature changes with every build. macOS cannot
+/// keep a stable keychain ACL for such an app, so users were prompted to
+/// unlock the "login" keychain on nearly every launch — in debug builds and
+/// in the distributed DMG alike. The app container
+/// (`~/Library/Containers/<bundle>/…`) is only accessible to the logged-in
+/// user, which is the same single-user threat model the OAuth tokens in
+/// SharedPreferences already rely on. The token still never reaches the
+/// configuration backup, logs or exports.
+class FileBangumiCredentialStore implements BangumiCredentialStore {
+  FileBangumiCredentialStore({this._directoryPath});
+
+  static const _fileName = 'bangumi_personal_token';
+
+  final String? _directoryPath;
+  File? _resolved;
+
+  Future<File> _file() async {
+    if (_resolved != null) return _resolved!;
+    final dir =
+        _directoryPath ??
+        (await getApplicationSupportDirectory()).path;
+    _resolved = File('$dir/$_fileName');
+    return _resolved!;
+  }
+
+  /// One-time move of a token saved by the old keychain-backed store.
+  ///
+  /// May show the keychain authorization prompt once more (that is the point
+  /// where the old credential is read for the last time). The "attempted"
+  /// flag is set before reading, so a denied prompt or an unavailable
+  /// keychain never retries: the user simply pastes the token again. The
+  /// legacy keychain item is deliberately left in place — deleting it would
+  /// trigger another prompt for data nothing will ever read again.
+  Future<void> migrateFromKeychainOnce(SharedPreferences prefs) async {
+    if (prefs.getBool('pat_keychain_migrated') ?? false) return;
+    await prefs.setBool('pat_keychain_migrated', true);
+    try {
+      final file = await _file();
+      if (await file.exists()) return;
+      final legacy = await SecureStorageBangumiCredentialStore()
+          .readPersonalToken();
+      if (legacy != null && legacy.isNotEmpty) {
+        await writePersonalToken(legacy);
+      }
+    } catch (_) {
+      // Prompt denied or keychain unavailable: no retry, see above.
+    }
+  }
+
+  @override
+  Future<String?> readPersonalToken() async {
+    try {
+      final file = await _file();
+      if (!await file.exists()) return null;
+      final value = await file.readAsString();
+      return value.isEmpty ? null : value;
+    } catch (_) {
+      // Unreadable storage is reported as "no token": the app starts logged
+      // out instead of crashing.
+      return null;
+    }
+  }
+
+  @override
+  Future<void> writePersonalToken(String token) async {
+    final file = await _file();
+    // Write-then-rename keeps a crash from leaving a truncated token behind.
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(token, flush: true);
+    await tmp.rename(file.path);
+  }
+
+  @override
+  Future<void> deletePersonalToken() async {
+    try {
+      final file = await _file();
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // Deleting a missing/unwritable file leaves nothing behind to leak.
+    }
+  }
+}
+
+/// Platform default for the credential store. macOS uses the container file
+/// (ad-hoc signing makes the keychain prompt on every launch there); every
+/// other platform keeps the system secure store, whose signing context does
+/// not have that problem.
+BangumiCredentialStore createPlatformCredentialStore() {
+  if (Platform.isMacOS) return FileBangumiCredentialStore();
+  return SecureStorageBangumiCredentialStore();
 }
 
 /// User-facing reason for a personal-token flow failure. Fixed strings only:

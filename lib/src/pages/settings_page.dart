@@ -257,17 +257,23 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                 : '登录方式：浏览器授权（${settings.bangumiUsername}）',
                         },
                         _expiryLabel(settings),
-                        switch (renewal.status) {
-                          BangumiRefreshStatus.refreshing => '正在续期…',
-                          BangumiRefreshStatus.success => '续期成功',
-                          BangumiRefreshStatus.networkFailure =>
-                            '续期未完成，已保留现有登录信息。请检查网络后重试。',
-                          BangumiRefreshStatus.reloginRequired =>
-                            '授权已失效或缺少续期凭据，请重新登录。',
-                          BangumiRefreshStatus.ready => '到期前自动检查续期',
-                        },
-                        if (renewal.lastSuccess != null)
-                          '上次续期成功：${_accountTime(renewal.lastSuccess!)}',
+                        // Renewal is an OAuth concept: a personal token has
+                        // neither a refresh flow nor a queryable expiry, so
+                        // renewal status lines stay hidden there.
+                        if (settings.bangumiAuthKind !=
+                            BangumiAuthKind.personalAccessToken) ...[
+                          switch (renewal.status) {
+                            BangumiRefreshStatus.refreshing => '正在续期…',
+                            BangumiRefreshStatus.success => '续期成功',
+                            BangumiRefreshStatus.networkFailure =>
+                              '续期未完成，已保留现有登录信息。请检查网络后重试。',
+                            BangumiRefreshStatus.reloginRequired =>
+                              '授权已失效或缺少续期凭据，请重新登录。',
+                            BangumiRefreshStatus.ready => '到期前自动检查续期',
+                          },
+                          if (renewal.lastSuccess != null)
+                            '上次续期成功：${_accountTime(renewal.lastSuccess!)}',
+                        ],
                       ].join('\n'),
                     ),
                   ),
@@ -587,11 +593,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  '令牌只保存在本机系统安全存储中，不会写入配置备份。'
-                  '个人令牌没有自动续期，有效期由官网选项决定，应用无法查询；'
-                  '失效后需要重新生成并粘贴。',
-                  style: TextStyle(fontSize: 12),
+                Text(
+                  Platform.isMacOS
+                      ? '令牌保存在应用沙盒内的本地文件中（仅当前用户可访问），'
+                        '不会写入配置备份。个人令牌没有自动续期，有效期由官网'
+                        '选项决定，应用无法查询；失效后需要重新生成并粘贴。'
+                      : '令牌只保存在本机系统安全存储中，不会写入配置备份。'
+                        '个人令牌没有自动续期，有效期由官网选项决定，应用无法查询；'
+                        '失效后需要重新生成并粘贴。',
+                  style: const TextStyle(fontSize: 12),
                 ),
                 if (viaMirror) ...[
                   const SizedBox(height: 8),

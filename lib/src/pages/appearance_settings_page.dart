@@ -88,6 +88,18 @@ class AppearanceSettingsPage extends ConsumerWidget {
                   ref.read(useSystemFontProvider.notifier).set(value),
             ),
           ),
+          // Desktop only: window geometry restore (hidden on mobile).
+          if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+            Consumer(
+              builder: (context, ref, _) => SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('记住窗口大小'),
+                subtitle: const Text('启动时恢复上次使用的窗口大小与最大化状态'),
+                value: ref.watch(rememberWindowSizeProvider),
+                onChanged: (value) =>
+                    ref.read(rememberWindowSizeProvider.notifier).set(value),
+              ),
+            ),
         ],
       ),
     );

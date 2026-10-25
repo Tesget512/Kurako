@@ -406,21 +406,8 @@ class _Facts extends StatelessWidget {
       if (anime.totalEps != null) ('话数', '${anime.totalEps} 话'),
     ];
     final hasFooter = collectionControl != null || anime.bangumiId == null;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showTitle) ...[
-          _HeaderTitles(anime: anime, desktop: desktop),
-          const SizedBox(height: 10),
-        ],
-        if (anime.airDate != null) _line('放送开始', anime.airDate!, theme),
-        if (anime.rating != null) _ratingLine(context),
-        if (anime.ratingRank != null)
-          _line('Bangumi Ranked', '#${anime.ratingRank!.toInt()}', theme),
-        if (schedule.isNotEmpty) _scheduleLine(schedule, theme),
-        if (alignControlToBottom && hasFooter) const Spacer(),
-        if (hasFooter)
-          Align(
+    final footer = hasFooter
+        ? Align(
             key: const ValueKey('detail-collection-control'),
             alignment: Alignment.bottomLeft,
             child: Wrap(
@@ -436,8 +423,45 @@ class _Facts extends StatelessWidget {
                   ),
               ],
             ),
-          ),
+          )
+        : null;
+    final lines = <Widget>[
+      if (showTitle) ...[
+        _HeaderTitles(anime: anime, desktop: desktop),
+        const SizedBox(height: 10),
       ],
+      if (anime.airDate != null) _line('放送开始', anime.airDate!, theme),
+      if (anime.rating != null) _ratingLine(context),
+      if (anime.ratingRank != null)
+        _line('Bangumi Ranked', '#${anime.ratingRank!.toInt()}', theme),
+      if (schedule.isNotEmpty) _scheduleLine(schedule, theme),
+    ];
+
+    if (alignControlToBottom) {
+      // The narrow layout caps this column at the cover height so the
+      // control row pins to the cover's bottom edge. The info lines are the
+      // variable part: taller entries (rating + rank + schedule + footer)
+      // used to overflow that cap — they scroll inside it instead, while
+      // the pinned footer keeps its geometry (ui_animation_test depends on
+      // the control's bottom matching the cover's bottom).
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: lines,
+              ),
+            ),
+          ),
+          ?footer,
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [...lines, ?footer],
     );
   }
 

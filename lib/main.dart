@@ -48,13 +48,25 @@ Future<void> main() async {
   // (custom drag region + window buttons drawn in-app). See widgets/
   // window_caption.dart. Android/iOS skip this entirely.
   final isDesktop = Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+  final prefs = await SharedPreferences.getInstance();
   if (isDesktop) {
     await windowManager.ensureInitialized();
+    final minSize = Platform.isLinux ? const Size(960, 640) : const Size(800, 600);
+    var initialSize = Platform.isLinux ? const Size(1440, 900) : const Size(1280, 800);
+    // "Remember window size" (appearance setting): reuse the size from the
+    // previous session when it still clears the minimum, so the window opens
+    // exactly as it was left. Smaller values (corrupted prefs, older builds)
+    // fall back to the default.
+    if (prefs.getBool('remember_window_size') ?? true) {
+      final w = prefs.getDouble('window_width');
+      final h = prefs.getDouble('window_height');
+      if (w != null && h != null && w >= minSize.width && h >= minSize.height) {
+        initialSize = Size(w, h);
+      }
+    }
     final options = WindowOptions(
-      size: Platform.isLinux ? const Size(1440, 900) : const Size(1280, 800),
-      minimumSize: Platform.isLinux
-          ? const Size(960, 640)
-          : const Size(800, 600),
+      size: initialSize,
+      minimumSize: minSize,
       center: true,
       titleBarStyle: TitleBarStyle.hidden,
       // macOS-only: window_manager's Windows plugin ignores this flag
@@ -63,11 +75,11 @@ Future<void> main() async {
       windowButtonVisibility: false,
       title: 'Kurako',
     );
-    // Show only once ready to avoid a flash of the un-styled native frame.
-    windowManager.waitUntilReadyToShow(options, () async {
-      await windowManager.show();
-      await windowManager.focus();
-    });
+    // Apply the options (size/title-bar) and WAIT for them before the first
+    // frame is built. The window itself is NOT shown here: the macOS xib
+    // keeps it hidden at launch and app.dart shows it once the first frame
+    // has been painted, so the app never flashes an un-styled black frame.
+    await windowManager.waitUntilReadyToShow(options);
   }
 
   // Open the SQLite database in the app data directory. On Windows this lives
@@ -80,7 +92,7 @@ Future<void> main() async {
   defaultDownloadDirPath = await _defaultDownloadDir(dir);
 
   // Restore the saved Bangumi token, if any.
-  final prefs = await SharedPreferences.getInstance();
+  // (prefs was fetched before the window setup above.)
   // The custom download folder needs its security scope while Rust scans it
   // for records; without it the scan silently finds nothing and the app
   // re-downloads episodes it already has.

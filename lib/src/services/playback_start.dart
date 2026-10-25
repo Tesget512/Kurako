@@ -26,7 +26,9 @@ bool hasLoadedMedia(PlayerState state) =>
 ///
 /// mpv's message can quote the media path or URL, so the raw text is classified
 /// and never shown or logged: the user gets the cause, not their own filename.
-String playbackErrorNotice(String raw) {
+/// [defaultReason] replaces the generic tail for callers in the load phase,
+/// where "播放过程中" ("during playback") would read wrong.
+String playbackErrorNotice(String raw, {String? defaultReason}) {
   final text = raw.toLowerCase();
   if (text.contains('does not exist') ||
       text.contains('no such file') ||
@@ -52,7 +54,7 @@ String playbackErrorNotice(String raw) {
   if (text.contains('memory')) {
     return '内存不足，无法继续解码这段视频。';
   }
-  return '播放过程中出现错误，视频可能已损坏。';
+  return defaultReason ?? '播放过程中出现错误，视频可能已损坏。';
 }
 
 /// Attach before open() so an early native error cannot be lost. Readiness is
@@ -68,6 +70,11 @@ class PlaybackStartWaiter {
   bool _armed = false;
   bool _failed = false;
 
+  /// The most recent native error text, so a load-phase failure can be
+  /// classified by [playbackErrorNotice] instead of a generic notice.
+  /// Never displayed raw (it may quote the media path).
+  String? error;
+
   PlaybackStartWaiter(this.player, this.generation, this.expectedGeneration) {
     _subscriptions.addAll([
       player.stream.duration.listen((_) => _check()),
@@ -75,7 +82,8 @@ class PlaybackStartWaiter {
       player.stream.position.listen((_) => _check()),
       player.stream.playing.listen((_) => _check()),
       player.stream.buffering.listen((_) => _check()),
-      player.stream.error.listen((_) {
+      player.stream.error.listen((message) {
+        error = message;
         _failed = true;
         if (_armed) _check();
       }),
