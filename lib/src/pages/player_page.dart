@@ -29,6 +29,7 @@ import '../state/providers.dart';
 import '../state/player_appearance.dart';
 import '../widgets/player_visuals.dart';
 import '../widgets/window_caption.dart';
+import '../ui/shapes.dart';
 
 /// A video chapter marker parsed from mpv's `chapter-list`.
 class _Chapter {
@@ -1664,13 +1665,22 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       onTap: () => setState(() => _drawerPanel = panel),
     );
     return ListView(
+      padding: const EdgeInsets.all(12),
       children: [
-        tile(Icons.subtitles_outlined, '字幕 / 音轨', _Panel.tracks),
-        tile(Icons.more_time_outlined, '字幕延迟', _Panel.subDelay),
-        tile(Icons.auto_fix_high, 'Anime4K 超分辨率', _Panel.superResolution),
-        tile(Icons.info_outline, '播放信息', _Panel.info),
-        if (_chapters.isNotEmpty)
-          tile(Icons.bookmarks_outlined, '章节', _Panel.chapters),
+        Card(
+          shape: KurakoShapes.card,
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            children: [
+              tile(Icons.subtitles_outlined, '字幕 / 音轨', _Panel.tracks),
+              tile(Icons.more_time_outlined, '字幕延迟', _Panel.subDelay),
+              tile(Icons.auto_fix_high, 'Anime4K 超分辨率', _Panel.superResolution),
+              tile(Icons.info_outline, '播放信息', _Panel.info),
+              if (_chapters.isNotEmpty)
+                tile(Icons.bookmarks_outlined, '章节', _Panel.chapters),
+            ],
+          ),
+        ),
       ],
     );
   }
