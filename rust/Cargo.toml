@@ -22,7 +22,7 @@ futures = "0.3"
 once_cell = "1"
 simplet2s = "0.2"
 # Pure-Rust SMB2/3 client (no C deps) for network-share libraries.
-smb2 = "0.13"
+smb2 = "0.35"
 chardetng = "1.0"
 encoding_rs = "0.8"
 unicode-normalization = "0.1"

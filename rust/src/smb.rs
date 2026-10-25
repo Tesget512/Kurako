@@ -824,7 +824,7 @@ async fn open_session_reader(
                 continue;
             }
         };
-        let guard = match tokio::time::timeout(SETUP_TIMEOUT, sess.inner.lock()).await {
+        let mut guard = match tokio::time::timeout(SETUP_TIMEOUT, sess.inner.lock()).await {
             Ok(guard) => guard,
             Err(_) => {
                 last_error = Some(anyhow::anyhow!("smb session remained busy for too long"));
@@ -832,7 +832,7 @@ async fn open_session_reader(
                 continue;
             }
         };
-        let SmbSessionInner { client, tree } = &*guard;
+        let SmbSessionInner { client, tree } = &mut *guard;
         let open_result =
             tokio::time::timeout(SETUP_TIMEOUT, client.open_file_reader(tree, path)).await;
         drop(guard);
