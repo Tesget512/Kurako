@@ -185,11 +185,11 @@ class _WebDavSourceWizardPageState
       return;
     }
     final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
-    if (ref.read(scanCoordinatorProvider).running || mutationLock.state) {
+    if (ref.read(scanCoordinatorProvider).running || mutationLock.value) {
       setState(() => _error = '扫描或维护正在进行，请完成后再添加来源');
       return;
     }
-    mutationLock.state = true;
+    mutationLock.value = true;
     _setBusy(true);
     WebDavCredentials? oldCredentials;
     final addedFolders = <LibraryFolder>[];
@@ -236,7 +236,7 @@ class _WebDavSourceWizardPageState
       } catch (_) {}
       if (mounted) setState(() => _error = '添加 WebDAV 文件夹失败：$error');
     } finally {
-      mutationLock.state = false;
+      mutationLock.value = false;
       _setBusy(false);
     }
   }

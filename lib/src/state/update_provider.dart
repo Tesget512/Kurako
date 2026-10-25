@@ -50,9 +50,9 @@ final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
 });
 
 final updateCheckProvider =
-    StateNotifierProvider<UpdateCheckNotifier, UpdateCheckState>((ref) {
-      return UpdateCheckNotifier(ref.watch(appUpdateServiceProvider));
-    });
+    NotifierProvider<UpdateCheckNotifier, UpdateCheckState>(
+      UpdateCheckNotifier.new,
+    );
 
 enum UpdateCheckStatus {
   idle,
@@ -84,13 +84,21 @@ class UpdateCheckState {
 
 /// One instance per application ProviderScope. No network work in its constructor.
 /// Startup failures are only observable on the about page, never a modal prompt.
-class UpdateCheckNotifier extends StateNotifier<UpdateCheckState> {
-  UpdateCheckNotifier(this.service) : super(const UpdateCheckState());
+class UpdateCheckNotifier extends Notifier<UpdateCheckState> {
+  UpdateCheckNotifier([AppUpdateService? service]) : _injectedService = service;
 
-  final AppUpdateService service;
+  final AppUpdateService? _injectedService;
+  late final AppUpdateService service;
   Future<void>? _checking;
   bool _startupChecked = false;
   bool _disposed = false;
+
+  @override
+  UpdateCheckState build() {
+    service = _injectedService ?? ref.watch(appUpdateServiceProvider);
+    ref.onDispose(() => _disposed = true);
+    return const UpdateCheckState();
+  }
 
   Future<void> checkAtStartup() {
     if (_disposed || _startupChecked) return Future<void>.value();
@@ -159,11 +167,5 @@ class UpdateCheckNotifier extends StateNotifier<UpdateCheckState> {
     final release = state.result?.release;
     if (release == null) return false;
     return service.openRelease(release);
-  }
-
-  @override
-  void dispose() {
-    _disposed = true;
-    super.dispose();
   }
 }

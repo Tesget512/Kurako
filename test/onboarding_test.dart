@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:kurako/src/pages/onboarding_page.dart';
 import 'package:kurako/src/state/providers.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
   test('only macOS onboarding mentions sandbox authorization', () {
@@ -39,19 +40,35 @@ void main() {
 
   test('completed onboarding is not exposed while preferences load', () async {
     SharedPreferences.setMockInitialValues({'onboarding_completed_v1': true});
-    final notifier = OnboardingCompletedNotifier();
+    final container = ProviderContainer(
+      overrides: [
+        onboardingCompletedProvider.overrideWith(
+          OnboardingCompletedNotifier.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(onboardingCompletedProvider.notifier);
     expect(notifier.state, OnboardingStatus.loading);
     await notifier.ready;
     expect(notifier.state, OnboardingStatus.completed);
-    notifier.dispose();
+    container.dispose();
   });
 
   test('unset onboarding preference becomes required after loading', () async {
     SharedPreferences.setMockInitialValues({});
-    final notifier = OnboardingCompletedNotifier();
+    final container = ProviderContainer(
+      overrides: [
+        onboardingCompletedProvider.overrideWith(
+          OnboardingCompletedNotifier.new,
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(onboardingCompletedProvider.notifier);
     expect(notifier.state, OnboardingStatus.loading);
     await notifier.ready;
     expect(notifier.state, OnboardingStatus.required);
-    notifier.dispose();
+    container.dispose();
   });
 }

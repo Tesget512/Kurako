@@ -11,22 +11,25 @@ import '../services/security_scope.dart';
 import '../state/providers.dart';
 
 /// Synchronous reservation shared with maintenance/source mutations.
-final libraryMutationBusyProvider = StateProvider<bool>((ref) => false);
+final libraryMutationBusyProvider =
+    NotifierProvider<LibraryMutationBusyNotifier, bool>(
+      LibraryMutationBusyNotifier.new,
+    );
+
+class LibraryMutationBusyNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  /// Public read/write surface. Notifier.state is protected in Riverpod 3, so
+  /// pages reserve/release the bus through these instead of touching state.
+  bool get value => state;
+  set value(bool busy) => state = busy;
+}
 
 /// Not autoDispose: navigation must not own or interrupt a scan session.
-final scanCoordinatorProvider =
-    StateNotifierProvider<ScanCoordinator, ScanState>((ref) {
-      return ScanCoordinator(
-        RustScanBackend(),
-        canStart: () => !ref.read(libraryMutationBusyProvider),
-        onLibraryChanged: () {
-          ref.invalidate(animeListProvider);
-          ref.invalidate(animeDetailProvider);
-          ref.invalidate(episodesProvider);
-          ref.invalidate(foldersProvider);
-        },
-      );
-    });
+final scanCoordinatorProvider = NotifierProvider<ScanCoordinator, ScanState>(
+  () => ScanCoordinator(RustScanBackend()),
+);
 
 /// Per-folder aggregates parsed from a scan event's `stats:` line.
 class FolderScanStats {
@@ -232,21 +235,38 @@ class RustScanBackend implements ScanBackend {
   }
 }
 
-class ScanCoordinator extends StateNotifier<ScanState> {
+class ScanCoordinator extends Notifier<ScanState> {
   final ScanBackend backend;
-  final void Function() onLibraryChanged;
-  final bool Function() canStart;
   bool _cancelRequested = false;
   bool _ownsSession = false;
-  ScanCoordinator(
-    this.backend, {
-    required this.onLibraryChanged,
-    bool Function()? canStart,
-  }) : canStart = canStart ?? (() => true),
-       super(const ScanState());
+  void Function()? _onLibraryChanged;
+  bool Function()? _canStart;
+
+  ScanCoordinator(this.backend, {this._onLibraryChanged, this._canStart});
+
+  /// Invalidates the library-facing providers after a scan changed data.
+  void Function() get onLibraryChanged => _onLibraryChanged ??= () {
+    ref.invalidate(animeListProvider);
+    ref.invalidate(animeDetailProvider);
+    ref.invalidate(episodesProvider);
+    ref.invalidate(foldersProvider);
+  };
+
+  /// Maintenance mutations hold the bus; scans wait for them.
+  bool Function() get canStart =>
+      _canStart ??= () => !ref.read(libraryMutationBusyProvider);
+
+  @override
+  ScanState build() {
+    ref.onDispose(() {
+      _cancelRequested = true;
+      if (_ownsSession) backend.cancel();
+    });
+    return const ScanState();
+  }
 
   void _publish(ScanState value) {
-    if (mounted) state = value;
+    if (ref.mounted) state = value;
   }
 
   void _progress(ScanProgress progress) {
@@ -368,7 +388,7 @@ class ScanCoordinator extends StateNotifier<ScanState> {
           await backend.awake(false);
         } catch (_) {}
       }
-      if (mounted) {
+      if (ref.mounted) {
         if (changed) onLibraryChanged();
         // A dismissed scan must not republish a finished bar: the user asked
         // for it to disappear while the native call was still unwinding.
@@ -421,12 +441,5 @@ class ScanCoordinator extends StateNotifier<ScanState> {
 
   void dismiss() {
     if (!state.running) state = const ScanState();
-  }
-
-  @override
-  void dispose() {
-    _cancelRequested = true;
-    if (_ownsSession) backend.cancel();
-    super.dispose();
   }
 }

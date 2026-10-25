@@ -7,6 +7,7 @@ import 'package:kurako/src/services/bangumi_credentials.dart';
 import 'package:kurako/src/services/bangumi_oauth.dart' show OAuthException;
 import 'package:kurako/src/state/providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final _now = DateTime.utc(2026, 10, 25);
 
@@ -124,12 +125,22 @@ void main() {
       'bangumi_username': 'file-user',
     });
     final backend = _RefreshBackend();
-    final notifier = SettingsNotifier(
-      refreshBackend: backend,
-      personalTokenBackend: _TokenBackend(),
-      credentialStore: FileBangumiCredentialStore(directoryPath: tmp.path),
-      now: () => _now,
+    final container = ProviderContainer(
+      overrides: [
+        settingsProvider.overrideWith(
+          () => SettingsNotifier(
+            refreshBackend: backend,
+            personalTokenBackend: _TokenBackend(),
+            credentialStore: FileBangumiCredentialStore(
+              directoryPath: tmp.path,
+            ),
+            now: () => _now,
+          ),
+        ),
+      ],
     );
+    addTearDown(container.dispose);
+    final notifier = container.read(settingsProvider.notifier);
     await notifier.ready;
     await _settle();
 
@@ -140,6 +151,5 @@ void main() {
       File('${tmp.path}/bangumi_personal_token').readAsStringSync(),
       'legacy-pat',
     );
-    notifier.dispose();
   });
 }

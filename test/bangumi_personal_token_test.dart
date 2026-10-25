@@ -1,3 +1,4 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurako/src/rust/api.dart' show OAuthResult;
 import 'package:kurako/src/services/bangumi_credentials.dart';
@@ -61,6 +62,29 @@ Future<void> _settle() async {
   }
 }
 
+/// Riverpod 3 Notifiers only work container-mounted; stand up settingsProvider
+/// with the test's injected backends and return (notifier, container).
+(SettingsNotifier, ProviderContainer) _mounted({
+  required BangumiRefreshBackend refreshBackend,
+  BangumiPersonalTokenBackend? personalTokenBackend,
+  BangumiCredentialStore? credentialStore,
+}) {
+  final container = ProviderContainer(
+    overrides: [
+      settingsProvider.overrideWith(
+        () => SettingsNotifier(
+          refreshBackend: refreshBackend,
+          personalTokenBackend: personalTokenBackend,
+          credentialStore: credentialStore,
+          now: () => _now,
+        ),
+      ),
+    ],
+  );
+  final notifier = container.read(settingsProvider.notifier);
+  return (notifier, container);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -71,11 +95,10 @@ void main() {
       final backend = _RefreshBackend();
       final tokens = _TokenBackend();
       final store = MemoryBangumiCredentialStore();
-      final notifier = SettingsNotifier(
+      final (notifier, container) = _mounted(
         refreshBackend: backend,
         personalTokenBackend: tokens,
         credentialStore: store,
-        now: () => _now,
       );
       await notifier.ready;
       await _settle();
@@ -107,7 +130,7 @@ void main() {
       await notifier.ensureFreshBangumiToken(force: true);
       await _settle();
       expect(backend.refreshes, isEmpty);
-      notifier.dispose();
+      container.dispose();
     },
   );
 
@@ -121,11 +144,10 @@ void main() {
     final tokens = _TokenBackend()
       ..failure = const OAuthException('personal token rejected (http 401)');
     final store = MemoryBangumiCredentialStore();
-    final notifier = SettingsNotifier(
+    final (notifier, container) = _mounted(
       refreshBackend: backend,
       personalTokenBackend: tokens,
       credentialStore: store,
-      now: () => _now,
     );
     await notifier.ready;
     await _settle();
@@ -142,7 +164,7 @@ void main() {
     expect(prefs.getString('bangumi_auth_kind'), isNull);
     expect(notifier.state.bangumiAuthKind, BangumiAuthKind.oauth);
     expect(notifier.state.isLoggedIn, isTrue);
-    notifier.dispose();
+    container.dispose();
   });
 
   test(
@@ -150,11 +172,10 @@ void main() {
     () async {
       SharedPreferences.setMockInitialValues({});
       final tokens = _TokenBackend();
-      final notifier = SettingsNotifier(
+      final (notifier, container) = _mounted(
         refreshBackend: _RefreshBackend(),
         personalTokenBackend: tokens,
         credentialStore: _FailingStore(),
-        now: () => _now,
       );
       await notifier.ready;
       await _settle();
@@ -167,7 +188,7 @@ void main() {
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('bangumi_auth_kind'), isNull);
       expect(notifier.state.isLoggedIn, isFalse);
-      notifier.dispose();
+      container.dispose();
     },
   );
 
@@ -182,11 +203,10 @@ void main() {
       final backend = _RefreshBackend();
       final store = MemoryBangumiCredentialStore();
       await store.writePersonalToken('pat-synthetic');
-      final notifier = SettingsNotifier(
+      final (notifier, container) = _mounted(
         refreshBackend: backend,
         personalTokenBackend: _TokenBackend(),
         credentialStore: store,
-        now: () => _now,
       );
       await notifier.ready;
       await _settle();
@@ -195,7 +215,7 @@ void main() {
       expect(notifier.state.personalTokenActive, isTrue);
       expect(backend.tokens, ['pat-synthetic']);
       expect(backend.refreshes, isEmpty, reason: 'PAT never auto-refreshes');
-      notifier.dispose();
+      container.dispose();
     },
   );
 
@@ -207,11 +227,10 @@ void main() {
       });
       final backend = _RefreshBackend();
       final emptyStore = MemoryBangumiCredentialStore();
-      final notifier = SettingsNotifier(
+      final (notifier, container) = _mounted(
         refreshBackend: backend,
         personalTokenBackend: _TokenBackend(),
         credentialStore: emptyStore,
-        now: () => _now,
       );
       await notifier.ready;
       await _settle();
@@ -219,7 +238,7 @@ void main() {
       expect(notifier.state.isLoggedIn, isFalse);
       expect(notifier.state.personalTokenActive, isFalse);
       expect(backend.tokens, isEmpty, reason: 'no token pushed to runtime');
-      notifier.dispose();
+      container.dispose();
     },
   );
 
@@ -232,11 +251,10 @@ void main() {
     final backend = _RefreshBackend();
     final store = MemoryBangumiCredentialStore();
     await store.writePersonalToken('pat-synthetic');
-    final notifier = SettingsNotifier(
+    final (notifier, container) = _mounted(
       refreshBackend: backend,
       personalTokenBackend: _TokenBackend(),
       credentialStore: store,
-      now: () => _now,
     );
     await notifier.ready;
     await _settle();
@@ -251,7 +269,7 @@ void main() {
     expect(prefs.getString('bangumi_username'), isNull);
     expect(notifier.state.isLoggedIn, isFalse);
     expect(backend.tokens.last, isNull);
-    notifier.dispose();
+    container.dispose();
   });
 
   test(
@@ -260,11 +278,10 @@ void main() {
       SharedPreferences.setMockInitialValues({});
       final backend = _RefreshBackend();
       final store = MemoryBangumiCredentialStore();
-      final notifier = SettingsNotifier(
+      final (notifier, container) = _mounted(
         refreshBackend: backend,
         personalTokenBackend: _TokenBackend(),
         credentialStore: store,
-        now: () => _now,
       );
       await notifier.ready;
       await _settle();
@@ -288,7 +305,7 @@ void main() {
       await notifier.ensureFreshBangumiToken(force: true);
       await _settle();
       expect(backend.refreshes, ['oauth-refresh']);
-      notifier.dispose();
+      container.dispose();
     },
   );
 }

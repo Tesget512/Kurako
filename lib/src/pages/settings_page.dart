@@ -687,16 +687,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   Future<void> _mutateSources(Future<void> Function() mutation) async {
     final lock = ref.read(libraryMutationBusyProvider.notifier);
-    if (ref.read(scanCoordinatorProvider).running || lock.state) {
+    if (ref.read(scanCoordinatorProvider).running || lock.value) {
       _snack('扫描或维护正在进行，请完成后再调整来源');
       return;
     }
-    lock.state = true;
+    lock.value = true;
     try {
       await mutation();
       if (mounted) ref.invalidate(foldersProvider);
     } finally {
-      lock.state = false;
+      lock.value = false;
     }
   }
 

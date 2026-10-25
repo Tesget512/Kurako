@@ -81,8 +81,8 @@ void main() {
     final container = ProviderContainer(
       overrides: [
         episodesProvider.overrideWith((ref, id) async => const <Episode>[]),
-        downloadManagerProvider.overrideWith((ref) {
-          manager = _GuardDownloadManager(ref);
+        downloadManagerProvider.overrideWith(() {
+          manager = _GuardDownloadManager();
           return manager;
         }),
       ],
@@ -140,8 +140,6 @@ void main() {
 }
 
 class _GuardDownloadManager extends DownloadManager {
-  _GuardDownloadManager(super.ref);
-
   bool dismissCalled = false;
 
   @override

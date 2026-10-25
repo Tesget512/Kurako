@@ -7,6 +7,7 @@ import 'package:kurako/src/state/player_appearance.dart';
 import 'package:kurako/src/widgets/player_visuals.dart';
 import 'package:media_kit_video/media_kit_video_controls/media_kit_video_controls.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
   test('level indicators stay beside the finger and inside safe bounds', () {
@@ -275,7 +276,13 @@ void main() {
       SharedPreferences.setMockInitialValues({
         playerBrightnessColorKey: 0xFF112233,
       });
-      final notifier = PlayerAppearanceNotifier();
+      final container = ProviderContainer(
+        overrides: [
+          playerAppearanceProvider.overrideWith(PlayerAppearanceNotifier.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      final notifier = container.read(playerAppearanceProvider.notifier);
       await notifier.setColor(
         brightness: false,
         color: const Color(0xFF445566),
@@ -284,7 +291,7 @@ void main() {
       expect(notifier.state.volume.toARGB32(), 0xFF445566);
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getInt(playerVolumeColorKey), 0xFF445566);
-      notifier.dispose();
+      container.dispose();
     },
   );
 

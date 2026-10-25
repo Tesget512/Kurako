@@ -55,16 +55,17 @@ enum LibrarySort { normal, year, rating, weekday, yearWeekday, yearQuarter }
 
 /// The active library sort, persisted so the choice carries over across
 /// launches.
-final librarySortProvider = StateNotifierProvider<_SortNotifier, LibrarySort>((
-  ref,
-) {
-  return _SortNotifier();
-});
+final librarySortProvider = NotifierProvider<_SortNotifier, LibrarySort>(
+  _SortNotifier.new,
+);
 
-class _SortNotifier extends StateNotifier<LibrarySort> {
-  _SortNotifier() : super(LibrarySort.normal) {
+class _SortNotifier extends Notifier<LibrarySort> {
+  @override
+  LibrarySort build() {
     _load();
+    return LibrarySort.normal;
   }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     final i = prefs.getInt('library_sort') ?? 0;
@@ -82,30 +83,32 @@ class _SortNotifier extends StateNotifier<LibrarySort> {
 
 /// Whether collected entries (在看/想看/…) are pinned above the rest. When off,
 /// they sort purely by the chosen order like everything else. Persisted.
-final pinCollectedProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
-  ref,
-) {
-  return _BoolPrefNotifier('pin_collected', defaultValue: true);
-});
+final pinCollectedProvider = NotifierProvider<_BoolPrefNotifier, bool>(
+  () => _BoolPrefNotifier('pin_collected', defaultValue: true),
+);
 
 /// Whether the grid is split into labelled sections by the sort dimension.
 /// Persisted.
-final groupingEnabledProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
-  ref,
-) {
-  return _BoolPrefNotifier('grouping_enabled', defaultValue: false);
-});
+final groupingEnabledProvider = NotifierProvider<_BoolPrefNotifier, bool>(
+  () => _BoolPrefNotifier('grouping_enabled', defaultValue: false),
+);
 
 /// A bool backed by SharedPreferences.
-class _BoolPrefNotifier extends StateNotifier<bool> {
+class _BoolPrefNotifier extends Notifier<bool> {
+  _BoolPrefNotifier(this.key, {required this._defaultValue});
+
   final String key;
-  _BoolPrefNotifier(this.key, {required bool defaultValue})
-    : super(defaultValue) {
-    _load(defaultValue);
+  final bool _defaultValue;
+
+  @override
+  bool build() {
+    _load();
+    return _defaultValue;
   }
-  Future<void> _load(bool def) async {
+
+  Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getBool(key) ?? def;
+    state = prefs.getBool(key) ?? _defaultValue;
   }
 
   Future<void> toggle() => set(!state);
@@ -118,21 +121,28 @@ class _BoolPrefNotifier extends StateNotifier<bool> {
 }
 
 /// An int backed by SharedPreferences, clamped to [min, max].
-class _IntPrefNotifier extends StateNotifier<int> {
+class _IntPrefNotifier extends Notifier<int> {
+  _IntPrefNotifier(
+    this.key, {
+    required this._defaultValue,
+    required this.min,
+    required this.max,
+  });
+
   final String key;
   final int min;
   final int max;
-  _IntPrefNotifier(
-    this.key, {
-    required int defaultValue,
-    required this.min,
-    required this.max,
-  }) : super(defaultValue) {
-    _load(defaultValue);
+  final int _defaultValue;
+
+  @override
+  int build() {
+    _load();
+    return _defaultValue;
   }
-  Future<void> _load(int def) async {
+
+  Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = (prefs.getInt(key) ?? def).clamp(min, max);
+    state = (prefs.getInt(key) ?? _defaultValue).clamp(min, max);
   }
 
   Future<void> set(int value) async {
@@ -206,16 +216,17 @@ enum AppThemeMode {
   };
 }
 
-final themeProvider = StateNotifierProvider<ThemeNotifier, ThemeSettings>((
-  ref,
-) {
-  return ThemeNotifier();
-});
+final themeProvider = NotifierProvider<ThemeNotifier, ThemeSettings>(
+  ThemeNotifier.new,
+);
 
-class ThemeNotifier extends StateNotifier<ThemeSettings> {
-  ThemeNotifier() : super(const ThemeSettings()) {
+class ThemeNotifier extends Notifier<ThemeSettings> {
+  @override
+  ThemeSettings build() {
     _load();
+    return const ThemeSettings();
   }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     state = ThemeSettings(
@@ -251,29 +262,23 @@ class ThemeNotifier extends StateNotifier<ThemeSettings> {
 
 /// Seconds jumped by the player's toolbar quick-forward button. Double-tap
 /// gestures use Settings.gestureSeekDurationSec independently. Clamped 5..90.
-final seekDurationProvider = StateNotifierProvider<_IntPrefNotifier, int>((
-  ref,
-) {
-  return _IntPrefNotifier(
-    'seek_duration_sec',
-    defaultValue: 40,
-    min: 5,
-    max: 90,
-  );
-});
+final seekDurationProvider = NotifierProvider<_IntPrefNotifier, int>(
+  () =>
+      _IntPrefNotifier('seek_duration_sec', defaultValue: 40, min: 5, max: 90),
+);
 
 // ---- UI scale (percent of the adaptive default size), persisted ----
 
 /// Interface scale percentage. 100 = adaptive default; scaled via
 /// MaterialApp.builder so vector rendering stays crisp. Clamped to 75..150.
-final uiScaleProvider = StateNotifierProvider<_IntPrefNotifier, int>((ref) {
-  return _IntPrefNotifier(
+final uiScaleProvider = NotifierProvider<_IntPrefNotifier, int>(
+  () => _IntPrefNotifier(
     'ui_scale_percent',
     defaultValue: 100,
     min: 75,
     max: 150,
-  );
-});
+  ),
+);
 
 // ---- Remember window size (desktop), persisted ----
 
@@ -281,28 +286,23 @@ final uiScaleProvider = StateNotifierProvider<_IntPrefNotifier, int>((ref) {
 /// maximized state) it had when last used, instead of the fixed default.
 /// The geometry itself lives in the `window_width` / `window_height` /
 /// `window_maximized` prefs, written by the app root's WindowListener.
-final rememberWindowSizeProvider =
-    StateNotifierProvider<_BoolPrefNotifier, bool>((ref) {
-      return _BoolPrefNotifier('remember_window_size', defaultValue: true);
-    });
+final rememberWindowSizeProvider = NotifierProvider<_BoolPrefNotifier, bool>(
+  () => _BoolPrefNotifier('remember_window_size', defaultValue: true),
+);
 
 /// On desktop, use touch gestures instead of mouse-hover controls. On iPad,
 /// this is inverted at the presentation layer: false keeps the touch-first
 /// default and true opts into desktop controls for a mouse/keyboard setup.
 /// Persisted across launches.
-final touchModePlayerProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
-  ref,
-) {
-  return _BoolPrefNotifier('touch_mode_player', defaultValue: false);
-});
+final touchModePlayerProvider = NotifierProvider<_BoolPrefNotifier, bool>(
+  () => _BoolPrefNotifier('touch_mode_player', defaultValue: false),
+);
 
 /// Use the operating-system default font instead of the bundled LXGW WenKai.
 /// Off by default (the app ships its own screen-tuned CJK font). Persisted.
-final useSystemFontProvider = StateNotifierProvider<_BoolPrefNotifier, bool>((
-  ref,
-) {
-  return _BoolPrefNotifier('use_system_font', defaultValue: false);
-});
+final useSystemFontProvider = NotifierProvider<_BoolPrefNotifier, bool>(
+  () => _BoolPrefNotifier('use_system_font', defaultValue: false),
+);
 
 // ---- Decode mode (player hardware/software acceleration) ----
 
@@ -313,22 +313,26 @@ String decodeModeStartupValue = 'auto';
 
 /// Decode mode: 'auto' (platform default), 'hw' (force hardware), 'sw' (force
 /// software). Takes effect when next entering the player. Persisted.
-final decodeModeProvider = StateNotifierProvider<_StringPrefNotifier, String>((
-  ref,
-) {
-  return _StringPrefNotifier('decode_mode', defaultValue: 'auto');
-});
+final decodeModeProvider = NotifierProvider<_StringPrefNotifier, String>(
+  () => _StringPrefNotifier('decode_mode', defaultValue: 'auto'),
+);
 
 /// A string backed by SharedPreferences.
-class _StringPrefNotifier extends StateNotifier<String> {
+class _StringPrefNotifier extends Notifier<String> {
+  _StringPrefNotifier(this.key, {required this._defaultValue});
+
   final String key;
-  _StringPrefNotifier(this.key, {required String defaultValue})
-    : super(defaultValue) {
-    _load(defaultValue);
+  final String _defaultValue;
+
+  @override
+  String build() {
+    _load();
+    return _defaultValue;
   }
-  Future<void> _load(String def) async {
+
+  Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    state = prefs.getString(key) ?? def;
+    state = prefs.getString(key) ?? _defaultValue;
     if (key == 'decode_mode') decodeModeStartupValue = state;
     if (key == 'download_dir') await _syncDownloadDirectory(state);
   }
@@ -366,11 +370,9 @@ String effectiveDownloadDir(String pref) => pref.isNotEmpty
           : '$appDataDirPath/downloads');
 
 /// Absolute path of the downloads directory. Null = app data dir / downloads.
-final downloadDirProvider = StateNotifierProvider<_StringPrefNotifier, String>((
-  ref,
-) {
-  return _StringPrefNotifier('download_dir', defaultValue: '');
-});
+final downloadDirProvider = NotifierProvider<_StringPrefNotifier, String>(
+  () => _StringPrefNotifier('download_dir', defaultValue: ''),
+);
 
 enum OnboardingStatus { loading, required, completed }
 
@@ -378,13 +380,15 @@ enum OnboardingStatus { loading, required, completed }
 /// prevents an existing installation from seeing the onboarding page for one
 /// frame while SharedPreferences is still being read.
 final onboardingCompletedProvider =
-    StateNotifierProvider<OnboardingCompletedNotifier, OnboardingStatus>((ref) {
-      return OnboardingCompletedNotifier();
-    });
+    NotifierProvider<OnboardingCompletedNotifier, OnboardingStatus>(
+      OnboardingCompletedNotifier.new,
+    );
 
-class OnboardingCompletedNotifier extends StateNotifier<OnboardingStatus> {
-  OnboardingCompletedNotifier() : super(OnboardingStatus.loading) {
+class OnboardingCompletedNotifier extends Notifier<OnboardingStatus> {
+  @override
+  OnboardingStatus build() {
     ready = _load();
+    return OnboardingStatus.loading;
   }
 
   late final Future<void> ready;
@@ -392,7 +396,7 @@ class OnboardingCompletedNotifier extends StateNotifier<OnboardingStatus> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) {
+    if (ref.mounted) {
       state = (prefs.getBool(_key) ?? false)
           ? OnboardingStatus.completed
           : OnboardingStatus.required;
@@ -403,7 +407,7 @@ class OnboardingCompletedNotifier extends StateNotifier<OnboardingStatus> {
   Future<bool> complete() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_key, true);
-    if (mounted) state = OnboardingStatus.completed;
+    if (ref.mounted) state = OnboardingStatus.completed;
     return true;
   }
 }
@@ -457,15 +461,16 @@ class DownloadTask {
 /// Runs SMB downloads in the background and exposes their live progress, so the
 /// detail page can show a progress icon without a modal dialog blocking play.
 /// Completed tasks linger (so the badge stays) until [dismissAnime] clears them.
-class DownloadManager extends StateNotifier<List<DownloadTask>> {
-  DownloadManager(this._ref, {AndroidMediaStoreStorage? mediaStore})
-    : _mediaStore = mediaStore ?? AndroidMediaStoreStorage(),
-      super(const []);
+class DownloadManager extends Notifier<List<DownloadTask>> {
+  DownloadManager({AndroidMediaStoreStorage? mediaStore})
+    : _mediaStore = mediaStore ?? AndroidMediaStoreStorage();
 
-  final Ref _ref;
   final AndroidMediaStoreStorage _mediaStore;
   final _subs = <String, StreamSubscription<DownloadProgress>>{};
   final _reservations = <String, MediaStoreReservation>{};
+
+  @override
+  List<DownloadTask> build() => const [];
 
   bool isDownloading(String sourceUri) =>
       state.any((task) => task.sourceUri == sourceUri && task.active);
@@ -479,7 +484,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
   void start(Episode ep, {int? animeId}) {
     if (isDownloading(ep.filePath)) return;
     if (ep.sourceType != 'smb' && ep.sourceType != 'webdav') return;
-    final destDir = effectiveDownloadDir(_ref.read(downloadDirProvider));
+    final destDir = effectiveDownloadDir(ref.read(downloadDirProvider));
     state = [
       ...state,
       DownloadTask(
@@ -556,7 +561,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
         if (completed) {
           final affectedAnimeId = animeId;
           if (affectedAnimeId != null) {
-            _ref.invalidate(episodesProvider(affectedAnimeId));
+            ref.invalidate(episodesProvider(affectedAnimeId));
           }
         }
       },
@@ -642,7 +647,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
           clearError: true,
         ),
       );
-      if (animeId != null) _ref.invalidate(episodesProvider(animeId));
+      if (animeId != null) ref.invalidate(episodesProvider(animeId));
     } catch (error) {
       try {
         if (published) {
@@ -759,9 +764,7 @@ class DownloadManager extends StateNotifier<List<DownloadTask>> {
 }
 
 final downloadManagerProvider =
-    StateNotifierProvider<DownloadManager, List<DownloadTask>>((ref) {
-      return DownloadManager(ref);
-    });
+    NotifierProvider<DownloadManager, List<DownloadTask>>(DownloadManager.new);
 
 /// Whether an SMB source is configured — gates the detail-page download UI.
 final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
@@ -771,24 +774,27 @@ final smbConfiguredProvider = FutureProvider.autoDispose<bool>((ref) async {
 
 // ---- Bangumi API mirror ----
 
-final bangumiMirrorProvider = StateNotifierProvider<_MirrorNotifier, bool>((
-  ref,
-) {
-  return _MirrorNotifier();
-});
+final bangumiMirrorProvider = NotifierProvider<_MirrorNotifier, bool>(
+  _MirrorNotifier.new,
+);
 
 final bangumiMirrorStatusProvider =
-    StateNotifierProvider<_MirrorStatusNotifier, BangumiMirrorService>(
-      (ref) => _MirrorStatusNotifier(BangumiMirrorService.instance),
+    NotifierProvider<_MirrorStatusNotifier, BangumiMirrorService>(
+      _MirrorStatusNotifier.new,
     );
 
-class _MirrorStatusNotifier extends StateNotifier<BangumiMirrorService> {
-  _MirrorStatusNotifier(super.state) {
-    state.addListener(_changed);
+class _MirrorStatusNotifier extends Notifier<BangumiMirrorService> {
+  @override
+  BangumiMirrorService build() {
+    final service = BangumiMirrorService.instance;
+    service.addListener(_changed);
+    ref.onDispose(() => service.removeListener(_changed));
+    return service;
   }
 
   void _changed() {
-    if (mounted) state = state;
+    // Re-assigning the same instance; updateShouldNotify forces the notify.
+    if (ref.mounted) state = BangumiMirrorService.instance;
   }
 
   @override
@@ -796,22 +802,19 @@ class _MirrorStatusNotifier extends StateNotifier<BangumiMirrorService> {
     BangumiMirrorService old,
     BangumiMirrorService current,
   ) => true;
-
-  @override
-  void dispose() {
-    state.removeListener(_changed);
-    super.dispose();
-  }
 }
 
-class _MirrorNotifier extends StateNotifier<bool> {
-  _MirrorNotifier() : super(false) {
+class _MirrorNotifier extends Notifier<bool> {
+  @override
+  bool build() {
     BangumiMirrorService.instance.addListener(_sync);
+    ref.onDispose(() => BangumiMirrorService.instance.removeListener(_sync));
     unawaited(_load());
+    return false;
   }
 
   void _sync() {
-    if (mounted) state = BangumiMirrorService.instance.enabled;
+    if (ref.mounted) state = BangumiMirrorService.instance.enabled;
   }
 
   Future<void> _load() async {
@@ -848,45 +851,43 @@ class _MirrorNotifier extends StateNotifier<bool> {
     final enabled = value && BangumiMirrorService.instance.enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('bangumi_mirror', enabled);
-    if (mounted) state = enabled;
-  }
-
-  @override
-  void dispose() {
-    BangumiMirrorService.instance.removeListener(_sync);
-    super.dispose();
+    if (ref.mounted) state = enabled;
   }
 }
 
 /// Whether Bangumi login (OAuth) may go through the reverse proxy.
 /// Independent of the collection choice; a token works on either host.
 final bangumiOAuthViaMirrorProvider =
-    StateNotifierProvider<_RouteFlagNotifier, bool>((ref) {
-      return _RouteFlagNotifier('bangumi_oauth_via_mirror');
-    });
+    NotifierProvider<_RouteFlagNotifier, bool>(
+      () => _RouteFlagNotifier('bangumi_oauth_via_mirror'),
+    );
 
 /// Whether collection reads/writes may go through the reverse proxy.
 final bangumiCollectionViaMirrorProvider =
-    StateNotifierProvider<_RouteFlagNotifier, bool>((ref) {
-      return _RouteFlagNotifier('bangumi_collection_via_mirror');
-    });
+    NotifierProvider<_RouteFlagNotifier, bool>(
+      () => _RouteFlagNotifier('bangumi_collection_via_mirror'),
+    );
 
-class _RouteFlagNotifier extends StateNotifier<bool> {
-  _RouteFlagNotifier(this._key) : super(false) {
-    _load();
-  }
+class _RouteFlagNotifier extends Notifier<bool> {
+  _RouteFlagNotifier(this._key);
 
   final String _key;
 
+  @override
+  bool build() {
+    _load();
+    return false;
+  }
+
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
-    if (mounted) state = prefs.getBool(_key) ?? false;
+    if (ref.mounted) state = prefs.getBool(_key) ?? false;
   }
 
   Future<void> set(bool value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_key, value);
-    if (mounted) state = value;
+    if (ref.mounted) state = value;
     await _MirrorNotifier._pushRouteOptions(prefs);
   }
 }
@@ -1238,17 +1239,18 @@ class BangumiRefreshState {
   });
 }
 
-class BangumiRefreshStateNotifier extends StateNotifier<BangumiRefreshState> {
-  BangumiRefreshStateNotifier() : super(const BangumiRefreshState());
+class BangumiRefreshStateNotifier extends Notifier<BangumiRefreshState> {
+  @override
+  BangumiRefreshState build() => const BangumiRefreshState();
 
   void update(BangumiRefreshState value) {
-    if (mounted) state = value;
+    if (ref.mounted) state = value;
   }
 }
 
 final bangumiRefreshStateProvider =
-    StateNotifierProvider<BangumiRefreshStateNotifier, BangumiRefreshState>(
-      (ref) => BangumiRefreshStateNotifier(),
+    NotifierProvider<BangumiRefreshStateNotifier, BangumiRefreshState>(
+      BangumiRefreshStateNotifier.new,
     );
 
 /// Tests replace this boundary without initializing Rust or using real OAuth.
@@ -1294,7 +1296,7 @@ final bangumiPersonalTokenBackendProvider =
       (ref) => const RustBangumiPersonalTokenBackend(),
     );
 
-class SettingsNotifier extends StateNotifier<Settings> {
+class SettingsNotifier extends Notifier<Settings> {
   SettingsNotifier({
     BangumiRefreshBackend? refreshBackend,
     BangumiPersonalTokenBackend? personalTokenBackend,
@@ -1302,28 +1304,50 @@ class SettingsNotifier extends StateNotifier<Settings> {
     this.onRefreshStateChanged,
     DateTime Function()? now,
     Future<void> Function(Duration)? wait,
-  }) : _refreshBackend = refreshBackend ?? const RustBangumiRefreshBackend(),
-       _personalTokenBackend =
-           personalTokenBackend ?? const RustBangumiPersonalTokenBackend(),
+  }) : _injectedRefreshBackend = refreshBackend,
+       _injectedPersonalTokenBackend = personalTokenBackend,
+       _injectedOnRefreshStateChanged = onRefreshStateChanged,
        _now = now ?? DateTime.now,
-       _wait = wait ?? Future<void>.delayed,
-       super(const Settings()) {
-    ready = _load();
-    // Renewal waits for ready, so _load must never await renewal.
-    unawaited(ready.then((_) => ensureFreshBangumiToken()));
-  }
+       _wait = wait ?? Future<void>.delayed;
 
-  final BangumiRefreshBackend _refreshBackend;
-  final BangumiPersonalTokenBackend _personalTokenBackend;
+  final BangumiRefreshBackend? _injectedRefreshBackend;
+  final BangumiPersonalTokenBackend? _injectedPersonalTokenBackend;
+  final void Function(BangumiRefreshState)? _injectedOnRefreshStateChanged;
   final BangumiCredentialStore? credentialStore;
-  final void Function(BangumiRefreshState)? onRefreshStateChanged;
+  void Function(BangumiRefreshState)? onRefreshStateChanged;
   final DateTime Function() _now;
   final Future<void> Function(Duration) _wait;
+  late final BangumiRefreshBackend _refreshBackend;
+  late final BangumiPersonalTokenBackend _personalTokenBackend;
   BangumiRefreshState refreshState = const BangumiRefreshState();
   int _sessionGeneration = 0;
   bool _disposed = false;
   bool _loginInProgress = false;
   Future<void> _sessionWrites = Future<void>.value();
+
+  @override
+  Settings build() {
+    _refreshBackend =
+        _injectedRefreshBackend ?? ref.read(bangumiRefreshBackendProvider);
+    _personalTokenBackend =
+        _injectedPersonalTokenBackend ??
+        ref.read(bangumiPersonalTokenBackendProvider);
+    onRefreshStateChanged = _injectedOnRefreshStateChanged;
+    onRefreshStateChanged ??= ref
+        .read(bangumiRefreshStateProvider.notifier)
+        .update;
+    // StateNotifier's dispose() work: flag stale sessions and stop the timer
+    // when the container tears this notifier down.
+    ref.onDispose(() {
+      _disposed = true;
+      _sessionGeneration++;
+      _refreshTimer?.cancel();
+    });
+    ready = _load();
+    // Renewal waits for ready, so _load must never await renewal.
+    unawaited(ready.then((_) => ensureFreshBangumiToken()));
+    return const Settings();
+  }
 
   bool _isCurrent(int generation) =>
       !_disposed && generation == _sessionGeneration;
@@ -1439,14 +1463,6 @@ class SettingsNotifier extends StateNotifier<Settings> {
     _refreshTimer = Timer.periodic(const Duration(hours: 6), (_) {
       unawaited(ensureFreshBangumiToken());
     });
-  }
-
-  @override
-  void dispose() {
-    _disposed = true;
-    _sessionGeneration++;
-    _refreshTimer?.cancel();
-    super.dispose();
   }
 
   Future<void> setUseExternalPlayer(bool value) async {
@@ -1869,17 +1885,9 @@ class SettingsNotifier extends StateNotifier<Settings> {
   }
 }
 
-final settingsProvider = StateNotifierProvider<SettingsNotifier, Settings>((
-  ref,
-) {
-  return SettingsNotifier(
-    refreshBackend: ref.read(bangumiRefreshBackendProvider),
-    credentialStore: createPlatformCredentialStore(),
-    onRefreshStateChanged: ref
-        .read(bangumiRefreshStateProvider.notifier)
-        .update,
-  );
-});
+final settingsProvider = NotifierProvider<SettingsNotifier, Settings>(
+  () => SettingsNotifier(credentialStore: createPlatformCredentialStore()),
+);
 
 /// Restore every SharedPreferences-backed option to its default and clear the
 /// matching Rust runtime state. Library/database cleanup is deliberately owned

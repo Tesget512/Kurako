@@ -79,7 +79,7 @@ class _MatchCorrectionDialogState extends ConsumerState<MatchCorrectionDialog> {
       return;
     }
     final reservation = ref.read(libraryMutationBusyProvider.notifier);
-    reservation.state = true;
+    reservation.value = true;
     setState(() => _binding = true);
     try {
       // Both paths resolve to the id of the anime the file/entry now belongs to
@@ -108,7 +108,7 @@ class _MatchCorrectionDialogState extends ConsumerState<MatchCorrectionDialog> {
             .showSnackBar(SnackBar(content: Text('绑定失败: $e')));
       }
     } finally {
-      reservation.state = false;
+      reservation.value = false;
     }
   }
 

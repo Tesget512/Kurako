@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurako/src/rust/models.dart';
 import 'package:kurako/src/services/scan_coordinator.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 class FakeScanBackend implements ScanBackend {
   Completer<void> entered = Completer<void>();
@@ -82,12 +83,23 @@ class FakeScanBackend implements ScanBackend {
   }
 }
 
+/// Riverpod 3 Notifiers only work container-mounted; stand up
+/// scanCoordinatorProvider with the test's injected coordinator.
+(ScanCoordinator, ProviderContainer) _mounted(ScanCoordinator coordinator) {
+  final container = ProviderContainer(
+    overrides: [scanCoordinatorProvider.overrideWith(() => coordinator)],
+  );
+  final mounted = container.read(scanCoordinatorProvider.notifier);
+  return (mounted, container);
+}
+
 void main() {
   test(
     'single session cancels without finish and always releases wake lock',
     () async {
       final backend = FakeScanBackend();
-      final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+      final rawCoordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+      final (coordinator, container) = _mounted(rawCoordinator);
       final run = coordinator.start();
       await backend.entered.future;
       await coordinator.start(clearFirst: true);
@@ -103,41 +115,44 @@ void main() {
       // interrupted must not leave the user stuck in a scan they stopped.
       expect(coordinator.state.running, false);
       expect(coordinator.state.progress, isNull);
-      coordinator.dispose();
+      container.dispose();
     },
   );
 
   test('maintenance reservation prevents any scan backend operation', () async {
     final backend = FakeScanBackend();
-    final coordinator = ScanCoordinator(
+    final raw = ScanCoordinator(
       backend,
       onLibraryChanged: () {},
       canStart: () => false,
     );
+    final (coordinator, container) = _mounted(raw);
     await coordinator.start(clearFirst: true);
     expect(backend.begins, 0);
     expect(backend.awakeCalls, isEmpty);
     expect(coordinator.state.error, contains('维护'));
-    coordinator.dispose();
+    container.dispose();
   });
 
   test('failed begin cannot clear index or close another session', () async {
     final backend = FakeScanBackend()..failBegin = true;
-    final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final rawCoordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final (coordinator, container) = _mounted(rawCoordinator);
     await coordinator.start(clearFirst: true);
     expect(backend.clears, 0);
     expect(backend.closes, 0);
     expect(backend.awakeCalls, [true, false]);
     expect(coordinator.state.error, contains('busy'));
-    coordinator.dispose();
+    container.dispose();
   });
 
   test('disposing UI owner cancels and cleanup still completes', () async {
     final backend = FakeScanBackend();
-    final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final rawCoordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final (coordinator, container) = _mounted(rawCoordinator);
     final run = coordinator.start();
     await backend.entered.future;
-    coordinator.dispose();
+    container.dispose();
     backend.enumerated.complete([]);
     await run;
     expect(backend.cancelled, true);
@@ -149,7 +164,8 @@ void main() {
     'structured scan events accumulate per-folder stats and unmatched',
     () async {
       final backend = FakeScanBackend();
-      final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+      final rawCoordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+      final (coordinator, container) = _mounted(rawCoordinator);
       final run = coordinator.start();
       await backend.entered.future;
       backend.enumerated.complete([]);
@@ -168,14 +184,15 @@ void main() {
       expect(plain.unmatched, isEmpty);
       coordinator.dismiss();
       expect(coordinator.state.visible, false);
-      coordinator.dispose();
+      container.dispose();
     },
   );
 
   test('final scan report replaces stale unmatched entries', () async {
     final backend = FakeScanBackend();
     backend.preliminaryMessage = '扫描中\nunmatched: 已被成功匹配的旧标题';
-    final coordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final rawCoordinator = ScanCoordinator(backend, onLibraryChanged: () {});
+    final (coordinator, container) = _mounted(rawCoordinator);
     final run = coordinator.start();
     await backend.entered.future;
     backend.enumerated.complete([]);
@@ -194,7 +211,7 @@ void main() {
     await second;
     expect(coordinator.state.unmatchedTitles, ['仍然未匹配']);
     expect(coordinator.state.matchedTitles, ['已匹配番剧']);
-    coordinator.dispose();
+    container.dispose();
   });
 
   test('scan report separates matched titles from unmatched titles', () {

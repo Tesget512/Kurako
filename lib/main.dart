@@ -156,7 +156,14 @@ Future<void> main() async {
   final proxy = await rust.systemProxy();
   HttpOverrides.global = ProxyHttpOverrides(proxyHostPort(proxy));
 
-  runApp(const ProviderScope(child: AnimeBdApp()));
+  // Riverpod 3 retries failing providers by default; the app layer decides
+  // its own retry policy (e.g. Bangumi renewal), so keep 2.x no-retry here.
+  runApp(
+    ProviderScope(
+      retry: (retryCount, error) => null,
+      child: const AnimeBdApp(),
+    ),
+  );
 }
 
 void _registerBundledLicenses() {

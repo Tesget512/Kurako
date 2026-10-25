@@ -28,12 +28,12 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
 
   Future<void> _unblock(BlacklistEntry e) async {
     final lock = ref.read(libraryMutationBusyProvider.notifier);
-    if (ref.read(scanCoordinatorProvider).running || lock.state) return;
-    lock.state = true;
+    if (ref.read(scanCoordinatorProvider).running || lock.value) return;
+    lock.value = true;
     try {
       await rust.removeBlacklist(id: e.id);
     } finally {
-      lock.state = false;
+      lock.value = false;
     }
     if (!mounted) return;
     _reload();
@@ -142,12 +142,12 @@ Future<bool> confirmAndBlacklist(
   );
   if (ok != true || !context.mounted) return false;
   final lock = ref.read(libraryMutationBusyProvider.notifier);
-  if (ref.read(scanCoordinatorProvider).running || lock.state) {
+  if (ref.read(scanCoordinatorProvider).running || lock.value) {
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再修改屏蔽记录')));
     return false;
   }
-  lock.state = true;
+  lock.value = true;
   try {
     await rust.addBlacklist(kind: kind, value: value);
     if (context.mounted) {
@@ -156,7 +156,7 @@ Future<bool> confirmAndBlacklist(
       ref.invalidate(episodesProvider);
     }
   } finally {
-    lock.state = false;
+    lock.value = false;
   }
   return true;
 }

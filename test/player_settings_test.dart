@@ -1,14 +1,18 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kurako/src/state/providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('player behavior defaults match the product settings', () async {
     SharedPreferences.setMockInitialValues({});
-    final notifier = SettingsNotifier();
-    addTearDown(notifier.dispose);
+    final container = ProviderContainer(
+      overrides: [settingsProvider.overrideWith(SettingsNotifier.new)],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(settingsProvider.notifier);
     await notifier.ready;
 
     expect(notifier.state.autoResumePlayback, isTrue);
@@ -21,8 +25,11 @@ void main() {
 
   test('appearance mode defaults to system and persists an override', () async {
     SharedPreferences.setMockInitialValues({});
-    final notifier = ThemeNotifier();
-    addTearDown(notifier.dispose);
+    final container = ProviderContainer(
+      overrides: [themeProvider.overrideWith(ThemeNotifier.new)],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(themeProvider.notifier);
 
     expect(notifier.state.mode, AppThemeMode.system);
     await notifier.setMode(AppThemeMode.dark);
@@ -36,8 +43,11 @@ void main() {
 
   test('background playback requires media session controls', () async {
     SharedPreferences.setMockInitialValues({});
-    final notifier = SettingsNotifier();
-    addTearDown(notifier.dispose);
+    final container = ProviderContainer(
+      overrides: [settingsProvider.overrideWith(SettingsNotifier.new)],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(settingsProvider.notifier);
     await notifier.ready;
 
     await notifier.setBackgroundPlayback(true);
@@ -61,8 +71,11 @@ void main() {
       'media_session_enabled': true,
       'gesture_seek_duration_sec': 45,
     });
-    final notifier = SettingsNotifier();
-    addTearDown(notifier.dispose);
+    final container = ProviderContainer(
+      overrides: [settingsProvider.overrideWith(SettingsNotifier.new)],
+    );
+    addTearDown(container.dispose);
+    final notifier = container.read(settingsProvider.notifier);
     await notifier.ready;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('bangumi_token', 'keep-token');

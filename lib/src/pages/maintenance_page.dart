@@ -351,7 +351,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
         _snack('其他维护操作正在进行，请稍后重试');
         return;
       }
-      mutationLock.state = true;
+      mutationLock.value = true;
       reserved = true;
       if (document.includesAccountAndSmb) {
         await ref.read(settingsProvider.notifier).logout();
@@ -406,7 +406,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       _snack('导入配置失败：$error');
     } finally {
       if (reserved) {
-        mutationLock.state = false;
+        mutationLock.value = false;
       }
       if (mounted) setState(() => _transferringConfiguration = false);
     }
@@ -460,7 +460,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       ),
     );
     if (ok != true || !mounted || _maintenanceBusy) return;
-    mutationLock.state = true;
+    mutationLock.value = true;
     setState(() => _clearingMatchConfig = true);
     try {
       final count = await rust.clearMatchConfig();
@@ -469,7 +469,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('删除失败：$error');
     } finally {
-      mutationLock.state = false;
+      mutationLock.value = false;
       if (mounted) setState(() => _clearingMatchConfig = false);
     }
   }
@@ -497,7 +497,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       ),
     );
     if (confirmed != true || !mounted || _maintenanceBusy) return;
-    mutationLock.state = true;
+    mutationLock.value = true;
     setState(() => _clearingLibrary = true);
     try {
       await rust.clearLibrary();
@@ -508,7 +508,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('清空失败：$error');
     } finally {
-      mutationLock.state = false;
+      mutationLock.value = false;
       if (mounted) setState(() => _clearingLibrary = false);
     }
   }
@@ -545,7 +545,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       return;
     }
 
-    mutationLock.state = true;
+    mutationLock.value = true;
     setState(() => _clearingDownloads = true);
     var removed = 0;
     final failures = <Object>[];
@@ -568,7 +568,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('清空下载失败：$error');
     } finally {
-      mutationLock.state = false;
+      mutationLock.value = false;
       if (mounted) setState(() => _clearingDownloads = false);
     }
   }
@@ -609,7 +609,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       return;
     }
 
-    mutationLock.state = true;
+    mutationLock.value = true;
     setState(() => _resettingConfiguration = true);
     try {
       await rust.clearMatchConfig();
@@ -629,7 +629,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     } catch (error) {
       _snack('清空配置失败：$error');
     } finally {
-      mutationLock.state = false;
+      mutationLock.value = false;
       if (mounted) setState(() => _resettingConfiguration = false);
     }
   }

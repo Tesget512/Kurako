@@ -14,8 +14,8 @@ import '../state/update_provider.dart';
 /// Lives outside the dialog so a download keeps running after the dialog is
 /// closed, and so its state survives reopening.
 final updateDownloadProvider =
-    StateNotifierProvider<UpdateDownloadNotifier, UpdateDownloadState>(
-      (ref) => UpdateDownloadNotifier(AppUpdateDownloader()),
+    NotifierProvider<UpdateDownloadNotifier, UpdateDownloadState>(
+      () => UpdateDownloadNotifier(AppUpdateDownloader()),
     );
 
 class UpdateDownloadState {
@@ -38,12 +38,23 @@ class UpdateDownloadState {
   final String? message;
 }
 
-class UpdateDownloadNotifier extends StateNotifier<UpdateDownloadState> {
-  UpdateDownloadNotifier(this.downloader) : super(const UpdateDownloadState());
+class UpdateDownloadNotifier extends Notifier<UpdateDownloadState> {
+  UpdateDownloadNotifier([this.downloader]);
 
-  final AppUpdateDownloader downloader;
+  final AppUpdateDownloader? downloader;
   UpdateDownloadOperation? _operation;
   bool _disposed = false;
+  late final AppUpdateDownloader _downloader;
+
+  @override
+  UpdateDownloadState build() {
+    _downloader = downloader ?? AppUpdateDownloader();
+    ref.onDispose(() {
+      _disposed = true;
+      cancel();
+    });
+    return const UpdateDownloadState();
+  }
 
   /// Reset stale results when the dialog opens for a different release.
   void prepare(AppUpdateRelease release) {
@@ -61,7 +72,7 @@ class UpdateDownloadNotifier extends StateNotifier<UpdateDownloadState> {
       total: asset.size,
     );
     try {
-      final path = await downloader.download(
+      final path = await _downloader.download(
         release: release,
         asset: asset,
         operation: operation,
@@ -97,13 +108,6 @@ class UpdateDownloadNotifier extends StateNotifier<UpdateDownloadState> {
   }
 
   void cancel() => _operation?.cancel();
-
-  @override
-  void dispose() {
-    _disposed = true;
-    cancel();
-    super.dispose();
-  }
 }
 
 /// Opens the update dialog for the release currently offered by the checker.

@@ -47,6 +47,29 @@ Future<void> _settle() async {
   }
 }
 
+/// Riverpod 3 Notifiers only work container-mounted; stand up the provider
+/// with the test's injected backend and return (notifier, container).
+(SettingsNotifier, ProviderContainer) _mounted(
+  _Backend backend, {
+  Future<void> Function(Duration)? wait,
+  void Function(BangumiRefreshState)? onRefreshStateChanged,
+}) {
+  final container = ProviderContainer(
+    overrides: [
+      settingsProvider.overrideWith(
+        () => SettingsNotifier(
+          refreshBackend: backend,
+          now: () => _now,
+          wait: wait,
+          onRefreshStateChanged: onRefreshStateChanged,
+        ),
+      ),
+    ],
+  );
+  final notifier = container.read(settingsProvider.notifier);
+  return (notifier, container);
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -56,11 +79,8 @@ void main() {
       _seed(nearExpiry: true);
       final response = Completer<OAuthResult>();
       final backend = _Backend()..request = (_) => response.future;
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
-      );
-      addTearDown(notifier.dispose);
+      final (notifier, container) = _mounted(backend);
+      addTearDown(container.dispose);
       final first = notifier.ensureFreshBangumiToken();
       final second = notifier.ensureFreshBangumiToken(force: true);
       await notifier.ready.timeout(const Duration(seconds: 1));
@@ -90,12 +110,11 @@ void main() {
         logs.add(message ?? '');
       };
       addTearDown(() => debugPrint = originalDebugPrint);
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
+      final (notifier, container) = _mounted(
+        backend,
         wait: (delay) async => delays.add(delay),
       );
-      addTearDown(notifier.dispose);
+      addTearDown(container.dispose);
       await notifier.ensureFreshBangumiToken();
       expect(backend.requests, hasLength(3));
       expect(delays, [const Duration(seconds: 2), const Duration(seconds: 4)]);
@@ -118,11 +137,8 @@ void main() {
       final backend = _Backend()
         ..request = (_) async =>
             throw StateError('oauth error: invalid_grant private detail');
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
-      );
-      addTearDown(notifier.dispose);
+      final (notifier, container) = _mounted(backend);
+      addTearDown(container.dispose);
       await notifier.ensureFreshBangumiToken();
       await notifier.ensureFreshBangumiToken(force: true);
       expect(backend.requests, hasLength(1));
@@ -139,8 +155,8 @@ void main() {
     final backend = _Backend()
       ..request = (_) async =>
           throw StateError('parse response private details');
-    final notifier = SettingsNotifier(refreshBackend: backend, now: () => _now);
-    addTearDown(notifier.dispose);
+    final (notifier, container) = _mounted(backend);
+    addTearDown(container.dispose);
     await notifier.ensureFreshBangumiToken(force: true);
     expect(backend.requests, hasLength(1));
     expect(notifier.refreshState.status, BangumiRefreshStatus.networkFailure);
@@ -155,12 +171,8 @@ void main() {
         if (backend.requests.length == 1) throw TimeoutException('request');
         return _result('renewed');
       };
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
-        wait: (_) async {},
-      );
-      addTearDown(notifier.dispose);
+      final (notifier, container) = _mounted(backend, wait: (_) async {});
+      addTearDown(container.dispose);
       await notifier.ensureFreshBangumiToken(force: true);
       expect(backend.requests, hasLength(2));
       expect(notifier.refreshState.status, BangumiRefreshStatus.success);
@@ -177,8 +189,8 @@ void main() {
     _seed();
     final response = Completer<OAuthResult>();
     final backend = _Backend()..request = (_) => response.future;
-    final notifier = SettingsNotifier(refreshBackend: backend, now: () => _now);
-    addTearDown(notifier.dispose);
+    final (notifier, container) = _mounted(backend);
+    addTearDown(container.dispose);
     final refresh = notifier.ensureFreshBangumiToken(force: true);
     await _settle();
     await notifier.logout();
@@ -199,11 +211,8 @@ void main() {
       _seed();
       final response = Completer<OAuthResult>();
       final backend = _Backend()..request = (_) => response.future;
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
-      );
-      addTearDown(notifier.dispose);
+      final (notifier, container) = _mounted(backend);
+      addTearDown(container.dispose);
       final refresh = notifier.ensureFreshBangumiToken(force: true);
       await _settle();
       await notifier.setOAuthSession(
@@ -231,8 +240,8 @@ void main() {
     final backend = _Backend()
       ..request = (token) =>
           token == 'old-refresh' ? oldResponse.future : newResponse.future;
-    final notifier = SettingsNotifier(refreshBackend: backend, now: () => _now);
-    addTearDown(notifier.dispose);
+    final (notifier, container) = _mounted(backend);
+    addTearDown(container.dispose);
     final oldRefresh = notifier.ensureFreshBangumiToken(force: true);
     await _settle();
     await notifier.setOAuthSession(
@@ -256,8 +265,8 @@ void main() {
     _seed();
     final response = Completer<OAuthResult>();
     final backend = _Backend()..request = (_) => response.future;
-    final notifier = SettingsNotifier(refreshBackend: backend, now: () => _now);
-    addTearDown(notifier.dispose);
+    final (notifier, container) = _mounted(backend);
+    addTearDown(container.dispose);
     final refresh = notifier.ensureFreshBangumiToken(force: true);
     await _settle();
     notifier.beginBangumiLogin();
@@ -279,14 +288,13 @@ void main() {
       final response = Completer<OAuthResult>();
       final backend = _Backend()..request = (_) => response.future;
       final states = <BangumiRefreshState>[];
-      final notifier = SettingsNotifier(
-        refreshBackend: backend,
-        now: () => _now,
+      final (notifier, container) = _mounted(
+        backend,
         onRefreshStateChanged: states.add,
       );
       final refresh = notifier.ensureFreshBangumiToken(force: true);
       await _settle();
-      notifier.dispose();
+      container.dispose();
       final count = states.length;
       response.complete(_result('stale'));
       await refresh;
@@ -302,8 +310,8 @@ void main() {
   test('dispose before ready prevents load/runtime writes', () async {
     _seed(nearExpiry: true);
     final backend = _Backend()..request = (_) async => _result('stale');
-    final notifier = SettingsNotifier(refreshBackend: backend, now: () => _now);
-    notifier.dispose();
+    final (notifier, container) = _mounted(backend);
+    container.dispose();
     await notifier.ready;
     await _settle();
     expect(backend.tokens, isEmpty);

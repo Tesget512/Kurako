@@ -52,7 +52,7 @@ dependencies:
   screen_brightness: ^2.1.11
 
   # State management
-  flutter_riverpod: ^2.6.1
+  flutter_riverpod: ^3.4.3
 
   # Folder picker
   file_picker: ^13.2.0

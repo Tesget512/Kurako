@@ -454,8 +454,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
     if (!context.mounted) return;
     // Build the playlist in the same order the list shows, so 上/下集 and
     // autoplay follow what the user sees.
-    final episodes =
-        ref.read(episodesProvider(widget.animeId)).valueOrNull ?? [ep];
+    final episodes = ref.read(episodesProvider(widget.animeId)).value ?? [ep];
     final playlist = orderedPlaylist(episodes);
     var index = playlist.indexWhere((e) => e.id == ep.id);
     if (index < 0) index = 0;
@@ -1204,12 +1203,12 @@ class _EpisodeTile extends ConsumerWidget {
 
   Future<void> _detachEpisode(BuildContext context, WidgetRef ref) async {
     final lock = ref.read(libraryMutationBusyProvider.notifier);
-    if (ref.read(scanCoordinatorProvider).running || lock.state) {
+    if (ref.read(scanCoordinatorProvider).running || lock.value) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('请完成扫描或维护后再调整匹配')));
       return;
     }
-    lock.state = true;
+    lock.value = true;
     try {
       // The move is persisted (sidecar next to the media, or the app fallback
       // config) inside detachEpisode, so it survives a rescan.
@@ -1229,7 +1228,7 @@ class _EpisodeTile extends ConsumerWidget {
             .showSnackBar(SnackBar(content: Text('移出失败: $e')));
       }
     } finally {
-      lock.state = false;
+      lock.value = false;
     }
   }
 

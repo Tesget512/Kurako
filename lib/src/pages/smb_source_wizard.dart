@@ -219,11 +219,11 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
     }
 
     final mutationLock = ref.read(libraryMutationBusyProvider.notifier);
-    if (ref.read(scanCoordinatorProvider).running || mutationLock.state) {
+    if (ref.read(scanCoordinatorProvider).running || mutationLock.value) {
       setState(() => _error = '扫描或维护正在进行，请完成后再添加来源');
       return;
     }
-    mutationLock.state = true;
+    mutationLock.value = true;
     _setBusy(true);
     try {
       final folders = await rust.listLibraryFolders();
@@ -264,7 +264,7 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
     } catch (e) {
       if (mounted) setState(() => _error = '添加 SMB 文件夹失败：$e');
     } finally {
-      mutationLock.state = false;
+      mutationLock.value = false;
       _setBusy(false);
     }
   }

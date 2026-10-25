@@ -43,6 +43,20 @@ AppUpdateService service({
   openUrl: open,
 );
 
+/// Riverpod 3 Notifiers only work container-mounted; stand up updateCheckProvider
+/// with the test's injected service and return (notifier, container).
+(UpdateCheckNotifier, ProviderContainer) _mountedUpdateChecker(
+  AppUpdateService svc,
+) {
+  final container = ProviderContainer(
+    overrides: [
+      updateCheckProvider.overrideWith(() => UpdateCheckNotifier(svc)),
+    ],
+  );
+  final notifier = container.read(updateCheckProvider.notifier);
+  return (notifier, container);
+}
+
 void main() {
   test('asset URLs accept only this project release download', () {
     final release = releaseWithAssets([
@@ -376,7 +390,7 @@ void main() {
     () async {
       final pending = Completer<AppUpdateRelease?>();
       var requests = 0;
-      final notifier = UpdateCheckNotifier(
+      final (notifier, container) = _mountedUpdateChecker(
         service(
           fetch: () {
             requests++;
@@ -384,7 +398,7 @@ void main() {
           },
         ),
       );
-      addTearDown(notifier.dispose);
+      addTearDown(container.dispose);
       final first = notifier.checkAtStartup();
       final second = notifier.checkManually();
       expect(identical(first, second), isTrue);
@@ -401,7 +415,7 @@ void main() {
 
   test('failure is safe and manual retry succeeds', () async {
     var requests = 0;
-    final notifier = UpdateCheckNotifier(
+    final (notifier, container) = _mountedUpdateChecker(
       service(
         fetch: () async {
           if (++requests == 1) throw StateError('secret-proxy-value');
@@ -409,7 +423,7 @@ void main() {
         },
       ),
     );
-    addTearDown(notifier.dispose);
+    addTearDown(container.dispose);
     await notifier.checkAtStartup();
     expect(notifier.state.status, UpdateCheckStatus.failed);
     expect(notifier.state.showBanner, isFalse);
@@ -426,10 +440,10 @@ void main() {
     'banner dismissal lasts for this version; a different version can prompt',
     () async {
       var tag = 'v1.2.0';
-      final notifier = UpdateCheckNotifier(
+      final (notifier, container) = _mountedUpdateChecker(
         service(fetch: () async => release(tag)),
       );
-      addTearDown(notifier.dispose);
+      addTearDown(container.dispose);
       await notifier.checkManually();
       notifier.dismissBanner();
       expect(notifier.state.showBanner, isFalse);
@@ -442,8 +456,10 @@ void main() {
   );
 
   test('no public stable release is distinct from up to date', () async {
-    final notifier = UpdateCheckNotifier(service(fetch: () async => null));
-    addTearDown(notifier.dispose);
+    final (notifier, container) = _mountedUpdateChecker(
+      service(fetch: () async => null),
+    );
+    addTearDown(container.dispose);
     await notifier.checkAtStartup();
     expect(notifier.state.status, UpdateCheckStatus.noRelease);
     expect(notifier.state.showBanner, isFalse);
@@ -451,9 +467,11 @@ void main() {
 
   test('dispose while checking does not publish or throw', () async {
     final pending = Completer<AppUpdateRelease?>();
-    final notifier = UpdateCheckNotifier(service(fetch: () => pending.future));
+    final (notifier, container) = _mountedUpdateChecker(
+      service(fetch: () => pending.future),
+    );
     final flight = notifier.checkManually();
-    notifier.dispose();
+    container.dispose();
     pending.complete(release());
     await flight;
     await notifier.checkManually();
