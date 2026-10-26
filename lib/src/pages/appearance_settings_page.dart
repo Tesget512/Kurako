@@ -265,7 +265,6 @@ class _PlayerGestureColors extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final appearance = ref.watch(playerAppearanceProvider);
     Widget tile(bool brightness, Color color) => ListTile(
-      contentPadding: EdgeInsets.zero,
       leading: Icon(Icons.circle, color: color),
       title: Text(brightness ? '播放器亮度条颜色' : '播放器音量条颜色'),
       subtitle: Text(
@@ -277,22 +276,28 @@ class _PlayerGestureColors extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('播放器手势外观'),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16),
+          child: Text('播放器手势外观'),
+        ),
         tile(true, appearance.brightness),
         tile(false, appearance.volume),
-        TextButton(
-          onPressed: () async {
-            final notifier = ref.read(playerAppearanceProvider.notifier);
-            await notifier.setColor(
-              brightness: true,
-              color: const Color(defaultPlayerBrightnessColor),
-            );
-            await notifier.setColor(
-              brightness: false,
-              color: const Color(defaultPlayerVolumeColor),
-            );
-          },
-          child: const Text('恢复默认颜色'),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TextButton(
+            onPressed: () async {
+              final notifier = ref.read(playerAppearanceProvider.notifier);
+              await notifier.setColor(
+                brightness: true,
+                color: const Color(defaultPlayerBrightnessColor),
+              );
+              await notifier.setColor(
+                brightness: false,
+                color: const Color(defaultPlayerVolumeColor),
+              );
+            },
+            child: const Text('恢复默认颜色'),
+          ),
         ),
       ],
     );

@@ -59,7 +59,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
               _buildDownloadDirRow(),
               _buildOnboardingRow(),
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: const Icon(Icons.delete_forever_outlined),
                 title: const Text('清空所有已下载番剧'),
                 subtitle: const Text('删除下载管理中的全部本地视频、绑定字幕和下载记录'),
@@ -71,7 +70,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             title: '内容管理',
             children: [
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: const Icon(Icons.content_copy_outlined),
                 title: const Text('疑似重复检查'),
                 subtitle: const Text('独立检查已扫描视频，不改变扫描、匹配或文件'),
@@ -86,7 +84,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
               ),
               ListTile(
                 key: const ValueKey('maintenance-blacklist'),
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: const Icon(Icons.block_outlined),
                 title: const Text('屏蔽管理'),
                 subtitle: const Text('查看并解除已屏蔽的番剧与视频文件'),
@@ -105,7 +102,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             title: '备份与恢复',
             children: [
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: _transferringConfiguration
                     ? const SizedBox.square(
                         dimension: 24,
@@ -119,7 +115,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
                 onTap: _maintenanceBusy ? null : _exportConfiguration,
               ),
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: const Icon(Icons.file_download_outlined),
                 title: const Text('导入配置'),
                 subtitle: const Text('从 Kurako JSON 配置文件恢复可跨设备设置'),
@@ -131,14 +126,12 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
             title: '重置',
             children: [
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: const Icon(Icons.delete_sweep_outlined),
                 title: const Text('清空番剧与匹配'),
                 subtitle: const Text('清空当前番剧、剧集和匹配结果；保留媒体来源、下载与设置'),
                 onTap: _maintenanceBusy ? null : _clearLibrary,
               ),
               ListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: const Icon(Icons.link_off_outlined),
                 title: const Text('删除手动匹配配置'),
                 subtitle: const Text(
@@ -149,7 +142,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
               ),
               ListTile(
                 key: const ValueKey('maintenance-reset-all'),
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 leading: _resettingConfiguration
                     ? const SizedBox.square(
                         dimension: 24,
@@ -181,7 +173,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
       androidLegacy: androidUsesLegacyPrivateStorage,
     );
     return ListTile(
-      contentPadding: EdgeInsets.symmetric(horizontal: 16),
       leading: const Icon(Icons.folder_outlined),
       title: const Text('下载保存位置'),
       subtitle: Text(copy.locationDescription ?? effectiveDownloadDir(dir)),
@@ -248,7 +239,6 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   /// deleting the source or reinstalling the app.
   Widget _buildOnboardingRow() {
     return ListTile(
-      contentPadding: EdgeInsets.symmetric(horizontal: 16),
       leading: const Icon(Icons.assistant_outlined),
       title: const Text('重新运行初始设置'),
       subtitle: Text(

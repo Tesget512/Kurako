@@ -50,6 +50,27 @@ void main() {
       expect(settle(snappy), lessThan(settle(expressive)));
     });
 
+    test('official spatial and effects tokens keep their motion roles', () {
+      expect(KurakoSprings.spatial.stiffness, 380);
+      expect(KurakoSprings.spatial.dampingRatio, 0.8);
+      expect(KurakoSprings.effects.stiffness, 1600);
+      expect(KurakoSprings.effects.dampingRatio, 1);
+      expect(KurakoSprings.effects.settleDuration, isNot(Duration.zero));
+    });
+
+    test('effects preset does not overshoot', () {
+      final curve = KurakoSprings.effects.curve;
+      var maximum = 0.0;
+      var minimum = 1.0;
+      for (var i = 0; i <= 100; i++) {
+        final value = curve.transform(i / 100);
+        if (value > maximum) maximum = value;
+        if (value < minimum) minimum = value;
+      }
+      expect(maximum, lessThanOrEqualTo(1.001));
+      expect(minimum, greaterThanOrEqualTo(-0.001));
+    });
+
     test('never produces NaN', () {
       final curve = KurakoSprings.snappy.curve;
       for (var i = 0; i <= 20; i++) {

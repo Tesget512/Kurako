@@ -24,7 +24,6 @@ class PlayerSettingsPage extends ConsumerWidget {
             title: '播放行为',
             children: [
               SwitchListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 title: const Text('自动续播'),
                 subtitle: const Text('打开视频时从上次观看位置继续'),
                 value: settings.autoResumePlayback,
@@ -33,7 +32,6 @@ class PlayerSettingsPage extends ConsumerWidget {
                     .setAutoResumePlayback(value),
               ),
               SwitchListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 title: const Text('自动连播'),
                 subtitle: const Text('本集结束后播放下一集；关闭后返回番剧详情页'),
                 value: settings.autoPlayNext,
@@ -41,7 +39,6 @@ class PlayerSettingsPage extends ConsumerWidget {
                     ref.read(settingsProvider.notifier).setAutoPlayNext(value),
               ),
               SwitchListTile(
-                contentPadding: EdgeInsets.symmetric(horizontal: 16),
                 title: const Text('使用外置播放器'),
                 subtitle: Text(
                   Platform.isAndroid
@@ -131,7 +128,6 @@ class PlayerSettingsPage extends ConsumerWidget {
               title: '后台与系统控制',
               children: [
                 SwitchListTile(
-                  contentPadding: EdgeInsets.symmetric(horizontal: 16),
                   title: const Text('后台播放'),
                   subtitle: Text(
                     Platform.isAndroid
@@ -145,7 +141,6 @@ class PlayerSettingsPage extends ConsumerWidget {
                 ),
                 if (Platform.isAndroid)
                   SwitchListTile(
-                    contentPadding: EdgeInsets.symmetric(horizontal: 16),
                     title: const Text('切到后台时自动小窗播放'),
                     subtitle: const Text('离开正在播放的视频时自动进入 Android 系统画中画'),
                     value: settings.autoPictureInPicture,
@@ -154,7 +149,6 @@ class PlayerSettingsPage extends ConsumerWidget {
                         .setAutoPictureInPicture(value),
                   ),
                 SwitchListTile(
-                  contentPadding: EdgeInsets.symmetric(horizontal: 16),
                   title: const Text('系统媒体会话与锁屏控制'),
                   subtitle: Text(
                     settings.backgroundPlayback
@@ -192,7 +186,7 @@ class PlayerSettingsPage extends ConsumerWidget {
     required int value,
     required ValueChanged<int> onChanged,
   }) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -218,7 +212,7 @@ class PlayerSettingsPage extends ConsumerWidget {
   static Widget _decodeMode(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(decodeModeProvider);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -253,7 +247,7 @@ class PlayerSettingsPage extends ConsumerWidget {
     WidgetRef ref,
     Settings settings,
   ) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
+    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

@@ -53,10 +53,62 @@ double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
   }
   final coverWidth = useCustomCaption ? 196.0 : 168.0;
   final coverHeight = coverWidth * 214 / 150;
-  // Wide facts can be slightly taller than the cover once rating, schedule and
-  // collection controls are all present. This allowance is wide-only and does
-  // not reintroduce the phone gap fixed above.
-  return kToolbarHeight + 8 + coverHeight + 40;
+  // Wide facts can grow past the cover once the title wraps to a second line
+  // and the original-name line shows. Measure that growth and let the header
+  // extend downward instead of clipping (BOTTOM OVERFLOWED); entries that fit
+  // in one title line keep the tight budget.
+  final contentWidth =
+      MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  final theme = Theme.of(context);
+  final textScaler = MediaQuery.textScalerOf(context);
+  double measuredHeight(
+    String text,
+    TextStyle? style,
+    int maxLines,
+    double maxWidth,
+  ) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: textScaler,
+      maxLines: maxLines,
+      ellipsis: '…',
+    )..layout(maxWidth: maxWidth);
+    return painter.height;
+  }
+
+  final histogramWidth = _histogramCounts(anime) != null
+      ? (useCustomCaption ? 360.0 : 320.0) + 16
+      : 0.0;
+  final factsWidth = contentWidth - coverWidth - 16 - histogramWidth;
+  final titleStyle = useCustomCaption
+      ? theme.textTheme.headlineSmall
+      : theme.textTheme.titleLarge;
+  final oneLine = measuredHeight(_titleOf(anime), titleStyle, 1, factsWidth);
+  final wrapped = measuredHeight(_titleOf(anime), titleStyle, 2, factsWidth);
+  var factsExtra = wrapped - oneLine;
+  if (anime.name != null &&
+      anime.name!.isNotEmpty &&
+      anime.name != _titleOf(anime)) {
+    factsExtra +=
+        2 +
+        measuredHeight(
+          anime.name!,
+          useCustomCaption
+              ? theme.textTheme.bodyMedium
+              : theme.textTheme.bodySmall,
+          1,
+          factsWidth,
+        );
+  }
+  // SliverAppBar adds the system top padding itself. Count only the toolbar
+  // here, otherwise phones reserve the status-bar height twice and leave a
+  // conspicuous blank strip below the cover.
+  return kToolbarHeight +
+      8 +
+      coverHeight +
+      40 +
+      (factsExtra > 0 ? factsExtra : 0);
 }
 
 bool coverHeaderUsesNarrowLayout(BuildContext context) {

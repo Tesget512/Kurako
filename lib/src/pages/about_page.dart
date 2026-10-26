@@ -139,41 +139,43 @@ class _UpdateCheckSection extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ListTile(
-          contentPadding: EdgeInsets.symmetric(horizontal: 16),
           leading: const Icon(Icons.system_update_alt),
           title: const Text('检查更新'),
           subtitle: Text(statusText),
         ),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            OutlinedButton.icon(
-              onPressed: state.status == UpdateCheckStatus.checking
-                  ? null
-                  : notifier.checkManually,
-              icon: state.status == UpdateCheckStatus.checking
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-              label: Text(
-                state.status == UpdateCheckStatus.checking
-                    ? '正在检查'
-                    : state.status == UpdateCheckStatus.failed
-                    ? '重试'
-                    : '检查更新',
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: state.status == UpdateCheckStatus.checking
+                    ? null
+                    : notifier.checkManually,
+                icon: state.status == UpdateCheckStatus.checking
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
+                label: Text(
+                  state.status == UpdateCheckStatus.checking
+                      ? '正在检查'
+                      : state.status == UpdateCheckStatus.failed
+                      ? '重试'
+                      : '检查更新',
+                ),
               ),
-            ),
-            if (state.status == UpdateCheckStatus.available)
-              FilledButton.icon(
-                onPressed: () => showUpdateDownload(context, ref),
-                icon: const Icon(Icons.download),
-                label: const Text('下载更新'),
-              ),
-          ],
+              if (state.status == UpdateCheckStatus.available)
+                FilledButton.icon(
+                  onPressed: () => showUpdateDownload(context, ref),
+                  icon: const Icon(Icons.download),
+                  label: const Text('下载更新'),
+                ),
+            ],
+          ),
         ),
       ],
     );
@@ -188,7 +190,6 @@ class _Acknowledgements extends StatelessWidget {
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       ListTile(
-        contentPadding: EdgeInsets.symmetric(horizontal: 16),
         leading: Icon(Icons.favorite_outline),
         title: Text('致谢'),
         subtitle: Text('Kurako 建立在开源软件与公共服务之上。'),
@@ -227,7 +228,7 @@ class _AcknowledgementGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(top: 16),
+    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

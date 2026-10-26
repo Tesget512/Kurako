@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -6,6 +8,7 @@ import '../rust/models.dart';
 import '../state/anime_sort.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
+import '../ui/spring.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scan_progress_sheet.dart';
 import '../widgets/scroll_reveal_app_bar.dart';
@@ -22,6 +25,13 @@ class LibraryPage extends ConsumerStatefulWidget {
 
 class _LibraryPageState extends ConsumerState<LibraryPage> {
   final _reveal = ScrollRevealController();
+
+  // The entrance stagger is a first-impression moment, not a scrolling
+  // effect: the grid destroys and rebuilds items as they leave the viewport,
+  // so without this flag every scroll-back replayed the animation. After the
+  // initial screen has played, all later builds render statically.
+  bool _entrancePlayed = false;
+  bool _entranceTimerArmed = false;
 
   static const _sortLabels = {
     LibrarySort.normal: '默认排序',
@@ -46,6 +56,14 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     final pinCollected = ref.watch(pinCollectedProvider);
 
     final scanning = ref.watch(scanCoordinatorProvider).visible;
+
+    final list = animeAsync.value;
+    if (list != null && list.isNotEmpty && !_entranceTimerArmed) {
+      _entranceTimerArmed = true;
+      Timer(const Duration(milliseconds: 1200), () {
+        if (mounted) setState(() => _entrancePlayed = true);
+      });
+    }
 
     return Scaffold(
       // The bar fades its own surface in as covers scroll underneath, so the
@@ -209,7 +227,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
         mainAxisSpacing: 16,
       ),
       itemCount: list.length,
-      itemBuilder: (context, i) => _card(context, ref, list[i]),
+      itemBuilder: (context, i) => _card(context, ref, list[i], index: i),
     );
   }
 
@@ -252,7 +270,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
                 mainAxisSpacing: 16,
               ),
               delegate: SliverChildBuilderDelegate(
-                (context, i) => _card(context, ref, section.items[i]),
+                (context, i) => _card(context, ref, section.items[i], index: i),
                 childCount: section.items.length,
               ),
             ),
@@ -263,9 +281,13 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     );
   }
 
-  Widget _card(BuildContext context, WidgetRef ref, Anime anime) {
-    // Long-press (touch) or right-click (desktop) opens the block menu.
-    return GestureDetector(
+  Widget _card(
+    BuildContext context,
+    WidgetRef ref,
+    Anime anime, {
+    int index = 0,
+  }) {
+    final card = GestureDetector(
       onLongPressStart: (d) =>
           _showBlockMenu(context, ref, anime, d.globalPosition),
       onSecondaryTapDown: (d) =>
@@ -281,6 +303,12 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
           );
         },
       ),
+    );
+    if (_entrancePlayed) return card;
+    return SpringEntrance(
+      key: ValueKey('library-card-entry-${anime.id}'),
+      delay: Duration(milliseconds: (index.clamp(0, 8) * 35)),
+      child: card,
     );
   }
 

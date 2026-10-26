@@ -30,6 +30,7 @@ import '../state/player_appearance.dart';
 import '../widgets/player_visuals.dart';
 import '../widgets/window_caption.dart';
 import '../ui/shapes.dart';
+import '../ui/spring.dart';
 
 /// A video chapter marker parsed from mpv's `chapter-list`.
 class _Chapter {
@@ -1604,7 +1605,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       _Panel.chapters => (Icons.bookmarks, '章节', _chaptersPanel()),
     };
     return Drawer(
-      backgroundColor: cs.surface,
+      backgroundColor: cs.surfaceContainerHigh,
       width: 340,
       // The drawer surface itself must meet the physical right edge.  Applying
       // horizontal SafeArea padding here made an end drawer float inward on
@@ -1970,8 +1971,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       seekBarPositionColor: _cs.primary,
       seekBarBufferColor: Colors.white,
       seekBarHeight: 5.5,
-      seekBarThumbSize: 13,
-      seekBarMargin: const EdgeInsets.fromLTRB(20, 0, 20, 60),
+      controlsTransitionDuration: KurakoSprings.spatial.settleDuration,
       seekBarContainerHeight: 32,
       buttonBarHeight: 42,
       buttonBarButtonSize: 26,

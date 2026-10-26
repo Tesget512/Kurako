@@ -16,6 +16,7 @@ import 'state/providers.dart';
 import 'state/update_provider.dart';
 import 'widgets/update_banner.dart';
 import 'ui/shapes.dart';
+import 'ui/surfaces.dart';
 import 'ui/transitions.dart';
 
 /// Dev-only acceptance switch: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
@@ -261,8 +262,8 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
   ThemeData _theme(ColorScheme scheme, {required bool systemFont}) {
     final base = ThemeData(
       colorScheme: scheme,
+      scaffoldBackgroundColor: KurakoSurfaces.page(scheme),
       pageTransitionsTheme: kPageTransitionsTheme,
-      cardTheme: CardThemeData(shape: KurakoShapes.card),
       // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
       // instead of the system fallback chain. When the user opts into the
       // system font on Windows, use ONE real system font — 'Microsoft YaHei
@@ -284,17 +285,128 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
           ? null
           : const ['Microsoft YaHei UI', 'Segoe UI'],
     );
-    if (!systemFont) return base;
-    // Material 3's default TextTheme assigns different roles different font
-    // weights (w500 for titles/labels, w400 for body, etc). Our bundled font
-    // ships all of those weights as real glyphs, so it looked fine — but the
-    // OS default UI font commonly only has Regular + Bold installed, so the
-    // in-between weights Material asks for get synthetically bolded by the
-    // renderer, inconsistently, per role. Normalizing every role to one real
-    // weight avoids that synthesis entirely.
-    return base.copyWith(
-      textTheme: _normalizeWeight(base.textTheme),
-      primaryTextTheme: _normalizeWeight(base.primaryTextTheme),
+    final text = _emphasizeTextTheme(base.textTheme);
+    final themed = base.copyWith(
+      appBarTheme: AppBarThemeData(
+        backgroundColor: KurakoSurfaces.card(scheme),
+        foregroundColor: scheme.onSurface,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        surfaceTintColor: Colors.transparent,
+        titleTextStyle: text.titleMedium,
+      ),
+      cardTheme: CardThemeData(
+        color: KurakoSurfaces.card(scheme),
+        elevation: 2,
+        shadowColor: scheme.shadow.withValues(alpha: 0.28),
+        surfaceTintColor: Colors.transparent,
+        shape: KurakoShapes.card,
+        clipBehavior: Clip.antiAlias,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: KurakoSurfaces.floating(scheme),
+        elevation: 2,
+        surfaceTintColor: Colors.transparent,
+        shape: KurakoShapes.dialog,
+        titleTextStyle: text.headlineSmall,
+      ),
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: KurakoSurfaces.floating(scheme),
+        modalBackgroundColor: KurakoSurfaces.floating(scheme),
+        elevation: 2,
+        surfaceTintColor: Colors.transparent,
+        shape: KurakoShapes.bottomSheet,
+        clipBehavior: Clip.antiAlias,
+      ),
+      drawerTheme: DrawerThemeData(
+        backgroundColor: KurakoSurfaces.floating(scheme),
+        elevation: 2,
+        surfaceTintColor: Colors.transparent,
+        shape: KurakoShapes.startDrawer,
+        endShape: KurakoShapes.endDrawer,
+        clipBehavior: Clip.antiAlias,
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: KurakoSurfaces.floating(scheme),
+        elevation: 2,
+        surfaceTintColor: Colors.transparent,
+        shape: KurakoShapes.dialog,
+        labelTextStyle: WidgetStatePropertyAll(text.labelLarge),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          shape: KurakoShapes.pill,
+          textStyle: text.labelLarge,
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          shape: KurakoShapes.pill,
+          textStyle: text.labelLarge,
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          shape: KurakoShapes.pill,
+          textStyle: text.labelLarge,
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          shape: KurakoShapes.pill,
+          textStyle: text.labelLarge,
+        ),
+      ),
+      segmentedButtonTheme: SegmentedButtonThemeData(
+        style: ButtonStyle(
+          shape: const WidgetStatePropertyAll<OutlinedBorder>(
+            KurakoShapes.pill,
+          ),
+          textStyle: WidgetStatePropertyAll(text.labelLarge),
+        ),
+      ),
+      listTileTheme: ListTileThemeData(
+        // Rounded hover/selection highlight: full-bleed tiles inside rounded
+        // containers otherwise show square corners on their ink.
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(KurakoShapes.nestedRadius),
+        ),
+      ),
+      searchBarTheme: SearchBarThemeData(
+        backgroundColor: WidgetStatePropertyAll(KurakoSurfaces.card(scheme)),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(1),
+        shape: const WidgetStatePropertyAll<OutlinedBorder>(KurakoShapes.pill),
+        textStyle: WidgetStatePropertyAll(base.textTheme.bodyLarge),
+      ),
+      chipTheme: ChipThemeData(
+        shape: KurakoShapes.pill,
+        labelStyle: text.labelLarge,
+      ),
+    );
+    if (!systemFont) {
+      return themed.copyWith(textTheme: text);
+    }
+    // The system-font option uses one real weight for every normal role. Keep
+    // M3E's emphasized roles distinct so titles and labels do not look flat.
+    return themed.copyWith(
+      textTheme: _emphasizeTextTheme(_normalizeWeight(base.textTheme)),
+      primaryTextTheme: _emphasizeTextTheme(
+        _normalizeWeight(themed.primaryTextTheme),
+      ),
+    );
+  }
+
+  TextTheme _emphasizeTextTheme(TextTheme t) {
+    TextStyle? weight(TextStyle? style, FontWeight value) =>
+        style?.copyWith(fontWeight: value);
+    return t.copyWith(
+      titleLarge: weight(t.titleLarge, FontWeight.w500),
+      titleMedium: weight(t.titleMedium, FontWeight.w700),
+      titleSmall: weight(t.titleSmall, FontWeight.w700),
+      labelLarge: weight(t.labelLarge, FontWeight.w700),
+      labelMedium: weight(t.labelMedium, FontWeight.w700),
+      labelSmall: weight(t.labelSmall, FontWeight.w700),
     );
   }
 
@@ -340,17 +452,13 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
         // their背景 tint. Re-seed from the Monet primary instead — keeps the
         // wallpaper hue, fills every role.
         final Color seed = useDynamic ? lightDynamic.primary : theme.seedColor;
-        // Expressive variant: pastel, medium-chroma palettes — the M3E color
-        // language for 1.2.0.
         final light = ColorScheme.fromSeed(
           seedColor: seed,
           brightness: Brightness.light,
-          dynamicSchemeVariant: DynamicSchemeVariant.expressive,
         );
         final dark = ColorScheme.fromSeed(
           seedColor: seed,
           brightness: Brightness.dark,
-          dynamicSchemeVariant: DynamicSchemeVariant.expressive,
         );
         return MaterialApp(
           // The update banner is mounted in `builder`, above the navigator, so

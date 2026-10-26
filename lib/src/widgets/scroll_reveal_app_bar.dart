@@ -121,6 +121,7 @@ class ScrollRevealAppBar extends StatelessWidget
       builder: (context, reveal, _) {
         final progress = opaque ? 1.0 : reveal;
         final cs = Theme.of(context).colorScheme;
+        final background = cs.surfaceContainer;
         return AppBar(
           title: title,
           actions: actions,
@@ -131,16 +132,10 @@ class ScrollRevealAppBar extends StatelessWidget
           elevation: 0,
           scrolledUnderElevation: 0,
           surfaceTintColor: Colors.transparent,
-          backgroundColor: cs.surface.withValues(alpha: progress),
-          // A hairline keeps the title separated from busy cover art once the
-          // background has faded in; below the ramp it would be a stray line.
-          shape: progress <= 0
-              ? null
-              : Border(
-                  bottom: BorderSide(
-                    color: cs.outlineVariant.withValues(alpha: progress),
-                  ),
-                ),
+          backgroundColor: background.withValues(alpha: progress),
+          // Keep the reveal tone-based; a line would read as a second mask over
+          // cover art instead of as the surface settling into place.
+          shape: null,
         );
       },
     );
