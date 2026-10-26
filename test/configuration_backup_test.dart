@@ -5,6 +5,15 @@ import 'package:kurako/src/services/configuration_backup.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('backup preserves independent home settings', () async {
+    SharedPreferences.setMockInitialValues({
+      'home_preferences': '{"enabled":false,"initial":"library","modules":["watching","resume"],"hidden":["resume"]}',
+    });
+    final root = jsonDecode(
+      await ConfigurationBackupDocument.exportJson(),
+    ) as Map<String, dynamic>;
+    expect((root['settings'] as Map)['home_preferences'], isNotNull);
+  });
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
@@ -270,7 +279,11 @@ void main() {
 
 void _removeVersion4PlayerSettings(Map<String, dynamic> root) {
   final settings = root['settings'] as Map<String, dynamic>;
+  settings.removeWhere((key, _) => key.startsWith('interface_'));
   for (final key in const [
+    'home_preferences',
+    'appearance_presets',
+    'player_keyboard_shortcuts',
     'auto_resume_playback',
     'auto_play_next',
     'background_playback',

@@ -3,9 +3,13 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../state/player_appearance.dart';
+import '../state/home_preferences.dart';
+import '../state/appearance_presets.dart';
+import '../state/keyboard_preferences.dart';
+import 'decoder_policy.dart';
 
 const configurationBackupKind = 'kurako.configuration';
-const configurationBackupSchemaVersion = 6;
+const configurationBackupSchemaVersion = 9;
 const _legacyConfigurationBackupSchemaVersion = 1;
 const _accountAndSmbSchemaVersion = 2;
 const _webDavSchemaVersion = 4;
@@ -57,7 +61,7 @@ const _portableSettingsV5 = <String, _SettingDefinition>{
   'theme_mode': _SettingDefinition('system', _themeModeValidator),
 };
 
-const _portableSettings = <String, _SettingDefinition>{
+const _portableSettingsV6 = <String, _SettingDefinition>{
   ..._portableSettingsV5,
   playerBrightnessColorKey: _SettingDefinition(
     defaultPlayerBrightnessColor,
@@ -67,6 +71,30 @@ const _portableSettings = <String, _SettingDefinition>{
     defaultPlayerVolumeColor,
     _playerColorValidator,
   ),
+};
+
+const _portableSettingsV7 = <String, _SettingDefinition>{
+  ..._portableSettingsV6,
+  'interface_searchExpanded': _SettingDefinition(false, _isBool),
+  'interface_posterProgress': _SettingDefinition(true, _isBool),
+  'interface_posterRating': _SettingDefinition(true, _isBool),
+  'interface_posterBadge': _SettingDefinition(true, _isBool),
+  'interface_playerSideTools': _SettingDefinition(true, _isBool),
+  'interface_poster_size': _SettingDefinition('standard', _posterSizeValidator),
+};
+
+const _portableSettingsV8 = <String, _SettingDefinition>{
+  ..._portableSettingsV7,
+  homePreferencesKey: _SettingDefinition(
+    '{"enabled":true,"initial":"library","modules":["resume","watching"],"hidden":[]}',
+    validHomePreferences,
+  ),
+  appearancePresetsKey: _SettingDefinition('[]', validAppearancePresets),
+};
+
+const _portableSettings = <String, _SettingDefinition>{
+  ..._portableSettingsV8,
+  keyboardPreferencesKey: _SettingDefinition('{}', validKeyboardPreferences),
 };
 
 const _accountFields = <String, _SettingDefinition>{
@@ -113,13 +141,14 @@ const _webDavPreferenceKeys = <String, String>{
 
 bool _playerColorValidator(Object value) =>
     _isIntInRange(value, 0xFF000000, 0xFFFFFFFF);
+bool _posterSizeValidator(Object value) =>
+    _isOneOf(value, const {'compact', 'standard', 'large'});
 bool _librarySortValidator(Object value) => _isIntInRange(value, 0, 5);
 bool _themeSeedValidator(Object value) => _isIntInRange(value, 0, 7);
 bool _seekDurationValidator(Object value) => _isIntInRange(value, 5, 90);
 bool _uiScaleValidator(Object value) => _isIntInRange(value, 75, 150);
 bool _nonNegativeIntValidator(Object value) => value is int && value >= 0;
-bool _decodeModeValidator(Object value) =>
-    _isOneOf(value, const {'auto', 'hw', 'sw'});
+bool _decodeModeValidator(Object value) => validDecoderPreference(value);
 bool _superResolutionValidator(Object value) =>
     _isOneOf(value, const {'off', 'anime4k-light', 'anime4k-balanced'});
 bool _themeModeValidator(Object value) =>
@@ -241,6 +270,9 @@ class ConfigurationBackupDocument {
         schemaVersion != 3 &&
         schemaVersion != _webDavSchemaVersion &&
         schemaVersion != 5 &&
+        schemaVersion != 6 &&
+        schemaVersion != 7 &&
+        schemaVersion != 8 &&
         schemaVersion != configurationBackupSchemaVersion) {
       throw const FormatException('不支持此配置文件版本');
     }
@@ -253,6 +285,9 @@ class ConfigurationBackupDocument {
       decoded['settings'],
       definitions: switch (schemaVersion) {
         configurationBackupSchemaVersion => _portableSettings,
+        8 => _portableSettingsV8,
+        7 => _portableSettingsV7,
+        6 => _portableSettingsV6,
         5 => _portableSettingsV5,
         _webDavSchemaVersion => _portableSettingsV4,
         _ => _portableSettingsV3,

@@ -7,6 +7,7 @@ import '../state/providers.dart';
 import '../services/scan_coordinator.dart';
 import '../widgets/window_caption.dart';
 import '../ui/shapes.dart';
+import '../ui/page_components.dart';
 
 /// Settings sub-page listing blocked anime/files, with unblock actions.
 class BlacklistPage extends ConsumerStatefulWidget {
@@ -60,56 +61,45 @@ class _BlacklistPageState extends ConsumerState<BlacklistPage> {
           }
           final items = snap.data ?? const [];
           if (items.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.block_outlined,
-                    size: 48,
-                    color: Theme.of(context).colorScheme.outline,
-                  ),
-                  const SizedBox(height: 12),
-                  const Text('还没有屏蔽任何内容'),
-                  const SizedBox(height: 4),
-                  Text(
-                    '在番剧库长按（或右键）番剧卡片、在详情页长按剧集即可屏蔽',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
+            return const KurakoEmptyState(
+              icon: Icons.block_outlined,
+              title: '还没有屏蔽任何内容',
+              description: '屏蔽的番剧与文件会列在这里，你可以随时恢复。',
             );
           }
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: items.length,
-            itemBuilder: (context, i) {
-              final e = items[i];
-              final isAnime = e.kind == 'anime';
-              return Card(
-                shape: KurakoShapes.card,
-                margin: const EdgeInsets.only(bottom: 8),
-                clipBehavior: Clip.antiAlias,
-                child: ListTile(
-                  leading: Icon(
-                    isAnime
-                        ? Icons.video_library_outlined
-                        : Icons.insert_drive_file_outlined,
+          return KurakoContent(
+            maxWidth: 1000,
+            child: ListView.builder(
+              padding: const EdgeInsets.all(12),
+              itemCount: items.length,
+              itemBuilder: (context, i) {
+                final e = items[i];
+                final isAnime = e.kind == 'anime';
+                return Card(
+                  shape: KurakoShapes.card,
+                  margin: const EdgeInsets.only(bottom: 8),
+                  clipBehavior: Clip.antiAlias,
+                  child: ListTile(
+                    leading: Icon(
+                      isAnime
+                          ? Icons.video_library_outlined
+                          : Icons.insert_drive_file_outlined,
+                    ),
+                    title: Text(
+                      e.value,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(isAnime ? '番剧' : '视频文件'),
+                    trailing: IconButton(
+                      tooltip: '解除屏蔽',
+                      icon: const Icon(Icons.remove_circle_outline),
+                      onPressed: busy ? null : () => _unblock(e),
+                    ),
                   ),
-                  title: Text(
-                    e.value,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  subtitle: Text(isAnime ? '番剧' : '视频文件'),
-                  trailing: IconButton(
-                    tooltip: '解除屏蔽',
-                    icon: const Icon(Icons.remove_circle_outline),
-                    onPressed: busy ? null : () => _unblock(e),
-                  ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           );
         },
       ),

@@ -10,15 +10,16 @@ import '../services/bangumi_credentials.dart';
 import '../services/bangumi_oauth.dart';
 import '../services/bangumi_mirror.dart';
 import '../state/providers.dart';
-import '../ui/grouped_card.dart';
 import '../ui/nav_card.dart';
+import '../ui/page_components.dart';
 import '../ui/shapes.dart';
+import '../widgets/settings_scaffold.dart';
 import 'about_page.dart';
-import 'appearance_settings_page.dart';
 import 'downloads_page.dart';
-import 'maintenance_page.dart';
 import 'media_sources_page.dart';
-import 'player_settings_page.dart';
+import 'maintenance_page.dart';
+import 'preferences_page.dart';
+import 'watch_pages.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -33,75 +34,114 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider);
-
-    return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    void open(Widget page) =>
+        Navigator.of(context).push(MaterialPageRoute(builder: (_) => page));
+    return SettingsScaffold(
+      title: '我的',
+      embedded: true,
+      body: KurakoPageList(
+        centerContent: true,
         children: [
-          SettingsGroupCard(
-            title: 'Bangumi 账号',
-            children: [_buildBangumiSection(context, settings)],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final account = Card(
+                key: const ValueKey('bangumi-account'),
+                margin: EdgeInsets.zero,
+                shape: KurakoShapes.card,
+                clipBehavior: Clip.antiAlias,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                        child: Text(
+                          'Bangumi 账号',
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                      ),
+                      _buildBangumiSection(context, settings),
+                    ],
+                  ),
+                ),
+              );
+              if (constraints.maxWidth < 700) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    account,
+                    const SizedBox(height: 12),
+                    const WatchSummaryCard(),
+                  ],
+                );
+              }
+              return IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(flex: 2, child: account),
+                    const SizedBox(width: 12),
+                    const Expanded(child: WatchSummaryCard()),
+                  ],
+                ),
+              );
+            },
           ),
-          const SizedBox(height: 8),
-          SettingsNavCard(
-            icon: Icons.tune,
-            title: '播放器',
-            subtitle: '播放行为、手势、画质、后台播放与系统控制',
-            tone: NavCardTone.primary,
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const PlayerSettingsPage()),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SettingsNavCard(
-            icon: Icons.palette_outlined,
-            title: '外观',
-            subtitle: '显示模式、主题色、缩放与字体',
-            tone: NavCardTone.secondary,
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const AppearanceSettingsPage()),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SettingsNavCard(
-            key: const ValueKey('settings-downloads'),
-            icon: Icons.download_outlined,
-            title: '下载管理',
-            subtitle: '播放与管理已下载到本地的网络视频',
-            tone: NavCardTone.tertiary,
-            onTap: () => Navigator.of(context)
-                .push(MaterialPageRoute(builder: (_) => const DownloadsPage())),
-          ),
-          const SizedBox(height: 12),
-          SettingsNavCard(
-            icon: Icons.folder_outlined,
-            title: '媒体来源',
-            subtitle: '番剧文件夹：本地、SMB 与 WebDAV 网络共享',
-            tone: NavCardTone.primary,
-            onTap: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const MediaSourcesPage())),
-          ),
-          const SizedBox(height: 12),
-          SettingsNavCard(
-            icon: Icons.build_outlined,
-            title: '维护',
-            subtitle: '下载清理、屏蔽、配置备份与数据重置',
-            tone: NavCardTone.secondary,
-            onTap: () => Navigator.of(
-              context,
-            ).push(MaterialPageRoute(builder: (_) => const MaintenancePage())),
-          ),
-          const SizedBox(height: 12),
-          SettingsNavCard(
-            icon: Icons.info_outline,
-            title: '关于 Kurako',
-            subtitle: '版本信息、开源许可、致谢与项目主页',
-            tone: NavCardTone.tertiary,
-            onTap: () =>
-                Navigator.of(context)
-                    .push(MaterialPageRoute(builder: (_) => const AboutPage())),
+          const SizedBox(height: 20),
+          KurakoCardGrid(
+            children: [
+              SettingsNavCard(
+                icon: Icons.history_rounded,
+                title: '观看历史',
+                subtitle: '最近播放的单集',
+                tone: NavCardTone.primary,
+                onTap: () => open(const WatchHistoryPage()),
+              ),
+              SettingsNavCard(
+                key: const ValueKey('settings-downloads'),
+                icon: Icons.download_outlined,
+                title: '下载管理',
+                subtitle: '离线视频与下载任务',
+                tone: NavCardTone.tertiary,
+                onTap: () => open(const DownloadsPage()),
+              ),
+              SettingsNavCard(
+                icon: Icons.build_outlined,
+                title: '维护',
+                subtitle: '清理、备份与屏蔽管理',
+                tone: NavCardTone.neutral,
+                onTap: () => open(
+                  MediaQuery.sizeOf(context).width >= 840
+                      ? const PreferencesPage(initialIndex: 3)
+                      : const MaintenancePage(),
+                ),
+              ),
+              SettingsNavCard(
+                icon: Icons.tune_rounded,
+                title: '偏好设置',
+                subtitle: '播放与外观',
+                onTap: () => open(const PreferencesPage()),
+              ),
+              SettingsNavCard(
+                icon: Icons.folder_outlined,
+                title: '媒体来源',
+                subtitle: '本地、SMB 与 WebDAV',
+                tone: NavCardTone.tertiary,
+                onTap: () => open(
+                  MediaQuery.sizeOf(context).width >= 840
+                      ? const PreferencesPage(initialIndex: 2)
+                      : const MediaSourcesPage(),
+                ),
+              ),
+              SettingsNavCard(
+                icon: Icons.info_outline_rounded,
+                title: '关于 Kurako',
+                subtitle: '版本、更新与开源许可',
+                tone: NavCardTone.neutral,
+                onTap: () => open(const AboutPage()),
+              ),
+            ],
           ),
         ],
       ),
@@ -117,10 +157,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (settings.isLoggedIn)
-          Card(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            color: Theme.of(context).colorScheme.surfaceContainerHigh,
-            shape: KurakoShapes.nestedCard,
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -261,68 +299,98 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         Consumer(
           builder: (context, ref, _) {
             final service = ref.watch(bangumiMirrorStatusProvider);
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SwitchListTile(
-                  title: const Text('使用 Bangumi 反向代理（Mirrox）'),
-                  subtitle: const Text('请求会经第三方转发，非官方服务。'),
-                  secondary: IconButton(
-                    tooltip: '了解更多',
-                    icon: const Icon(Icons.help_outline, size: 20),
-                    onPressed: () => _showMirrorDetails(context),
-                  ),
-                  value: ref.watch(bangumiMirrorProvider),
-                  onChanged: service.busy ? null : _setMirror,
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: ExpansionTile(
+                key: const PageStorageKey('bangumi-proxy-options'),
+                tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+                childrenPadding: const EdgeInsets.fromLTRB(0, 4, 0, 8),
+                shape: const RoundedRectangleBorder(),
+                collapsedShape: const RoundedRectangleBorder(),
+                leading: const Icon(Icons.route_outlined),
+                title: const Text('连接与反向代理'),
+                subtitle: Text(
+                  service.busy
+                      ? '正在验证…'
+                      : ref.watch(bangumiMirrorProvider)
+                      ? 'Mirrox 已开启 · 第三方转发'
+                      : '官方直连',
                 ),
-                if (service.busy)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16),
-                    child: LinearProgressIndicator(),
-                  ),
-                if (service.message != null)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                    child: Text(
-                      service.message!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                  ),
-                if (service.enabled || service.message != null)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        onPressed: service.busy ? null : () => _setMirror(true),
-                        icon: const Icon(Icons.verified_user_outlined),
-                        label: const Text('重新验证反向代理'),
+                children: [
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SwitchListTile(
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                        ),
+                        title: const Text('使用 Bangumi 反向代理（Mirrox）'),
+                        subtitle: const Text('请求会经第三方转发，非官方服务。'),
+                        secondary: IconButton(
+                          tooltip: '了解更多',
+                          icon: const Icon(Icons.help_outline, size: 20),
+                          onPressed: () => _showMirrorDetails(context),
+                        ),
+                        value: ref.watch(bangumiMirrorProvider),
+                        onChanged: service.busy ? null : _setMirror,
                       ),
-                    ),
-                  ),
-                // Per-feature routing: a token works on either host, so these
-                // only decide which one carries the request.
-                if (ref.watch(bangumiMirrorProvider)) ...[
-                  SwitchListTile(
-                    contentPadding: const EdgeInsets.only(left: 16),
-                    title: const Text('登录走反向代理'),
-                    subtitle: const Text('授权、令牌交换与续期均经反代，自动完成人机验证'),
-                    value: ref.watch(bangumiOAuthViaMirrorProvider),
-                    onChanged: (value) => ref
-                        .read(bangumiOAuthViaMirrorProvider.notifier)
-                        .set(value),
-                  ),
-                  SwitchListTile(
-                    contentPadding: const EdgeInsets.only(left: 16),
-                    title: const Text('收藏同步走反向代理'),
-                    subtitle: const Text('收藏的读取与修改通过反代完成'),
-                    value: ref.watch(bangumiCollectionViaMirrorProvider),
-                    onChanged: (value) => ref
-                        .read(bangumiCollectionViaMirrorProvider.notifier)
-                        .set(value),
+                      if (service.busy)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 16),
+                          child: LinearProgressIndicator(),
+                        ),
+                      if (service.message != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          child: Text(
+                            service.message!,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      if (service.enabled || service.message != null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              onPressed: service.busy
+                                  ? null
+                                  : () => _setMirror(true),
+                              icon: const Icon(Icons.verified_user_outlined),
+                              label: const Text('重新验证反向代理'),
+                            ),
+                          ),
+                        ),
+                      // Per-feature routing: a token works on either host, so these
+                      // only decide which one carries the request.
+                      if (ref.watch(bangumiMirrorProvider)) ...[
+                        SwitchListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                          ),
+                          title: const Text('登录走反向代理'),
+                          subtitle: const Text('授权、令牌交换与续期均经反代，自动完成人机验证'),
+                          value: ref.watch(bangumiOAuthViaMirrorProvider),
+                          onChanged: (value) => ref
+                              .read(bangumiOAuthViaMirrorProvider.notifier)
+                              .set(value),
+                        ),
+                        SwitchListTile(
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                          ),
+                          title: const Text('收藏同步走反向代理'),
+                          subtitle: const Text('收藏的读取与修改通过反代完成'),
+                          value: ref.watch(bangumiCollectionViaMirrorProvider),
+                          onChanged: (value) => ref
+                              .read(bangumiCollectionViaMirrorProvider.notifier)
+                              .set(value),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
-              ],
+              ),
             );
           },
         ),

@@ -9,6 +9,7 @@
 import 'api.dart';
 import 'api/mirror.dart';
 import 'api/update.dart';
+import 'api/watch.dart';
 
 import 'dart:async';
 import 'dart:convert';
@@ -19,6 +20,7 @@ import 'models.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 import 'update.dart';
+import 'watch_history.dart';
 
 abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   RustLibApiImplPlatform({
@@ -76,6 +78,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UpdateRelease dco_decode_box_autoadd_update_release(dynamic raw);
+
+  @protected
+  WatchSegment dco_decode_box_autoadd_watch_segment(dynamic raw);
 
   @protected
   DiscoveredServer dco_decode_discovered_server(dynamic raw);
@@ -165,6 +170,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<UpdateAsset> dco_decode_list_update_asset(dynamic raw);
 
   @protected
+  List<WatchDay> dco_decode_list_watch_day(dynamic raw);
+
+  @protected
+  List<WatchEntry> dco_decode_list_watch_entry(dynamic raw);
+
+  @protected
   OAuthResult dco_decode_o_auth_result(dynamic raw);
 
   @protected
@@ -239,6 +250,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UpdateRelease dco_decode_update_release(dynamic raw);
 
   @protected
+  WatchDay dco_decode_watch_day(dynamic raw);
+
+  @protected
+  WatchEntry dco_decode_watch_entry(dynamic raw);
+
+  @protected
+  WatchSegment dco_decode_watch_segment(dynamic raw);
+
+  @protected
+  WatchStatistics dco_decode_watch_statistics(dynamic raw);
+
+  @protected
   AnyhowException sse_decode_AnyhowException(SseDeserializer deserializer);
 
   @protected
@@ -288,6 +311,11 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   UpdateRelease sse_decode_box_autoadd_update_release(
+    SseDeserializer deserializer,
+  );
+
+  @protected
+  WatchSegment sse_decode_box_autoadd_watch_segment(
     SseDeserializer deserializer,
   );
 
@@ -405,6 +433,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<UpdateAsset> sse_decode_list_update_asset(SseDeserializer deserializer);
 
   @protected
+  List<WatchDay> sse_decode_list_watch_day(SseDeserializer deserializer);
+
+  @protected
+  List<WatchEntry> sse_decode_list_watch_entry(SseDeserializer deserializer);
+
+  @protected
   OAuthResult sse_decode_o_auth_result(SseDeserializer deserializer);
 
   @protected
@@ -485,6 +519,18 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   UpdateRelease sse_decode_update_release(SseDeserializer deserializer);
 
   @protected
+  WatchDay sse_decode_watch_day(SseDeserializer deserializer);
+
+  @protected
+  WatchEntry sse_decode_watch_entry(SseDeserializer deserializer);
+
+  @protected
+  WatchSegment sse_decode_watch_segment(SseDeserializer deserializer);
+
+  @protected
+  WatchStatistics sse_decode_watch_statistics(SseDeserializer deserializer);
+
+  @protected
   int sse_decode_i_32(SseDeserializer deserializer);
 
   @protected
@@ -553,6 +599,12 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_box_autoadd_update_release(
     UpdateRelease self,
+    SseSerializer serializer,
+  );
+
+  @protected
+  void sse_encode_box_autoadd_watch_segment(
+    WatchSegment self,
     SseSerializer serializer,
   );
 
@@ -707,6 +759,15 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   );
 
   @protected
+  void sse_encode_list_watch_day(List<WatchDay> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_watch_entry(
+    List<WatchEntry> self,
+    SseSerializer serializer,
+  );
+
+  @protected
   void sse_encode_o_auth_result(OAuthResult self, SseSerializer serializer);
 
   @protected
@@ -801,6 +862,21 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_update_release(UpdateRelease self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_watch_day(WatchDay self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_watch_entry(WatchEntry self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_watch_segment(WatchSegment self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_watch_statistics(
+    WatchStatistics self,
+    SseSerializer serializer,
+  );
 
   @protected
   void sse_encode_i_32(int self, SseSerializer serializer);

@@ -3,6 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
 import '../state/providers.dart';
+import '../state/home_preferences.dart';
+import 'watching_home_page.dart';
+import '../ui/navigation.dart';
+import '../ui/page_switch_transition.dart';
 import '../widgets/window_caption.dart';
 import 'collection_page.dart';
 import 'library_page.dart';
@@ -21,6 +25,9 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage> {
   int _index = 0;
+  bool _startupApplied = false;
+  bool _navigationExpanded = false;
+  final _bodyKey = GlobalKey();
 
   @override
   void initState() {
@@ -51,78 +58,92 @@ class _HomePageState extends ConsumerState<HomePage> {
     (Icons.video_library_outlined, Icons.video_library, '番剧库'),
     (Icons.bookmark_outline, Icons.bookmark, '追番'),
     (Icons.settings_outlined, Icons.settings, '设置'),
+    (Icons.home_outlined, Icons.home_rounded, '首页'),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final preferences = ref.watch(homePreferencesProvider);
+    if (preferences.loaded && !_startupApplied) {
+      _startupApplied = true;
+      _index = switch (preferences.initial) {
+        AppDestination.home => 3,
+        AppDestination.library => 0,
+        AppDestination.collection => 1,
+        AppDestination.settings => 2,
+      };
+    }
+    if (!preferences.enabled && _index == 3) _index = 0;
+    final visible = [if (preferences.enabled) 3, 0, 1, 2];
+    final selected = visible.indexOf(_index);
+    void select(int index) => setState(() {
+      _startupApplied = true;
+      _index = visible[index];
+    });
     // Responsive: phones (narrow) get a bottom NavigationBar; tablets/desktop
     // (wide) get a side NavigationRail. Breakpoint follows Material guidance.
     final isWide = MediaQuery.sizeOf(context).width >= 640;
-    final body = IndexedStack(
-      index: _index,
-      children: [
-        TickerMode(
-          enabled: _index == 0,
-          child: HeroMode(enabled: _index == 0, child: const LibraryPage()),
-        ),
-        TickerMode(
-          enabled: _index == 1,
-          child: HeroMode(enabled: _index == 1, child: const CollectionPage()),
-        ),
-        TickerMode(
-          enabled: _index == 2,
-          child: HeroMode(enabled: _index == 2, child: const SettingsPage()),
-        ),
-      ],
+    final body = PageSwitchTransition(
+      key: _bodyKey,
+      identity: _index,
+      child: IndexedStack(
+        index: _index,
+        children: [
+          TickerMode(
+            enabled: _index == 0,
+            child: HeroMode(enabled: _index == 0, child: const LibraryPage()),
+          ),
+          TickerMode(
+            enabled: _index == 1,
+            child: HeroMode(
+              enabled: _index == 1,
+              child: const CollectionPage(),
+            ),
+          ),
+          TickerMode(
+            enabled: _index == 2,
+            child: HeroMode(enabled: _index == 2, child: const SettingsPage()),
+          ),
+          TickerMode(
+            enabled: _index == 3,
+            child: HeroMode(
+              enabled: _index == 3,
+              child: preferences.enabled
+                  ? const WatchingHomePage()
+                  : const SizedBox.shrink(),
+            ),
+          ),
+        ],
+      ),
     );
 
     if (isWide) {
-      // Settings is the last destination; pin it to the bottom of the rail so
-      // it sits apart from the content tabs (库/追番), matching desktop apps.
-      const settingsIndex = 2;
-      final railDestinations = [
-        for (var i = 0; i < _destinations.length; i++)
-          if (i != settingsIndex)
-            NavigationRailDestination(
-              icon: Icon(_destinations[i].$1),
-              selectedIcon: Icon(_destinations[i].$2),
-              label: Text(_destinations[i].$3),
-            ),
-      ];
-      final settings = _destinations[settingsIndex];
       return Scaffold(
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
         body: Column(
           children: [
             const WindowCaption(title: 'Kurako'),
             Expanded(
               child: Row(
                 children: [
-                  // NavigationRail shows the content tabs (库/追番); Settings is
-                  // pinned to the bottom via `trailing` + Expanded/Align, which
-                  // sit below the destinations inside the rail's own layout.
-                  NavigationRail(
-                    selectedIndex: _index >= settingsIndex ? null : _index,
-                    onDestinationSelected: (i) => setState(() => _index = i),
-                    labelType: NavigationRailLabelType.all,
-                    destinations: railDestinations,
-                    trailing: Expanded(
-                      child: Align(
-                        alignment: Alignment.bottomCenter,
-                        child: Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _BottomRailButton(
-                            icon: settings.$1,
-                            selectedIcon: settings.$2,
-                            label: settings.$3,
-                            selected: _index == settingsIndex,
-                            onTap: () => setState(() => _index = settingsIndex),
-                          ),
-                        ),
+                  KurakoNavigation(
+                    index: selected,
+                    onSelected: select,
+                    showHome: preferences.enabled,
+                    expanded: _navigationExpanded,
+                    onToggle: () => setState(
+                      () => _navigationExpanded = !_navigationExpanded,
+                    ),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(0, 8, 12, 12),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(28),
+                        child: body,
                       ),
                     ),
                   ),
-                  const VerticalDivider(width: 1),
-                  Expanded(child: body),
                 ],
               ),
             ),
@@ -139,70 +160,20 @@ class _HomePageState extends ConsumerState<HomePage> {
         ],
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
+        indicatorShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        selectedIndex: selected,
+        onDestinationSelected: select,
         destinations: [
-          for (final d in _destinations)
+          for (final i in visible)
             NavigationDestination(
-              icon: Icon(d.$1),
-              selectedIcon: Icon(d.$2),
-              label: d.$3,
+              icon: Icon(_destinations[i].$1),
+              selectedIcon: Icon(_destinations[i].$2),
+              label: _destinations[i].$3,
             ),
         ],
-      ),
-    );
-  }
-}
-
-/// A single tappable rail item styled like a [NavigationRailDestination], used
-/// to pin Settings to the bottom of the rail (outside NavigationRail's own
-/// contiguous selection model).
-class _BottomRailButton extends StatelessWidget {
-  final IconData icon;
-  final IconData selectedIcon;
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _BottomRailButton({
-    required this.icon,
-    required this.selectedIcon,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        width: 72,
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-              decoration: BoxDecoration(
-                color: selected ? cs.secondaryContainer : null,
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Icon(
-                selected ? selectedIcon : icon,
-                color: selected ? cs.onSecondaryContainer : cs.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                color: selected ? cs.onSurface : cs.onSurfaceVariant,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }

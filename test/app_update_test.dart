@@ -13,6 +13,7 @@ AppUpdateRelease release([String tag = 'v1.2.0']) => AppUpdateRelease(
   tagName: tag,
   htmlUrl: 'https://github.com/Tesget512/Kurako/releases/tag/$tag',
   name: 'Kurako $tag',
+  notes: '改进布局与播放控制。',
 );
 
 AppUpdateRelease releaseWithAssets(List<AppUpdateAsset> assets) =>
@@ -500,7 +501,10 @@ void main() {
       expect(find.text('下载'), findsNothing);
       await container.read(updateCheckProvider.notifier).checkAtStartup();
       await tester.pump();
+      await tester.pumpAndSettle();
       expect(find.text('Kurako v1.2.0 可用'), findsOneWidget);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text('改进布局与播放控制。'), findsOneWidget);
       // The banner button opens the in-app download dialog rather than a
       // browser page.
       await tester.tap(find.text('下载'));
@@ -509,10 +513,80 @@ void main() {
       expect(find.text('此版本未提供适用于当前设备的更新包。'), findsOneWidget);
       await tester.tap(find.widgetWithText(TextButton, '关闭'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('dismiss-update-banner')));
-      await tester.pump();
+      await container.read(updateCheckProvider.notifier).checkManually();
+      await tester.pumpAndSettle();
       expect(find.text('下载'), findsNothing);
       expect(find.text('app content'), findsOneWidget);
+    },
+  );
+
+  testWidgets('background update schedules a frame while the app is idle', (
+    tester,
+  ) async {
+    final container = ProviderContainer(
+      overrides: [appUpdateServiceProvider.overrideWithValue(service())],
+    );
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          navigatorKey: updateNavigatorKey,
+          builder: bannerBuilder,
+          home: const Scaffold(body: Text('app content')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.binding.hasScheduledFrame, isFalse);
+    await container.read(updateCheckProvider.notifier).checkAtStartup();
+    expect(tester.binding.hasScheduledFrame, isTrue);
+    await tester.pumpAndSettle();
+    expect(find.byType(AlertDialog), findsOneWidget);
+    await tester.tap(find.text('稍后'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+    'missing notes stays honest and only a new version prompts again',
+    (tester) async {
+      var current = releaseWithAssets([]);
+      final container = ProviderContainer(
+        overrides: [
+          appUpdateServiceProvider.overrideWithValue(
+            service(fetch: () async => current),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            navigatorKey: updateNavigatorKey,
+            builder: bannerBuilder,
+            home: const Scaffold(body: Text('app content')),
+          ),
+        ),
+      );
+      final notifier = container.read(updateCheckProvider.notifier);
+      await notifier.checkManually();
+      await tester.pumpAndSettle();
+      expect(find.text('暂时无法读取更新内容，可前往发布页面查看。'), findsOneWidget);
+      expect(find.text('发布页面'), findsOneWidget);
+      await tester.tap(find.text('稍后'));
+      await tester.pumpAndSettle();
+      await notifier.checkManually();
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      current = release('v1.3.0');
+      await notifier.checkManually();
+      await tester.pumpAndSettle();
+      expect(find.text('Kurako v1.3.0 可用'), findsOneWidget);
+      expect(find.text('改进布局与播放控制。'), findsOneWidget);
+      await tester.tap(find.text('稍后'));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
     },
   );
 
@@ -550,6 +624,9 @@ void main() {
     await tester.pump();
     expect(tester.getSize(find.byType(Scaffold)), sizeBefore);
     expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('稍后'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('body action'));
     expect(taps, 1);
   });
@@ -585,10 +662,10 @@ void main() {
     await tester.pumpAndSettle();
     // The removed sentence must not come back.
     expect(find.textContaining('不会自动下载或安装'), findsNothing);
-    await tester.tap(find.widgetWithText(OutlinedButton, '检查更新'));
+    await tester.tap(find.byTooltip('检查更新'));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(OutlinedButton, '重试'), findsOneWidget);
-    await tester.tap(find.widgetWithText(OutlinedButton, '重试'));
+    expect(find.byTooltip('重试检查更新'), findsOneWidget);
+    await tester.tap(find.byTooltip('重试检查更新'));
     await tester.pumpAndSettle();
     expect(find.textContaining('发现新版本 v1.2.0'), findsOneWidget);
     await tester.ensureVisible(find.text('下载更新'));

@@ -311,8 +311,8 @@ final useSystemFontProvider = NotifierProvider<_BoolPrefNotifier, bool>(
 /// fixed at VideoController construction time).
 String decodeModeStartupValue = 'auto';
 
-/// Decode mode: 'auto' (platform default), 'hw' (force hardware), 'sw' (force
-/// software). Takes effect when next entering the player. Persisted.
+/// Automatic, software or a platform-specific mpv decoder candidate. Legacy
+/// 'hw' is treated as automatic. Takes effect when next entering the player.
 final decodeModeProvider = NotifierProvider<_StringPrefNotifier, String>(
   () => _StringPrefNotifier('decode_mode', defaultValue: 'auto'),
 );
@@ -332,6 +332,7 @@ class _StringPrefNotifier extends Notifier<String> {
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
+    if (!ref.mounted) return;
     state = prefs.getString(key) ?? _defaultValue;
     if (key == 'decode_mode') decodeModeStartupValue = state;
     if (key == 'download_dir') await _syncDownloadDirectory(state);
@@ -340,6 +341,7 @@ class _StringPrefNotifier extends Notifier<String> {
   Future<void> set(String value) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, value);
+    if (!ref.mounted) return;
     state = value;
     if (key == 'decode_mode') decodeModeStartupValue = value;
     if (key == 'download_dir') await _syncDownloadDirectory(value);

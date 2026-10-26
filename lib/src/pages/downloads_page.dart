@@ -11,6 +11,7 @@ import '../widgets/cover_image.dart';
 import '../widgets/window_caption.dart';
 import 'player_page.dart';
 import '../ui/shapes.dart';
+import '../ui/page_components.dart';
 
 /// Management page for network downloads. Downloads are grouped by anime (like
 /// the library → detail view): each anime shows its cover, and its episodes list
@@ -182,12 +183,18 @@ class _DownloadsPageState extends ConsumerState<DownloadsPage> {
           );
 
           if (done.isEmpty && active.isEmpty) {
-            return const Center(child: Text('还没有下载到本地的视频'));
+            return const KurakoEmptyState(
+              icon: Icons.download_for_offline_outlined,
+              title: '还没有离线视频',
+              description: '在番剧详情中下载网络视频，之后可以在这里离线观看。',
+            );
           }
 
           final groups = _groupByAnime(done);
-          return ListView(
+          return KurakoPageList(
             children: [
+              Text('${done.length} 个已下载视频 · ${active.length} 个进行中任务'),
+              const SizedBox(height: 12),
               for (final t in active) _ActiveTile(task: t),
               for (final g in groups)
                 _AnimeGroup(
@@ -292,7 +299,7 @@ class _AnimeGroup extends StatelessWidget {
     );
     return Card(
       shape: KurakoShapes.card,
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      margin: const EdgeInsets.only(bottom: 16),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -6,19 +6,30 @@ import 'package:url_launcher/url_launcher.dart';
 import '../build_info.dart';
 import '../state/update_provider.dart';
 import '../ui/grouped_card.dart';
+import '../ui/page_components.dart';
 import '../widgets/update_download_dialog.dart';
 import '../widgets/window_caption.dart';
+import '../widgets/settings_scaffold.dart';
 
-/// Product and attribution information kept out of the operational settings
-/// page.
-class AboutPage extends StatefulWidget {
-  const AboutPage({super.key});
+class AboutPage extends StatelessWidget {
+  const AboutPage({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
-  State<AboutPage> createState() => _AboutPageState();
+  Widget build(BuildContext context) => SettingsScaffold(
+    title: '关于 Kurako',
+    embedded: embedded,
+    body: const KurakoPageList(maxWidth: 840, children: [AboutPanel()]),
+  );
 }
 
-class _AboutPageState extends State<AboutPage> {
+class AboutPanel extends StatefulWidget {
+  const AboutPanel({super.key});
+  @override
+  State<AboutPanel> createState() => _AboutPanelState();
+}
+
+class _AboutPanelState extends State<AboutPanel> {
   late final Future<PackageInfo> _packageInfo = PackageInfo.fromPlatform();
 
   static final Uri _projectUri = Uri.parse(
@@ -54,66 +65,84 @@ class _AboutPageState extends State<AboutPage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: const SysAppBar(title: Text('关于 Kurako')),
-    body: ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        const Center(
-          child: Column(
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Card(
+        margin: EdgeInsets.zero,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Row(
             children: [
-              Image(
+              const Image(
                 image: AssetImage('assets/images/kurako_icon.png'),
-                width: 112,
-                height: 112,
+                width: 56,
+                height: 56,
               ),
-              SizedBox(height: 12),
-              Text('Kurako', style: TextStyle(fontSize: 22)),
-              SizedBox(height: 4),
-              Text('本地番剧库播放器 · Flutter + Rust'),
-              SizedBox(height: 10),
-              Text('这个只是暂定的图标！\n...嗯，暂定的...', textAlign: TextAlign.center),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Kurako',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 4),
+                    FutureBuilder<PackageInfo>(
+                      future: _packageInfo,
+                      builder: (context, snapshot) {
+                        final version = snapshot.data?.version;
+                        return Text(
+                          '${version == null ? '版本读取中' : '版本 $version'}\n编译时间：$kBuildTime',
+                          style: Theme.of(context).textTheme.bodySmall,
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 12),
-        SettingsGroupCard(
-          children: [
-            ListTile(
-              leading: const Icon(Icons.schedule_outlined),
-              title: const Text('版本与编译时间'),
-              subtitle: FutureBuilder<PackageInfo>(
-                future: _packageInfo,
-                builder: (context, snapshot) {
-                  final version = snapshot.data?.version;
-                  return Text(
-                    '${version == null ? '版本读取中' : '版本 $version'}\n编译时间：$kBuildTime',
-                  );
-                },
-              ),
+      ),
+      const SizedBox(height: 12),
+      const _UpdateCheckSection(),
+      const SizedBox(height: 12),
+      KurakoCardGrid(
+        children: [
+          _link(
+            Icons.code_outlined,
+            'GitHub 项目主页',
+            () => _openProject(context),
+            external: true,
+          ),
+          _link(Icons.balance_outlined, '开源许可', () => _openLicenses(context)),
+          _link(
+            Icons.favorite_outline,
+            '致谢',
+            () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const AcknowledgementsPage()),
             ),
-            const _UpdateCheckSection(),
-            ListTile(
-              leading: const Icon(Icons.code_outlined),
-              title: const Text('GitHub 项目主页'),
-              subtitle: const Text('github.com/Tesget512/Kurako'),
-              trailing: const Icon(Icons.open_in_new),
-              onTap: () => _openProject(context),
-            ),
-            ListTile(
-              leading: const Icon(Icons.balance_outlined),
-              title: const Text('开源许可'),
-              subtitle: const Text(
-                'GNU General Public License v3.0 only（GPL-3.0-only）\n'
-                '查看 Kurako、Flutter 依赖与随附资源的详细许可。',
-              ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _openLicenses(context),
-            ),
-            const _Acknowledgements(),
-          ],
-        ),
-      ],
+          ),
+        ],
+      ),
+    ],
+  );
+
+  Widget _link(
+    IconData icon,
+    String title,
+    VoidCallback onTap, {
+    bool external = false,
+  }) => Card(
+    margin: EdgeInsets.zero,
+    child: ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      leading: Icon(icon),
+      title: Text(title),
+      trailing: Icon(external ? Icons.open_in_new : Icons.chevron_right),
+      onTap: onTap,
     ),
   );
 }
@@ -135,89 +164,100 @@ class _UpdateCheckSection extends ConsumerWidget {
         '发现新版本 ${state.result!.release!.tagName}（当前 ${state.result!.currentVersion}）',
       UpdateCheckStatus.failed => state.failureMessage ?? '检查失败，请重试。',
     };
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ListTile(
-          leading: const Icon(Icons.system_update_alt),
-          title: const Text('检查更新'),
-          subtitle: Text(statusText),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              OutlinedButton.icon(
-                onPressed: state.status == UpdateCheckStatus.checking
-                    ? null
-                    : notifier.checkManually,
-                icon: state.status == UpdateCheckStatus.checking
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh),
-                label: Text(
-                  state.status == UpdateCheckStatus.checking
-                      ? '正在检查'
-                      : state.status == UpdateCheckStatus.failed
-                      ? '重试'
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.system_update_alt),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '软件更新',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        statusText,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                IconButton.filledTonal(
+                  tooltip: state.status == UpdateCheckStatus.failed
+                      ? '重试检查更新'
                       : '检查更新',
+                  onPressed: state.status == UpdateCheckStatus.checking
+                      ? null
+                      : notifier.checkManually,
+                  icon: state.status == UpdateCheckStatus.checking
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.refresh),
+                ),
+              ],
+            ),
+            if (state.status == UpdateCheckStatus.available)
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton.icon(
+                    onPressed: () => showUpdateDownload(context, ref),
+                    icon: const Icon(Icons.download),
+                    label: const Text('下载更新'),
+                  ),
                 ),
               ),
-              if (state.status == UpdateCheckStatus.available)
-                FilledButton.icon(
-                  onPressed: () => showUpdateDownload(context, ref),
-                  icon: const Icon(Icons.download),
-                  label: const Text('下载更新'),
-                ),
-            ],
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 }
 
-class _Acknowledgements extends StatelessWidget {
-  const _Acknowledgements();
+class AcknowledgementsPage extends StatelessWidget {
+  const AcknowledgementsPage({super.key});
 
   @override
-  Widget build(BuildContext context) => const Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      ListTile(
-        leading: Icon(Icons.favorite_outline),
-        title: Text('致谢'),
-        subtitle: Text('Kurako 建立在开源软件与公共服务之上。'),
-      ),
-      _AcknowledgementGroup(
-        title: '应用与界面参考',
-        entries: ['Kazumi — 详情页布局灵感（GPL-3.0）'],
-      ),
-      _AcknowledgementGroup(
-        title: '播放与图像',
-        entries: [
-          'media_kit / mpv — 跨平台视频播放',
-          'Anime4K（bloc97）— 超分辨率着色器',
-          '霞鹜文楷 GB 屏幕阅读版 — 应用字体（OFL-1.1）',
-        ],
-      ),
-      _AcknowledgementGroup(
-        title: '数据与网络服务',
-        entries: [
-          'Bangumi 番组计划 — 番剧元数据与评分',
-          'Mirrox（bangumi.lat，作者 sakurairo）— 社区维护的反向代理',
-        ],
-      ),
-      _AcknowledgementGroup(
-        title: '跨平台基础',
-        entries: ['Flutter — 应用界面', 'Rust / flutter_rust_bridge — 跨平台核心与桥接'],
-      ),
-    ],
+  Widget build(BuildContext context) => const Scaffold(
+    appBar: SysAppBar(title: Text('致谢')),
+    body: KurakoPageList(
+      maxWidth: 840,
+      children: [
+        _AcknowledgementGroup(
+          title: '播放与图像',
+          entries: [
+            'media_kit / mpv — 跨平台视频播放',
+            'Anime4K（bloc97）— 超分辨率着色器',
+            '霞鹜文楷 GB 屏幕阅读版 — 应用字体（OFL-1.1）',
+          ],
+        ),
+        _AcknowledgementGroup(
+          title: '数据与网络服务',
+          entries: [
+            'Bangumi 番组计划 — 番剧元数据与评分',
+            'Mirrox（bangumi.lat，作者 sakurairo）— 社区维护的反向代理',
+          ],
+        ),
+        _AcknowledgementGroup(
+          title: '跨平台基础',
+          entries: ['Flutter — 应用界面', 'Rust / flutter_rust_bridge — 跨平台核心与桥接'],
+        ),
+      ],
+    ),
   );
 }
 
@@ -227,19 +267,14 @@ class _AcknowledgementGroup extends StatelessWidget {
   const _AcknowledgementGroup({required this.title, required this.entries});
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(title, style: Theme.of(context).textTheme.titleSmall),
-        const SizedBox(height: 6),
-        for (final entry in entries)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 4),
-            child: Text(entry),
-          ),
-      ],
-    ),
+  Widget build(BuildContext context) => SettingsGroupCard(
+    title: title,
+    children: [
+      for (final entry in entries)
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          child: Text(entry),
+        ),
+    ],
   );
 }

@@ -202,7 +202,8 @@ class MaterialVideoControlsThemeData {
   /// Hide the desktop cursor together with idle controls.
   final bool hideMouseOnControlsRemoval;
 
-  /// Extra host shortcuts which remain active while touch controls are locked.
+  /// Host shortcuts replace built-in keys, including modifier matching.
+  /// The host controls which actions remain available while locked.
   final Map<ShortcutActivator, VoidCallback>? keyboardShortcuts;
 
   /// Host action for a mouse double-click on the video surface.
@@ -902,6 +903,17 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   /// PCs. It is intentionally attached to the same controls implementation as
   /// touch, so switching input devices never switches the player's UI model.
   KeyEventResult _handleKeyEvent(FocusNode _, KeyEvent event) {
+    final shortcuts = _theme(context).keyboardShortcuts;
+    if (shortcuts != null) {
+      for (final entry in shortcuts.entries) {
+        if (entry.key.accepts(event, HardwareKeyboard.instance)) {
+          entry.value();
+          showControls();
+          return KeyEventResult.handled;
+        }
+      }
+      return KeyEventResult.ignored;
+    }
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final player = controller(context).player;
     final position = player.state.position;

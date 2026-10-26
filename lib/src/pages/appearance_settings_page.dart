@@ -4,24 +4,57 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/providers.dart';
+import '../state/interface_preferences.dart';
 import '../ui/grouped_card.dart';
+import '../ui/page_components.dart';
+import '../ui/app_viewport.dart';
 import '../state/player_appearance.dart';
-import '../widgets/window_caption.dart';
+import '../widgets/settings_scaffold.dart';
+import 'appearance_presets_page.dart';
+import 'home_settings_page.dart';
 
 class AppearanceSettingsPage extends ConsumerWidget {
-  const AppearanceSettingsPage({super.key});
+  const AppearanceSettingsPage({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = ref.watch(themeProvider);
     final followingColor = theme.followSystem && Platform.isAndroid;
-    return Scaffold(
-      appBar: const SysAppBar(title: Text('外观设置')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    return SettingsScaffold(
+      title: '外观设置',
+      embedded: embedded,
+      body: KurakoPageList(
+        maxWidth: 840,
         children: [
           SettingsGroupCard(
+            title: '个性化',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.palette_outlined),
+                title: const Text('外观预设'),
+                subtitle: const Text('保存配色、海报和显示选项'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const AppearancePresetsPage(),
+                  ),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.dashboard_customize_outlined),
+                title: const Text('首页与启动'),
+                subtitle: const Text('首页开关、初始页与模块顺序'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const HomeSettingsPage()),
+                ),
+              ),
+            ],
+          ),
+          SettingsGroupCard(
             title: '显示模式',
+            dividers: false,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -83,13 +116,80 @@ class AppearanceSettingsPage extends ConsumerWidget {
             ],
           ),
           SettingsGroupCard(
+            title: '番剧库与海报',
+            children: [
+              _option(ref, InterfaceOption.searchExpanded, '默认展开搜索栏'),
+              _option(
+                ref,
+                InterfaceOption.posterProgress,
+                '显示观看进度条',
+                subtitle: '按已看集数显示进度',
+              ),
+              _option(ref, InterfaceOption.posterRating, '显示评分'),
+              _option(ref, InterfaceOption.posterBadge, '显示收藏状态角标'),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text('海报尺寸'),
+                    const SizedBox(height: 12),
+                    SegmentedButton<PosterSize>(
+                      segments: const [
+                        ButtonSegment(
+                          value: PosterSize.compact,
+                          label: Text('紧凑'),
+                        ),
+                        ButtonSegment(
+                          value: PosterSize.standard,
+                          label: Text('标准'),
+                        ),
+                        ButtonSegment(
+                          value: PosterSize.large,
+                          label: Text('宽大'),
+                        ),
+                      ],
+                      selected: {
+                        ref.watch(interfacePreferencesProvider).posterSize,
+                      },
+                      onSelectionChanged: (values) => ref
+                          .read(interfacePreferencesProvider.notifier)
+                          .setPosterSize(values.first),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          SettingsGroupCard(
             title: '播放器指示条颜色',
-            children: [const _PlayerGestureColors()],
+            children: [
+              _option(
+                ref,
+                InterfaceOption.playerSideTools,
+                '显示播放器侧边快捷按钮',
+                subtitle: '截图与锁定；关闭后仍可从播放设置进入',
+              ),
+              const _PlayerGestureColors(),
+            ],
           ),
           SettingsGroupCard(
             title: '界面',
             children: [
-              const _UiScaleControl(),
+              if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
+                SwitchListTile(
+                  title: const Text('竖版视图'),
+                  value: ref.watch(portraitPreviewProvider),
+                  onChanged: (value) =>
+                      ref.read(portraitPreviewProvider.notifier).set(value),
+                ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: _UiScaleControl(),
+              ),
               Consumer(
                 builder: (context, ref, _) => SwitchListTile(
                   title: const Text('使用系统默认字体'),
@@ -117,6 +217,20 @@ class AppearanceSettingsPage extends ConsumerWidget {
       ),
     );
   }
+
+  Widget _option(
+    WidgetRef ref,
+    InterfaceOption option,
+    String title, {
+    String? subtitle,
+  }) => SwitchListTile(
+    title: Text(title),
+    subtitle: subtitle == null ? null : Text(subtitle),
+    value: ref.watch(interfacePreferencesProvider).enabled(option),
+    onChanged: (value) => ref
+        .read(interfacePreferencesProvider.notifier)
+        .setOption(option, value),
+  );
 }
 
 class _UiScaleControl extends ConsumerWidget {
@@ -161,29 +275,78 @@ class _SeedSwatch extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final choice = kSeedPalette[index];
-    final onColor =
-        ThemeData.estimateBrightnessForColor(choice.color) == Brightness.dark
-        ? Colors.white
-        : Colors.black;
-    return Tooltip(
-      message: choice.label,
-      child: InkResponse(
-        radius: 28,
-        onTap: () => ref.read(themeProvider.notifier).setSeedIndex(index),
-        child: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: choice.color,
-            shape: BoxShape.circle,
-            border: selected
-                ? Border.all(
-                    color: Theme.of(context).colorScheme.onSurface,
-                    width: 3,
-                  )
-                : Border.all(color: Colors.black12),
+    final scheme = ColorScheme.fromSeed(
+      seedColor: choice.color,
+      brightness: Theme.of(context).brightness,
+    );
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: choice.label,
+      child: Tooltip(
+        message: choice.label,
+        child: InkResponse(
+          radius: 28,
+          onTap: () => ref.read(themeProvider.notifier).setSeedIndex(index),
+          child: Container(
+            width: 56,
+            height: 56,
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainer,
+              shape: BoxShape.circle,
+              border: selected
+                  ? Border.all(
+                      color: Theme.of(context).colorScheme.onSurface,
+                      width: 3,
+                    )
+                  : Border.all(color: Colors.black12),
+            ),
+            child: ClipOval(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Column(
+                    children: [
+                      Expanded(
+                        child: ColoredBox(
+                          color: scheme.primary,
+                          child: const SizedBox.expand(),
+                        ),
+                      ),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: ColoredBox(
+                                color: scheme.secondaryContainer,
+                                child: const SizedBox.expand(),
+                              ),
+                            ),
+                            Expanded(
+                              child: ColoredBox(
+                                color: scheme.tertiary,
+                                child: const SizedBox.expand(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (selected)
+                    Align(
+                      alignment: Alignment.topCenter,
+                      child: Icon(
+                        Icons.check,
+                        color: scheme.onPrimary,
+                        size: 22,
+                      ),
+                    ),
+                ],
+              ),
+            ),
           ),
-          child: selected ? Icon(Icons.check, color: onColor, size: 22) : null,
         ),
       ),
     );

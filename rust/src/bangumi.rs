@@ -2090,6 +2090,8 @@ pub async fn update_collection(subject_id: i64, collection_type: i64) -> Result<
 #[derive(Deserialize)]
 struct RawEpisodePage {
     #[serde(default)]
+    total: Option<u32>,
+    #[serde(default)]
     data: Vec<RawEpisode>,
 }
 
@@ -2100,6 +2102,8 @@ struct RawEpisode {
     kind: i64,
     #[serde(default)]
     ep: Option<f64>,
+    #[serde(default)]
+    sort: Option<f64>,
     #[serde(default)]
     name: String,
     #[serde(default)]
@@ -2114,32 +2118,110 @@ pub struct EpisodeTitle {
 
 /// Fetch episode titles for a subject's main episodes (type=0).
 pub async fn subject_episode_titles(subject_id: i64, limit: u32) -> Result<Vec<EpisodeTitle>> {
-    let url = format!(
-        "{}/v0/subjects/{subject_id}/episodes?type=0&limit={limit}",
-        api_base()
-    );
     let client = client()?;
-    let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi episode titles").await?;
-    if !resp.status().is_success() {
-        return Ok(Vec::new());
+    subject_episode_titles_at(&client, api_base(), subject_id, limit).await
+}
+
+async fn subject_episode_titles_at(
+    client: &reqwest::Client,
+    base: &str,
+    subject_id: i64,
+    limit: u32,
+) -> Result<Vec<EpisodeTitle>> {
+    let mut titles = Vec::new();
+    let mut offset = 0;
+    while offset < limit {
+        // Bangumi v0 lists episodes at /episodes; the maximum page is 200.
+        let page_limit = (limit - offset).min(200);
+        let url = format!(
+            "{base}/v0/episodes?subject_id={subject_id}&type=0&limit={page_limit}&offset={offset}"
+        );
+        let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi episode titles").await?;
+        if !resp.status().is_success() {
+            break;
+        }
+        let page: RawEpisodePage = match resp.json().await {
+            Ok(page) => page,
+            Err(_) => break,
+        };
+        let received = page.data.len().min(page_limit as usize) as u32;
+        titles.extend(
+            page.data
+                .into_iter()
+                .take(page_limit as usize)
+                .filter(|e| e.kind == 0)
+                .filter_map(|e| {
+                    let number = e.ep.filter(|n| *n > 0.0).or(e.sort)?;
+                    // Never turn episode 12.5 into episode 12's title.
+                    if !number.is_finite()
+                        || number <= 0.0
+                        || number.fract() != 0.0
+                        || number >= i64::MAX as f64
+                    {
+                        return None;
+                    }
+                    Some(EpisodeTitle {
+                        ep: number as i64,
+                        name: e.name.trim().to_owned(),
+                        name_cn: e.name_cn.trim().to_owned(),
+                    })
+                }),
+        );
+        offset += received;
+        if received < page_limit || page.total.is_some_and(|total| offset >= total) {
+            break;
+        }
     }
-    let page: RawEpisodePage = match resp.json().await {
-        Ok(p) => p,
-        Err(_) => return Ok(Vec::new()),
-    };
-    Ok(page
-        .data
-        .into_iter()
-        .filter(|e| e.kind == 0)
-        .filter_map(|e| {
-            let n = e.ep? as i64;
-            Some(EpisodeTitle {
-                ep: n,
-                name: e.name,
-                name_cn: e.name_cn,
-            })
-        })
-        .collect())
+    Ok(titles)
+}
+
+#[cfg(test)]
+mod episode_title_tests {
+    use super::*;
+    use crate::test_http::{respond_json, MockHttpServer};
+
+    #[tokio::test]
+    async fn titles_use_official_endpoint_and_bounded_pagination() {
+        let data = (1..=200).map(|n| serde_json::json!({"ep":n,"sort":n,"type":0,"name":"Original","name_cn":"中文标题"})).collect::<Vec<_>>();
+        let server = MockHttpServer::start(vec![
+            respond_json(
+                200,
+                serde_json::json!({"total":201,"data":data}).to_string(),
+            ),
+            respond_json(
+                200,
+                r#"{"total":201,"data":[{"sort":201,"type":0,"name":"Last","name_cn":""}]}"#,
+            ),
+        ])
+        .await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let titles = subject_episode_titles_at(&client, &server.base_url(), 7, 500)
+            .await
+            .unwrap();
+        assert_eq!(titles.len(), 201);
+        assert_eq!(titles[0].name_cn, "中文标题");
+        assert_eq!(titles[200].ep, 201);
+        assert_eq!(titles[200].name, "Last");
+        assert_eq!(
+            server.request_lines(),
+            [
+                "GET /v0/episodes?subject_id=7&type=0&limit=200&offset=0",
+                "GET /v0/episodes?subject_id=7&type=0&limit=200&offset=200",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn fractional_special_and_missing_numbers_do_not_overwrite_main_episodes() {
+        let server = MockHttpServer::start(vec![respond_json(200,
+            r#"{"total":5,"data":[{"ep":1.5,"type":0,"name":"Recap"},{"ep":1,"type":1,"name":"Special"},{"name":"Unknown"},{"ep":0,"sort":2,"type":0,"name":"Original"},{"ep":3,"type":0,"name_cn":"Title"}]}"#)]).await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let titles = subject_episode_titles_at(&client, &server.base_url(), 7, 5)
+            .await
+            .unwrap();
+        assert_eq!(titles.iter().map(|t| t.ep).collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(server.requests().len(), 1);
+    }
 }
 
 #[cfg(test)]

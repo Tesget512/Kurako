@@ -12,7 +12,8 @@ import '../services/scan_coordinator.dart';
 import '../services/security_scope.dart';
 import '../state/providers.dart';
 import '../ui/grouped_card.dart';
-import '../widgets/window_caption.dart';
+import '../ui/page_components.dart';
+import '../widgets/settings_scaffold.dart';
 import 'smb_source_wizard.dart';
 import 'webdav_source_wizard.dart';
 
@@ -20,7 +21,8 @@ import 'webdav_source_wizard.dart';
 /// feed the library. Split out of the settings home so the home can be a
 /// nav-card surface; behaviour is unchanged from the old inline group.
 class MediaSourcesPage extends ConsumerStatefulWidget {
-  const MediaSourcesPage({super.key});
+  const MediaSourcesPage({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
   ConsumerState<MediaSourcesPage> createState() => _MediaSourcesPageState();
@@ -33,10 +35,11 @@ class _MediaSourcesPageState extends ConsumerState<MediaSourcesPage> {
     final scanning = ref.watch(scanCoordinatorProvider).running;
     final sourcesBusy = scanning || ref.watch(libraryMutationBusyProvider);
 
-    return Scaffold(
-      appBar: const SysAppBar(title: Text('媒体来源')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    return SettingsScaffold(
+      title: '媒体来源',
+      embedded: widget.embedded,
+      body: KurakoPageList(
+        maxWidth: 840,
         children: [
           SettingsGroupCard(
             title: '番剧文件夹',

@@ -149,6 +149,7 @@ pub fn init(db_path: &str) -> Result<()> {
     )?;
     migrate_source_priority_schema(&conn)?;
     migrate_download_identity_schema(&conn)?;
+    crate::watch_history::initialize(&conn)?;
     let _ = DB.set(Mutex::new(conn));
     Ok(())
 }
@@ -272,7 +273,7 @@ fn migrate_folder_priorities(c: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+pub(crate) fn with_conn<T>(f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
     let m = DB
         .get()
         .ok_or_else(|| anyhow::anyhow!("db not initialized"))?;

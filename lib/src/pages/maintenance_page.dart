@@ -9,18 +9,24 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../rust/api.dart' as rust;
 import '../services/scan_coordinator.dart';
 import '../services/configuration_backup.dart';
+import '../state/home_preferences.dart';
+import '../state/appearance_presets.dart';
+import '../state/keyboard_preferences.dart';
 import '../services/bangumi_mirror.dart';
 import '../services/security_scope.dart';
 import '../state/player_appearance.dart';
+import '../state/interface_preferences.dart';
 import '../state/providers.dart';
 import '../ui/grouped_card.dart';
-import '../widgets/window_caption.dart';
+import '../ui/page_components.dart';
+import '../widgets/settings_scaffold.dart';
 import 'onboarding_page.dart';
 import 'blacklist_page.dart';
 import 'duplicate_check_page.dart';
 
 class MaintenancePage extends ConsumerStatefulWidget {
-  const MaintenancePage({super.key});
+  const MaintenancePage({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
   ConsumerState<MaintenancePage> createState() => _MaintenancePageState();
@@ -48,10 +54,11 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   Widget build(BuildContext context) {
     ref.watch(scanCoordinatorProvider);
     ref.watch(libraryMutationBusyProvider);
-    return Scaffold(
-      appBar: const SysAppBar(title: Text('维护')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    return SettingsScaffold(
+      title: '维护',
+      embedded: widget.embedded,
+      body: KurakoPageList(
+        maxWidth: 840,
         children: [
           SettingsGroupCard(
             title: '下载',
@@ -636,6 +643,9 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
   }
 
   void _invalidateConfigurationProviders() {
+    ref.invalidate(keyboardPreferencesProvider);
+    ref.invalidate(homePreferencesProvider);
+    ref.invalidate(appearancePresetsProvider);
     ref.invalidate(animeListProvider);
     ref.invalidate(animeDetailProvider);
     ref.invalidate(episodesProvider);
@@ -645,6 +655,7 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
     ref.invalidate(groupingEnabledProvider);
     ref.invalidate(themeProvider);
     ref.invalidate(playerAppearanceProvider);
+    ref.invalidate(interfacePreferencesProvider);
     ref.invalidate(seekDurationProvider);
     ref.invalidate(uiScaleProvider);
     ref.invalidate(touchModePlayerProvider);

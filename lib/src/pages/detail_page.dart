@@ -9,6 +9,7 @@ import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
+import '../ui/page_components.dart';
 import '../services/external_player.dart';
 import '../services/scan_coordinator.dart';
 import '../services/bangumi_mirror.dart';
@@ -21,7 +22,15 @@ import 'player_page.dart';
 class DetailPage extends ConsumerStatefulWidget {
   final int animeId;
   final Anime? initialAnime;
-  const DetailPage({super.key, required this.animeId, this.initialAnime});
+  final int? initialEpisodeId;
+  final Object? coverHeroTag;
+  const DetailPage({
+    super.key,
+    required this.animeId,
+    this.initialAnime,
+    this.initialEpisodeId,
+    this.coverHeroTag,
+  });
 
   @override
   ConsumerState<DetailPage> createState() => _DetailPageState();
@@ -32,6 +41,38 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   final _scrollController = ScrollController();
   Anime? _animeSnapshot;
   bool _didConsumeNewFiles = false;
+  final _targetKey = GlobalKey();
+  bool _targetHandled = false;
+  bool _targetHighlight = true;
+  Timer? _targetTimer;
+
+  void _locateTarget(List<Episode> episodes) {
+    if (_targetHandled || widget.initialEpisodeId == null) return;
+    _targetHandled = true;
+    final exists = episodes.any((e) => e.id == widget.initialEpisodeId);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      if (!exists) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('这条记录对应的单集已不在当前番剧中')));
+        return;
+      }
+      final target = _targetKey.currentContext;
+      if (target == null) return;
+      await Scrollable.ensureVisible(
+        target,
+        alignment: 0.3,
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : const Duration(milliseconds: 350),
+      );
+      if (!mounted) return;
+      _targetTimer = Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _targetHighlight = false);
+      });
+    });
+  }
+
   // Whether the header has scrolled far enough to show the toolbar title.
   final _collapsed = ValueNotifier<bool>(false);
   double _titleRevealOffset = 160;
@@ -49,6 +90,12 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   @override
   void didUpdateWidget(covariant DetailPage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.animeId != widget.animeId ||
+        oldWidget.initialEpisodeId != widget.initialEpisodeId) {
+      _targetHandled = false;
+      _targetHighlight = true;
+      _targetTimer?.cancel();
+    }
     if (oldWidget.animeId != widget.animeId ||
         oldWidget.initialAnime != widget.initialAnime) {
       _animeSnapshot = widget.initialAnime;
@@ -77,6 +124,11 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         data: (episodes) => episodes.isEmpty
             ? null
             : FloatingActionButton.extended(
+                backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                foregroundColor: Theme.of(context)
+                    .colorScheme
+                    .onPrimaryContainer,
+                shape: const StadiumBorder(),
                 onPressed: () => _play(context, ref, _resumeEpisode(episodes)),
                 icon: const Icon(Icons.play_arrow),
                 label: Text(_hasProgress(episodes) ? '继续观看' : '开始观看'),
@@ -111,14 +163,14 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                         onClear: () => _clearCollection(context),
                       ),
               ),
-              if (coverHeaderUsesNarrowLayout(context))
+              if (!coverHeaderShowsInlineRating(context))
                 SliverToBoxAdapter(child: CoverRatingSection(anime: anime)),
               SliverToBoxAdapter(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     CoverHeaderBody(anime: anime),
-                    const Divider(height: 16),
+                    const SizedBox(height: 16),
                     Padding(
                       padding: EdgeInsets.fromLTRB(
                         adaptiveContentInset(context),
@@ -126,9 +178,11 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                         adaptiveContentInset(context),
                         8,
                       ),
-                      child: Text(
-                        '剧集',
-                        style: Theme.of(context).textTheme.titleMedium,
+                      child: KurakoSectionHeading(
+                        title: '选择剧集',
+                        count: episodesAsync.value == null
+                            ? null
+                            : '${episodesAsync.value!.length} 个文件',
                       ),
                     ),
                   ],
@@ -149,8 +203,12 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                 ),
                 data: (episodes) {
                   _consumeNewFilesAfterFirstFrame(episodes);
+                  _locateTarget(episodes);
                   return SliverToBoxAdapter(
                     child: _EpisodeList(
+                      targetEpisodeId: widget.initialEpisodeId,
+                      targetKey: _targetKey,
+                      highlightTarget: _targetHighlight,
                       episodes: episodes,
                       onPlay: (e) => _play(context, ref, e),
                       onPlayWith: (e, external) =>
@@ -250,6 +308,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         collapseMode: CollapseMode.pin,
         background: CoverHeaderHero(
           anime: anime,
+          heroTag: widget.coverHeroTag,
           topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
           layoutHeight: expandedHeight + MediaQuery.paddingOf(context).top,
           collectionControl: collectionControl,
@@ -323,6 +382,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   @override
   void dispose() {
+    _targetTimer?.cancel();
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     _collapsed.dispose();
@@ -864,6 +924,9 @@ class _CollectionRow extends StatelessWidget {
 }
 
 class _EpisodeList extends StatelessWidget {
+  final int? targetEpisodeId;
+  final GlobalKey? targetKey;
+  final bool highlightTarget;
   final List<Episode> episodes;
   final void Function(Episode) onPlay;
   final void Function(Episode, bool external) onPlayWith;
@@ -872,6 +935,9 @@ class _EpisodeList extends StatelessWidget {
   final void Function(int newAnimeId) onRematched;
 
   const _EpisodeList({
+    this.targetEpisodeId,
+    this.targetKey,
+    this.highlightTarget = false,
     required this.episodes,
     required this.onPlay,
     required this.onPlayWith,
@@ -898,14 +964,33 @@ class _EpisodeList extends StatelessWidget {
     }
     final sources = bySource.keys.toList()..sort();
 
-    Widget tile(Episode e) => _EpisodeTile(
-      key: ValueKey('episode-${e.id}'),
-      episode: e,
-      onPlay: () => onPlay(e),
-      onPlayWith: (external) => onPlayWith(e, external),
-      onDownload: () => onDownload(e),
-      onBlocked: onBlocked,
-      onRematched: onRematched,
+    Widget tile(Episode e) => Padding(
+      key: e.id == targetEpisodeId ? targetKey : null,
+      padding: EdgeInsets.fromLTRB(
+        adaptiveContentInset(context),
+        0,
+        adaptiveContentInset(context),
+        8,
+      ),
+      child: Material(
+        key: e.id == targetEpisodeId
+            ? ValueKey('history-target-${e.id}')
+            : null,
+        color: e.id == targetEpisodeId && highlightTarget
+            ? theme.colorScheme.secondaryContainer
+            : theme.colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: _EpisodeTile(
+          key: ValueKey('episode-${e.id}'),
+          episode: e,
+          onPlay: () => onPlay(e),
+          onPlayWith: (external) => onPlayWith(e, external),
+          onDownload: () => onDownload(e),
+          onBlocked: onBlocked,
+          onRematched: onRematched,
+        ),
+      ),
     );
 
     return Column(
@@ -941,10 +1026,12 @@ class _EpisodeList extends StatelessWidget {
         children: [
           Icon(icon, size: 18, color: theme.colorScheme.primary),
           const SizedBox(width: 6),
-          Text(
-            text,
-            style: theme.textTheme.labelLarge?.copyWith(
-              color: theme.colorScheme.primary,
+          Expanded(
+            child: Text(
+              text,
+              style: theme.textTheme.labelLarge?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
             ),
           ),
         ],
@@ -987,6 +1074,11 @@ class _EpisodeTile extends ConsumerWidget {
     final resumed = episode.lastPositionMs > 0 && !episode.watched
         ? '（可续播）'
         : '';
+    final metadata = [
+      if (episode.resolution?.isNotEmpty == true) episode.resolution!,
+      if (episode.releaseGroup?.isNotEmpty == true) episode.releaseGroup!,
+      if (resumed.isNotEmpty) resumed,
+    ].join(' · ');
     // Long-press (touch) and right-click (desktop) both open the context menu:
     // choose a player, download (SMB), or block the file. The gestures live on
     // a wrapping GestureDetector because ListTile has no onSecondaryTap.
@@ -1008,16 +1100,24 @@ class _EpisodeTile extends ConsumerWidget {
             ),
           ),
           title: Text(
-            episode.fileName,
+            episode.title?.trim().isNotEmpty == true
+                ? episode.title!.trim()
+                : episode.fileName,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          subtitle: Text(
-            [
-              if (episode.resolution != null) episode.resolution!,
-              if (episode.releaseGroup != null) episode.releaseGroup!,
-              if (resumed.isNotEmpty) resumed,
-            ].join(' · '),
+          subtitle: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (episode.title?.trim().isNotEmpty == true)
+                Text(
+                  episode.fileName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              if (metadata.isNotEmpty) Text(metadata),
+            ],
           ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
@@ -1032,7 +1132,11 @@ class _EpisodeTile extends ConsumerWidget {
                 ),
               if (episode.watched)
                 Icon(Icons.check_circle, color: theme.colorScheme.primary),
-              IconButton(icon: const Icon(Icons.play_arrow), onPressed: onPlay),
+              IconButton.filledTonal(
+                tooltip: '播放',
+                icon: const Icon(Icons.play_arrow_rounded),
+                onPressed: onPlay,
+              ),
             ],
           ),
           onTap: onPlay,

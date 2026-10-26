@@ -32,12 +32,14 @@ class AppUpdateRelease {
     required this.htmlUrl,
     required this.name,
     this.assets = const [],
+    this.notes,
   });
 
   final String tagName;
   final String htmlUrl;
   final String name;
   final List<AppUpdateAsset> assets;
+  final String? notes;
 }
 
 bool isProjectReleaseUrl(String value) {

@@ -1,5 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
+import 'package:kurako/src/widgets/settings_scaffold.dart';
 import 'package:kurako/src/widgets/scroll_reveal_app_bar.dart';
 
 void main() {
@@ -38,6 +40,14 @@ void main() {
   });
 
   group('ScrollRevealController', () {
+    test('waits until content crosses the initial gap', () {
+      final controller = ScrollRevealController(leadingGap: 20);
+      addTearDown(controller.dispose);
+      controller.update(_metrics(offset: 19));
+      expect(controller.value, 0);
+      controller.update(_metrics(offset: 36));
+      expect(controller.value, 0.5);
+    });
     test('ignores inner horizontal scrollables', () {
       final controller = ScrollRevealController();
       addTearDown(controller.dispose);
@@ -72,6 +82,30 @@ void main() {
       controller.update(_metrics(offset: 900));
       expect(notifications, 2);
     });
+  });
+
+  testWidgets('standalone settings title and empty toolbar can drag window', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('window_manager'), (
+          call,
+        ) async {
+          calls.add(call.method);
+          return false;
+        });
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: SettingsScaffold(title: '外观', body: SizedBox.expand()),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(find.text('外观'), const Offset(40, 0));
+    expect(calls.where((c) => c == 'startDragging'), hasLength(1));
+    await tester.dragFrom(const Offset(350, 28), const Offset(40, 0));
+    expect(calls.where((c) => c == 'startDragging'), hasLength(2));
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('app bar background fades from transparent to surface', (

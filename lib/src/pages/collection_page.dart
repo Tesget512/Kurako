@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../rust/models.dart';
 import '../state/anime_sort.dart';
 import '../state/providers.dart';
+import '../state/interface_preferences.dart';
 import '../ui/responsive_spacing.dart';
+import '../ui/page_components.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scroll_reveal_app_bar.dart';
 import 'detail_page.dart';
@@ -23,7 +25,7 @@ class _CollectionPageState extends ConsumerState<CollectionPage> {
   // their backlog: watching → plan → on-hold → done → dropped.
   static const _tabs = [(3, '在看'), (1, '想看'), (4, '搁置'), (2, '看过'), (5, '抛弃')];
 
-  final _reveal = ScrollRevealController();
+  final _reveal = ScrollRevealController(leadingGap: 16);
 
   @override
   void dispose() {
@@ -46,6 +48,7 @@ class _CollectionPageState extends ConsumerState<CollectionPage> {
           controller: _reveal,
           title: const Text('追番'),
           bottom: TabBar(
+            indicatorPadding: EdgeInsets.zero,
             isScrollable: true,
             tabAlignment: TabAlignment.center,
             tabs: [
@@ -88,15 +91,18 @@ class _CollectionPageState extends ConsumerState<CollectionPage> {
   }
 }
 
-class _CollectionTab extends StatelessWidget {
+class _CollectionTab extends ConsumerWidget {
   final List<Anime> items;
   const _CollectionTab({required this.items});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final appearance = ref.watch(interfacePreferencesProvider);
     if (items.isEmpty) {
-      return const Center(
-        child: Text('这里还没有番剧', style: TextStyle(color: Colors.grey)),
+      return const KurakoEmptyState(
+        icon: Icons.bookmarks_outlined,
+        title: '这里还没有番剧',
+        description: '在番剧详情中设置收藏状态，喜欢的故事就会出现在这里。',
       );
     }
     final inset = adaptiveContentInset(context);
@@ -104,16 +110,19 @@ class _CollectionTab extends StatelessWidget {
     final top = MediaQuery.paddingOf(context).top;
     return GridView.builder(
       padding: EdgeInsets.fromLTRB(inset, top + 16, inset, 24),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 200,
-        childAspectRatio: 0.62,
+      gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: appearance.posterSize.extent,
+        childAspectRatio: 0.60,
         crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
+        mainAxisSpacing: 20,
       ),
       itemCount: items.length,
       itemBuilder: (context, i) {
         final anime = items[i];
         return AnimeCard(
+          showProgress: appearance.enabled(InterfaceOption.posterProgress),
+          showRating: appearance.enabled(InterfaceOption.posterRating),
+          showBadge: appearance.enabled(InterfaceOption.posterBadge),
           anime: anime,
           onTap: () {
             Navigator.of(context).push(

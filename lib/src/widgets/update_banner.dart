@@ -4,95 +4,87 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/update_provider.dart';
 import 'update_download_dialog.dart';
 
-/// The banner is mounted inside `MaterialApp.builder`, which sits *above* the
-/// navigator, so its own context has no `Navigator`. This key reaches the real
-/// navigator so the download dialog can be pushed from the banner.
 final updateNavigatorKey = GlobalKey<NavigatorState>();
 
-/// Mount inside MaterialApp.builder, wrapping the navigator child before scaling.
-/// This overlay does not resize the navigator or require a ScaffoldMessenger.
-/// Only the compact banner itself receives pointer events.
-class UpdateBannerHost extends ConsumerWidget {
+/// Keeps the navigator stable and prompts once per version in this session.
+class UpdateBannerHost extends ConsumerStatefulWidget {
   const UpdateBannerHost({super.key, required this.child});
-
   final Widget child;
-
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(updateCheckProvider);
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        child,
-        if (state.showBanner)
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              bottom: false,
-              child: Align(
-                alignment: Alignment.topCenter,
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: const _UpdateBanner(),
-                ),
+  ConsumerState<UpdateBannerHost> createState() => _UpdateBannerHostState();
+}
+
+class _UpdateBannerHostState extends ConsumerState<UpdateBannerHost> {
+  final _presented = <String>{};
+  bool _scheduled = false;
+  bool _open = false;
+
+  void _schedule() {
+    final state = ref.read(updateCheckProvider);
+    if (_scheduled ||
+        _open ||
+        !state.showBanner ||
+        _presented.contains(state.result!.release!.tagName)) {
+      return;
+    }
+    _scheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      _scheduled = false;
+      if (!mounted) return;
+      final current = ref.read(updateCheckProvider);
+      if (!current.showBanner) return;
+      final release = current.result!.release!;
+      final context = updateNavigatorKey.currentState?.overlay?.context;
+      if (context == null || !_presented.add(release.tagName)) return;
+      _open = true;
+      final download = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('Kurako ${release.tagName} 可用'),
+          content: SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                release.notes?.trim().isNotEmpty == true
+                    ? release.notes!
+                    : '暂时无法读取更新内容，可前往发布页面查看。',
               ),
             ),
           ),
-      ],
-    );
-  }
-}
-
-class _UpdateBanner extends ConsumerStatefulWidget {
-  const _UpdateBanner();
-
-  @override
-  ConsumerState<_UpdateBanner> createState() => _UpdateBannerState();
-}
-
-class _UpdateBannerState extends ConsumerState<_UpdateBanner> {
-  Future<void> _openDownload() async {
-    final dialogContext = updateNavigatorKey.currentState?.overlay?.context;
-    if (dialogContext == null) return;
-    await showUpdateDownload(dialogContext, ref);
+          actions: [
+            TextButton(
+              onPressed: () =>
+                  ref.read(updateCheckProvider.notifier).openRelease(),
+              child: const Text('发布页面'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('稍后'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('下载'),
+            ),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      if (ref.read(updateCheckProvider).result?.release?.tagName ==
+          release.tagName) {
+        ref.read(updateCheckProvider.notifier).dismissBanner();
+        if (download == true && context.mounted) {
+          await showUpdateDownload(context, ref);
+        }
+      }
+      _open = false;
+      if (mounted) _schedule();
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final release = ref.watch(updateCheckProvider).result!.release!;
-    final colors = Theme.of(context).colorScheme;
-    return Material(
-      color: colors.secondaryContainer,
-      elevation: 3,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
-          children: [
-            Icon(Icons.system_update_alt, color: colors.onSecondaryContainer),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Kurako ${release.tagName} 可用',
-                style: TextStyle(color: colors.onSecondaryContainer),
-              ),
-            ),
-            TextButton(onPressed: _openDownload, child: const Text('下载')),
-            Semantics(
-              label: '忽略此版本提示',
-              button: true,
-              child: IconButton(
-                key: const ValueKey('dismiss-update-banner'),
-                onPressed: () =>
-                    ref.read(updateCheckProvider.notifier).dismissBanner(),
-                icon: const Icon(Icons.close),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
+    ref.listen(updateCheckProvider, (_, _) => _schedule());
+    _schedule();
+    return widget.child;
   }
 }

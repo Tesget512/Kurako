@@ -31,6 +31,7 @@ pub struct UpdateRelease {
     pub tag_name: String,
     pub html_url: String,
     pub name: String,
+    pub notes: Option<String>,
     pub assets: Vec<UpdateAsset>,
 }
 
@@ -39,6 +40,8 @@ struct GithubRelease {
     tag_name: String,
     html_url: String,
     name: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
     draft: bool,
     prerelease: bool,
     #[serde(default)]
@@ -90,6 +93,7 @@ fn stable_release(release: GithubRelease) -> Result<Option<UpdateRelease>> {
         tag_name: release.tag_name,
         html_url: release.html_url,
         assets: release.assets,
+        notes: release.body.filter(|body| !body.trim().is_empty()),
     }))
 }
 
@@ -226,6 +230,7 @@ async fn check_update_via_pages(client: &reqwest::Client) -> Result<Option<Updat
         tag_name: tag,
         html_url,
         assets,
+        notes: None,
     }))
 }
 
@@ -308,10 +313,23 @@ mod tests {
             tag_name: "v1.2.3".into(),
             html_url: "https://github.com/Tesget512/Kurako/releases/tag/v1.2.3".into(),
             name: None,
+            body: None,
             draft,
             prerelease,
             assets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn release_notes_survive_the_api_contract() {
+        let json = r###"{"tag_name":"v1.2.3","html_url":"https://github.com/Tesget512/Kurako/releases/tag/v1.2.3","draft":false,"prerelease":false,"body":"## Changes\n- Improved layout"}"###;
+        let result = stable_release(serde_json::from_str(json).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.notes.as_deref(),
+            Some("## Changes\n- Improved layout")
+        );
     }
 
     #[test]

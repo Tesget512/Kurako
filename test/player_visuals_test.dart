@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,84 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
+  testWidgets(
+    'buffering completion immediately removes the loading indicator',
+    (tester) async {
+      final buffering = StreamController<bool>.broadcast(sync: true);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: PlayerBufferingIndicator(
+              buffering: buffering.stream,
+              initialBuffering: true,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('加载中'), findsOneWidget);
+      buffering.add(false);
+      await tester.pump();
+      expect(find.text('加载中'), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+      final closed = buffering.close();
+      await tester.pump();
+      await closed;
+    },
+  );
+
+  testWidgets('side tools remain centered and leave picture taps available', (
+    tester,
+  ) async {
+    var pictureTaps = 0;
+    var screenshots = 0;
+    var locks = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  onTap: () => pictureTaps++,
+                  behavior: HitTestBehavior.opaque,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              Positioned.fill(
+                child: PlayerSideTools(
+                  onScreenshot: () => screenshots++,
+                  onLock: () => locks++,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.tapAt(const Offset(150, 200));
+    final surface = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byType(PlayerSideTools),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(surface.color!.a, lessThan(0.6));
+    expect(pictureTaps, 1);
+    final screenshot = tester.getRect(find.byTooltip('截取当前画面'));
+    final lock = tester.getRect(find.byTooltip('锁定播放器'));
+    expect(screenshot.center.dx, lock.center.dx);
+    expect(screenshot.bottom, lessThan(lock.top));
+    expect((screenshot.top + lock.bottom) / 2, closeTo(300, 1));
+    expect(lock.right, lessThanOrEqualTo(780));
+    await tester.tap(find.byTooltip('截取当前画面'));
+    await tester.tap(find.byTooltip('锁定播放器'));
+    expect(screenshots, 1);
+    expect(locks, 1);
+  });
+
   test('level indicators stay beside the finger and inside safe bounds', () {
     const bounds = Rect.fromLTWH(40, 12, 720, 400);
     const finger = Offset(400, 210);
@@ -211,7 +290,7 @@ void main() {
     expect(copied.verticalGestureIndicatorBuilder, same(indicator));
   });
 
-  testWidgets('level indicator is a flat track, not a filled rounded block', (
+  testWidgets('level indicator uses a tonal capsule and rounded fill', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -232,16 +311,14 @@ void main() {
       ),
     );
     expect(find.text('40%'), findsOneWidget);
-    // The OSD must not paint an opaque rounded surface over the video: the
-    // indicator subtree itself contains no Material or ClipRRect.
     final indicator = find.byType(PlayerLevelIndicator);
     expect(
       find.descendant(of: indicator, matching: find.byType(Material)),
-      findsNothing,
+      findsOneWidget,
     );
     expect(
       find.descendant(of: indicator, matching: find.byType(ClipRRect)),
-      findsNothing,
+      findsWidgets,
     );
     expect(tester.takeException(), isNull);
   });
@@ -295,31 +372,38 @@ void main() {
     },
   );
 
-  test('backup v6 restores colors and accepts v5 without color keys', () async {
-    SharedPreferences.setMockInitialValues({
-      playerBrightnessColorKey: 0xFF112233,
-      playerVolumeColorKey: 0xFF445566,
-    });
-    final source = await ConfigurationBackupDocument.exportJson();
-    final root = jsonDecode(source) as Map<String, dynamic>;
-    expect(root['schemaVersion'], 6);
-    final document = ConfigurationBackupDocument.parse(source);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt(playerBrightnessColorKey, 0xFF000000);
-    await document.apply();
-    expect(prefs.getInt(playerBrightnessColorKey), 0xFF112233);
-    root['schemaVersion'] = 5;
-    final settings = root['settings'] as Map<String, dynamic>;
-    settings.remove(playerBrightnessColorKey);
-    settings.remove(playerVolumeColorKey);
-    await ConfigurationBackupDocument.parse(jsonEncode(root)).apply();
-    expect(prefs.getInt(playerVolumeColorKey), 0xFF445566);
-    root['schemaVersion'] = 6;
-    settings[playerBrightnessColorKey] = 0x00112233;
-    settings[playerVolumeColorKey] = 0xFF445566;
-    expect(
-      () => ConfigurationBackupDocument.parse(jsonEncode(root)),
-      throwsFormatException,
-    );
-  });
+  test(
+    'current backup restores colors and accepts v5 without color keys',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        playerBrightnessColorKey: 0xFF112233,
+        playerVolumeColorKey: 0xFF445566,
+      });
+      final source = await ConfigurationBackupDocument.exportJson();
+      final root = jsonDecode(source) as Map<String, dynamic>;
+      expect(root['schemaVersion'], configurationBackupSchemaVersion);
+      final document = ConfigurationBackupDocument.parse(source);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(playerBrightnessColorKey, 0xFF000000);
+      await document.apply();
+      expect(prefs.getInt(playerBrightnessColorKey), 0xFF112233);
+      root['schemaVersion'] = 5;
+      final settings = root['settings'] as Map<String, dynamic>;
+      settings.removeWhere((key, _) => key.startsWith('interface_'));
+      settings.remove('home_preferences');
+      settings.remove('appearance_presets');
+      settings.remove('player_keyboard_shortcuts');
+      settings.remove(playerBrightnessColorKey);
+      settings.remove(playerVolumeColorKey);
+      await ConfigurationBackupDocument.parse(jsonEncode(root)).apply();
+      expect(prefs.getInt(playerVolumeColorKey), 0xFF445566);
+      root['schemaVersion'] = 6;
+      settings[playerBrightnessColorKey] = 0x00112233;
+      settings[playerVolumeColorKey] = 0xFF445566;
+      expect(
+        () => ConfigurationBackupDocument.parse(jsonEncode(root)),
+        throwsFormatException,
+      );
+    },
+  );
 }

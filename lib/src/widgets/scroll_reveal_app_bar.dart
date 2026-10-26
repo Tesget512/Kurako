@@ -27,9 +27,13 @@ double scrollRevealProgress({
 /// Kept separate from the pages so the progress math and the app bar itself can
 /// be tested without mounting a whole page.
 class ScrollRevealController extends ValueNotifier<double> {
-  ScrollRevealController({this.distance = kScrollRevealDistance}) : super(0);
+  ScrollRevealController({
+    this.distance = kScrollRevealDistance,
+    this.leadingGap = 0,
+  }) : super(0);
 
   final double distance;
+  final double leadingGap;
 
   /// Feed one scroll sample.
   ///
@@ -40,7 +44,7 @@ class ScrollRevealController extends ValueNotifier<double> {
   void update(ScrollMetrics metrics) {
     if (metrics.axis != Axis.vertical) return;
     final next = scrollRevealProgress(
-      offset: metrics.pixels,
+      offset: metrics.pixels - leadingGap,
       distance: distance,
     );
     if (next != value) value = next;
@@ -95,10 +99,13 @@ class ScrollRevealAppBar extends StatelessWidget
     this.leading,
     this.bottom,
     this.opaque = false,
+    this.automaticallyImplyLeading = true,
+    this.flexibleSpace,
   });
 
   final ScrollRevealController controller;
   final Widget title;
+  final Widget? flexibleSpace;
   final List<Widget>? actions;
   final Widget? leading;
   final PreferredSizeWidget? bottom;
@@ -109,6 +116,7 @@ class ScrollRevealAppBar extends StatelessWidget
   /// inline scan progress row lives in [bottom] and would otherwise float on
   /// top of the covers.
   final bool opaque;
+  final bool automaticallyImplyLeading;
 
   @override
   Size get preferredSize =>
@@ -124,7 +132,11 @@ class ScrollRevealAppBar extends StatelessWidget
         final background = cs.surfaceContainer;
         return AppBar(
           title: title,
-          actions: actions,
+          flexibleSpace: flexibleSpace,
+          automaticallyImplyLeading: automaticallyImplyLeading,
+          actions: actions == null
+              ? null
+              : [...actions!, const SizedBox(width: 16)],
           leading: leading,
           bottom: bottom,
           // The reveal is the background itself, so the elevation-based
@@ -135,7 +147,10 @@ class ScrollRevealAppBar extends StatelessWidget
           backgroundColor: background.withValues(alpha: progress),
           // Keep the reveal tone-based; a line would read as a second mask over
           // cover art instead of as the surface settling into place.
-          shape: null,
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          ),
+          clipBehavior: Clip.antiAlias,
         );
       },
     );

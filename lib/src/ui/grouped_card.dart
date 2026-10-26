@@ -9,41 +9,70 @@ import 'surfaces.dart';
 /// (the card's own clip rounds the end rows); their content is inset 16dp via
 /// the ListTileTheme below. Non-tile children pad themselves horizontally.
 class SettingsGroupCard extends StatelessWidget {
-  const SettingsGroupCard({super.key, this.title, required this.children});
+  const SettingsGroupCard({
+    super.key,
+    this.title,
+    required this.children,
+    this.dividers = true,
+  });
 
   final String? title;
   final List<Widget> children;
+  final bool dividers;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    return Card(
-      color: KurakoSurfaces.card(theme.colorScheme),
-      shape: KurakoShapes.card,
-      margin: const EdgeInsets.only(bottom: 16),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        child: ListTileTheme(
-          data: ListTileThemeData(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(KurakoShapes.nestedRadius),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (title != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 8, 4, 12),
+            child: Text(
+              title!,
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: theme.colorScheme.primary,
+              ),
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (title != null)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
-                  child: Text(title!, style: theme.textTheme.titleSmall),
+        Card(
+          color: KurakoSurfaces.card(theme.colorScheme),
+          shape: KurakoShapes.card,
+          margin: const EdgeInsets.only(bottom: 16),
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: ListTileTheme(
+              data: ListTileThemeData(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(
+                    KurakoShapes.nestedRadius,
+                  ),
                 ),
-              ...children,
-            ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < children.length; i++) ...[
+                    if (i > 0 && dividers)
+                      Divider(
+                        height: 1,
+                        indent: 16,
+                        endIndent: 16,
+                        color: theme.colorScheme.outlineVariant.withValues(
+                          alpha: 0.4,
+                        ),
+                      ),
+                    children[i],
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

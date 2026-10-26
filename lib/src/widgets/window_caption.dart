@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:material_ui/material_ui.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../ui/portrait_scope.dart';
+
 /// Whether we draw our own title bar (desktop only). On mobile the OS handles
 /// the window, so all the widgets below become no-ops.
 bool get useCustomCaption =>
@@ -80,7 +82,9 @@ class _WindowDragAreaState extends State<WindowDragArea> {
 
   @override
   Widget build(BuildContext context) {
-    if (!useCustomCaption) return widget.child;
+    if (!useCustomCaption || PortraitPreviewScope.of(context)) {
+      return widget.child;
+    }
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onPanStart: (_) => windowManager.startDragging(),
@@ -109,11 +113,13 @@ class WindowCaption extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!useCustomCaption) return const SizedBox.shrink();
+    if (!useCustomCaption || PortraitPreviewScope.of(context)) {
+      return const SizedBox.shrink();
+    }
     final theme = Theme.of(context);
     return Container(
       height: 36,
-      color: backgroundColor ?? theme.colorScheme.surface,
+      color: backgroundColor ?? theme.colorScheme.surfaceContainerLow,
       child: Row(
         children: [
           // The draggable region fills the remaining width.
@@ -179,7 +185,9 @@ class _WindowButtonsState extends State<WindowButtons> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
-    if (!useCustomCaption) return const SizedBox.shrink();
+    if (!useCustomCaption || PortraitPreviewScope.of(context)) {
+      return const SizedBox.shrink();
+    }
     final color = widget.light
         ? Colors.white
         : Theme.of(context).colorScheme.onSurfaceVariant;

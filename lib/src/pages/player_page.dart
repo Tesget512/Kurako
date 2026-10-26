@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
@@ -23,10 +24,16 @@ import '../services/ios_platform.dart';
 import '../services/media_source.dart';
 import '../services/media_session.dart';
 import '../services/playback_metadata.dart';
+import '../services/decoder_policy.dart';
+import '../state/keyboard_preferences.dart';
+import '../ui/theme.dart';
 import '../services/playback_start.dart';
 import '../services/player_window_controller.dart';
 import '../state/providers.dart';
+import '../state/watch_providers.dart';
+import '../services/watch_recorder.dart';
 import '../state/player_appearance.dart';
+import '../state/interface_preferences.dart';
 import '../widgets/player_visuals.dart';
 import '../widgets/window_caption.dart';
 import '../ui/shapes.dart';
@@ -72,7 +79,8 @@ class PlayerPage extends ConsumerStatefulWidget {
   ConsumerState<PlayerPage> createState() => _PlayerPageState();
 }
 
-class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
+class _PlayerPageState extends ConsumerState<PlayerPage>
+    with WindowListener, WidgetsBindingObserver {
   // Enable libass so ASS/SSA + embedded subtitles render with their styling via
   // mpv. On Android libass REQUIRES a bundled font (asset + its internal name),
   // otherwise NO subtitle renders at all.
@@ -93,41 +101,78 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     configuration: _decodeConfig(),
   );
 
-  static VideoControllerConfiguration _decodeConfig() {
-    // Read the persisted decode mode synchronously from the cached prefs value
-    // set at startup. `enableHardwareAcceleration` controls media_kit_video's
-    // output texture renderer; it is independent from libmpv's `hwdec` option.
-    // Flutter 3.38+ can corrupt or crash the legacy Linux FlTextureGL path, so
-    // Linux renders into a stable pixel-buffer texture. Automatic/hardware mode
-    // still requests `auto-copy`, allowing VAAPI/VDPAU decoding while copying
-    // decoded frames into that output buffer. Other platforms retain the
-    // established media_kit GPU texture path.
-    switch (decodeModeStartupValue) {
-      case 'hw':
-        return VideoControllerConfiguration(
-          enableHardwareAcceleration: !Platform.isLinux,
-          hwdec: Platform.isLinux ? 'auto-copy' : 'auto',
-        );
-      case 'sw':
-        return const VideoControllerConfiguration(
-          enableHardwareAcceleration: false,
-          hwdec: 'no',
-        );
-      default:
-        return Platform.isLinux
-            ? const VideoControllerConfiguration(
-                enableHardwareAcceleration: false,
-                hwdec: 'auto-copy',
-              )
-            : const VideoControllerConfiguration();
-    }
-  }
+  static VideoControllerConfiguration _decodeConfig() => decoderConfiguration(
+    decodeModeStartupValue,
+    Platform.isAndroid
+        ? TargetPlatform.android
+        : Platform.isIOS
+        ? TargetPlatform.iOS
+        : Platform.isMacOS
+        ? TargetPlatform.macOS
+        : Platform.isWindows
+        ? TargetPlatform.windows
+        : TargetPlatform.linux,
+  );
 
   late int _index = widget.initialIndex;
   Episode get _ep => widget.episodes[_index];
   late final ValueNotifier<int> _episodeIndex;
 
   Timer? _saveTimer;
+  late final WatchRecorder _watchRecorder;
+  StreamSubscription? _bufferingSub;
+  bool _windowMinimized = false;
+
+  WatchTarget get _watchTarget => WatchTarget(
+    mediaKey: sha256
+        .convert(
+          utf8.encode(
+            jsonEncode([
+              _ep.animeId > 0 ? _ep.animeId : widget.animeTitle,
+              (_ep.episodeNo ?? 0) > 0 ? _ep.episodeNo : _ep.fileName,
+            ]),
+          ),
+        )
+        .toString(),
+    animeId: _ep.animeId,
+    episodeId: _ep.id,
+    episodeNo: _ep.episodeNo,
+    animeTitle: widget.animeTitle,
+    episodeTitle: _ep.title?.trim() ?? '',
+    fileName: _ep.fileName,
+  );
+
+  void _updateWatchState() => _watchRecorder.update(
+    ready: _acceptPlaybackEvents,
+    playing: _player.state.playing && !_player.state.completed,
+    buffering: _player.state.buffering,
+  );
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Desktop inactive means another window has focus; the video can remain
+    // visible. Hidden/minimized and mobile background time do not count.
+    final visible =
+        state == AppLifecycleState.resumed ||
+        ((!Platform.isAndroid && !Platform.isIOS) &&
+            state == AppLifecycleState.inactive);
+    _watchRecorder.update(foreground: visible && !_windowMinimized);
+  }
+
+  @override
+  void onWindowMinimize() {
+    _windowMinimized = true;
+    _watchRecorder.update(foreground: false);
+  }
+
+  @override
+  void onWindowRestore() {
+    _windowMinimized = false;
+    didChangeAppLifecycleState(
+      WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed,
+    );
+  }
+
   bool _controlsLocked = false;
   bool _unlockControlVisible = false;
   Timer? _unlockControlTimer;
@@ -269,6 +314,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   @override
   void initState() {
     super.initState();
+    _watchRecorder = WatchRecorder(queue: watchWriteQueue)
+      ..select(_watchTarget);
+    WidgetsBinding.instance.addObserver(this);
+    didChangeAppLifecycleState(
+      WidgetsBinding.instance.lifecycleState ?? AppLifecycleState.resumed,
+    );
     _episodeIndex = ValueNotifier<int>(_index);
     _seekSec = ref.read(seekDurationProvider);
     _superResolutionMode = ref.read(settingsProvider).superResolutionMode;
@@ -511,6 +562,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           await _player.open(Media(handle.uri));
           trace('open returned');
           _acceptPlaybackEvents = mounted && seq == _openSeq;
+          _updateWatchState();
           _durationMs = _player.state.duration.inMilliseconds;
           startResult = await waiter.wait(
             playbackStartTimeout(
@@ -548,6 +600,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
           break;
         }
         _acceptPlaybackEvents = false;
+        _watchRecorder.update(ready: false);
         try {
           await _player.stop();
         } catch (_) {}
@@ -590,6 +643,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         trace('failed ${e.runtimeType}');
         if (seq == _openSeq) {
           _acceptPlaybackEvents = false;
+          _watchRecorder.update(ready: false);
           try {
             await _player.stop();
           } catch (_) {}
@@ -953,12 +1007,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
   void _listen() {
     _playingSub = _player.stream.playing.listen((_) {
+      _updateWatchState();
       if (Platform.isAndroid) {
         unawaited(
           _configureAutoPip(ref.read(settingsProvider).autoPictureInPicture),
         );
       }
     });
+    _bufferingSub = _player.stream.buffering.listen((_) => _updateWatchState());
     _positionSub = _player.stream.position.listen((pos) {
       if (!mounted || !_acceptPlaybackEvents) return;
       _positionMs = pos.inMilliseconds;
@@ -998,6 +1054,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     });
     // Apply the current autoplay policy when one episode finishes.
     _completedSub = _player.stream.completed.listen((done) {
+      _updateWatchState();
       if (_acceptPlaybackEvents && done && _durationMs > 0) {
         unawaited(_handlePlaybackCompleted());
       }
@@ -1048,10 +1105,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
         );
       });
     });
-    _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) => _save());
+    _saveTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _updateWatchState();
+      unawaited(_watchRecorder.flush());
+      unawaited(_save());
+    });
   }
 
   Future<void> _handlePlaybackCompleted() async {
+    _watchRecorder.update(playing: false);
     if (_completionHandled) return;
     _completionHandled = true;
     final autoPlayNext = ref.read(settingsProvider).autoPlayNext;
@@ -1255,6 +1317,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     _resumed = false;
     _completionHandled = false;
     _acceptPlaybackEvents = false;
+    _watchRecorder.update(ready: false);
     _runtimeErrorTimer?.cancel();
     _runtimeErrorAlertShown = false;
     _switchDebounce?.cancel();
@@ -1283,7 +1346,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
   void _selectEpisode(int index) {
     if (index < 0 || index >= widget.episodes.length || index == _index) return;
+    _watchRecorder.update(ready: false);
     setState(() => _index = index);
+    _watchRecorder.select(_watchTarget);
     _episodeIndex.value = index;
     kurakoMediaSession?.updateEpisode(
       index,
@@ -1365,6 +1430,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
   @override
   void dispose() {
+    _watchRecorder.stop();
+    WidgetsBinding.instance.removeObserver(this);
+    _bufferingSub?.cancel();
     // NOTE: no removeCurrentSnackBar here — removing during route teardown
     // leaves a ghost bar on the next page (see _leavePlayer). The exit paths
     // remove the notice before popping.
@@ -1502,7 +1570,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       ],
     );
 
-    final dark = Theme.of(context).copyWith(colorScheme: _cs);
+    final dark = buildKurakoTheme(
+      _cs,
+      systemFont: ref.watch(useSystemFontProvider),
+    );
 
     // Every exit (close button, autoplay completion, back gesture) restores the
     // system bars and orientation *before* the previous route lays out. Doing it
@@ -1606,7 +1677,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     };
     return Drawer(
       backgroundColor: cs.surfaceContainerHigh,
-      width: 340,
+      width: MediaQuery.sizeOf(context).width < 380
+          ? MediaQuery.sizeOf(context).width
+          : 360,
       // The drawer surface itself must meet the physical right edge.  Applying
       // horizontal SafeArea padding here made an end drawer float inward on
       // landscape iPhones when the notch was on the opposite (left) side.
@@ -1624,8 +1697,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                 padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
                 child: Row(
                   children: [
-                    Icon(icon, color: cs.onSurface),
-                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: cs.secondaryContainer,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Icon(icon, color: cs.onSecondaryContainer),
+                    ),
+                    const SizedBox(width: 12),
                     Expanded(
                       child: Text(
                         title,
@@ -1637,6 +1717,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
                       ),
                     ),
                     IconButton(
+                      tooltip: '关闭面板',
                       icon: Icon(Icons.close, color: cs.onSurfaceVariant),
                       onPressed: () =>
                           _scaffoldKey.currentState?.closeEndDrawer(),
@@ -1677,6 +1758,29 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
               tile(Icons.more_time_outlined, '字幕延迟', _Panel.subDelay),
               tile(Icons.auto_fix_high, 'Anime4K 超分辨率', _Panel.superResolution),
               tile(Icons.info_outline, '播放信息', _Panel.info),
+              tile(Icons.speed_rounded, '播放速度', _Panel.rate),
+              tile(Icons.fast_forward_rounded, '快进时长', _Panel.seek),
+              ListTile(
+                leading: Icon(
+                  Icons.photo_camera_outlined,
+                  color: cs.onSurfaceVariant,
+                ),
+                title: Text('截取当前画面', style: TextStyle(color: cs.onSurface)),
+                onTap: _takingScreenshot
+                    ? null
+                    : () {
+                        _scaffoldKey.currentState?.closeEndDrawer();
+                        _takeScreenshot();
+                      },
+              ),
+              ListTile(
+                leading: Icon(Icons.lock_outline, color: cs.onSurfaceVariant),
+                title: Text('锁定播放器', style: TextStyle(color: cs.onSurface)),
+                onTap: () {
+                  _scaffoldKey.currentState?.closeEndDrawer();
+                  _setControlsLocked(true);
+                },
+              ),
               if (_chapters.isNotEmpty)
                 tile(Icons.bookmarks_outlined, '章节', _Panel.chapters),
             ],
@@ -1910,8 +2014,114 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
 
   // ---- Mobile controls (touch gestures) ----
 
+  double _volumeBeforeMute = 100;
+
+  bool get _acceptPlayerKeys =>
+      mounted &&
+      (ModalRoute.of(context)?.isCurrent ?? false) &&
+      !(_scaffoldKey.currentState?.isEndDrawerOpen ?? false) &&
+      !(FocusManager.instance.primaryFocus?.context
+              ?.findAncestorWidgetOfExactType<EditableText>() !=
+          null);
+
+  Future<void> _toggleMute() async {
+    final volume = _player.state.volume;
+    if (volume > 0) _volumeBeforeMute = volume;
+    await _player.setVolume(volume > 0 ? 0 : _volumeBeforeMute);
+  }
+
+  void _seekBy(int seconds) {
+    final duration = _player.state.duration;
+    var next = _player.state.position + Duration(seconds: seconds);
+    if (next < Duration.zero) next = Duration.zero;
+    if (duration > Duration.zero && next > duration) next = duration;
+    unawaited(_player.seek(next));
+  }
+
+  void _runCommand(PlayerCommand command) {
+    if (!_acceptPlayerKeys ||
+        (_controlsLocked && command != PlayerCommand.lock)) {
+      return;
+    }
+    switch (command) {
+      case PlayerCommand.playPause:
+        _togglePlaying();
+      case PlayerCommand.seekBack:
+        _seekBy(-5);
+      case PlayerCommand.seekForward:
+        _seekBy(5);
+      case PlayerCommand.volumeUp:
+        unawaited(
+          _player.setVolume((_player.state.volume + 5).clamp(0.0, 100.0)),
+        );
+      case PlayerCommand.volumeDown:
+        unawaited(
+          _player.setVolume((_player.state.volume - 5).clamp(0.0, 100.0)),
+        );
+      case PlayerCommand.mute:
+        unawaited(_toggleMute());
+      case PlayerCommand.fullscreen:
+        unawaited(_toggleFullscreen());
+      case PlayerCommand.previous:
+        if (_index > 0) _playPrev();
+      case PlayerCommand.next:
+        if (_index < widget.episodes.length - 1) _playNext();
+      case PlayerCommand.screenshot:
+        unawaited(_takeScreenshot());
+      case PlayerCommand.lock:
+        _setControlsLocked(!_controlsLocked);
+    }
+  }
+
+  Map<ShortcutActivator, VoidCallback> _keyboardBindings(
+    KeyboardPreferences preferences,
+  ) => {
+    for (final entry in preferences.bindings.entries)
+      if (entry.value != null)
+        entry.value!.activator: () => _runCommand(entry.key),
+    const SingleActivator(
+      LogicalKeyboardKey.escape,
+      includeRepeats: false,
+    ): () {
+      if (!_acceptPlayerKeys) return;
+      if (_controlsLocked) {
+        _setControlsLocked(false);
+      } else if (_fullscreen.value) {
+        _toggleFullscreen();
+      }
+    },
+    const SingleActivator(
+      LogicalKeyboardKey.mediaPlayPause,
+      includeRepeats: false,
+    ): () =>
+        _runCommand(PlayerCommand.playPause),
+    const SingleActivator(
+      LogicalKeyboardKey.mediaTrackNext,
+      includeRepeats: false,
+    ): () =>
+        _runCommand(PlayerCommand.next),
+    const SingleActivator(
+      LogicalKeyboardKey.mediaTrackPrevious,
+      includeRepeats: false,
+    ): () =>
+        _runCommand(PlayerCommand.previous),
+    const SingleActivator(
+      LogicalKeyboardKey.mediaPlay,
+      includeRepeats: false,
+    ): () {
+      if (_acceptPlayerKeys && !_controlsLocked) _player.play();
+    },
+    const SingleActivator(
+      LogicalKeyboardKey.mediaPause,
+      includeRepeats: false,
+    ): () {
+      if (_acceptPlayerKeys && !_controlsLocked) _player.pause();
+    },
+  };
+
   MaterialVideoControlsThemeData _mobileTheme() {
     final appearance = ref.watch(playerAppearanceProvider);
+    final keys = ref.watch(keyboardPreferencesProvider);
     return MaterialVideoControlsThemeData(
       // The visual controls stay unified across touch and desktop, but a real
       // mouse follows desktop conventions: leaving the whole video hides the
@@ -1920,18 +2130,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       hideMouseOnControlsRemoval: true,
       onMouseDoubleTap: _togglePlaying,
       onSecondaryTap: () => _openPanel(_Panel.menu),
-      keyboardShortcuts: {
-        const SingleActivator(LogicalKeyboardKey.mediaPlay): () =>
-            _player.play(),
-        const SingleActivator(LogicalKeyboardKey.mediaPause): () =>
-            _player.pause(),
-        const SingleActivator(LogicalKeyboardKey.keyM): () =>
-            _player.setVolume(_player.state.volume > 0 ? 0 : 100),
-        const SingleActivator(LogicalKeyboardKey.keyF): _toggleFullscreen,
-        const SingleActivator(LogicalKeyboardKey.escape): () {
-          if (_fullscreen.value) _toggleFullscreen();
-        },
-      },
+      keyboardShortcuts: _keyboardBindings(keys),
       // Touch gestures.
       seekOnDoubleTap: true,
       // The centre toggles playback while only the two outer quarters seek.
@@ -1971,17 +2170,32 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
       seekBarPositionColor: _cs.primary,
       seekBarBufferColor: Colors.white,
       seekBarHeight: 5.5,
+      seekBarMargin: const EdgeInsets.fromLTRB(24, 0, 24, 54),
+      seekBarAlignment: Alignment.center,
       controlsTransitionDuration: KurakoSprings.spatial.settleDuration,
-      seekBarContainerHeight: 32,
-      buttonBarHeight: 42,
+      seekBarContainerHeight: 40,
+      buttonBarHeight: 52,
       buttonBarButtonSize: 26,
-      topButtonBarMargin: const EdgeInsets.fromLTRB(10, 4, 10, 0),
+      topButtonBarMargin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
       bottomButtonBarMargin: const EdgeInsets.only(
-        left: 10,
-        right: 10,
+        left: 20,
+        right: 20,
         bottom: 12,
       ),
-      bufferingIndicatorBuilder: (_) => const PlayerBufferingIndicator(),
+      bufferingIndicatorBuilder: (_) => PlayerBufferingIndicator(
+        buffering: _player.stream.buffering,
+        initialBuffering: _player.state.buffering,
+      ),
+      controlsOverlayBuilder:
+          ref
+              .watch(interfacePreferencesProvider)
+              .enabled(InterfaceOption.playerSideTools)
+          ? (_) => PlayerSideTools(
+              onScreenshot: _takeScreenshot,
+              takingScreenshot: _takingScreenshot,
+              onLock: () => _setControlsLocked(true),
+            )
+          : null,
       verticalGestureIndicatorBuilder: (context, data) {
         final brightness = data.kind == MaterialVerticalGestureKind.brightness;
         return LayoutBuilder(
@@ -2035,9 +2249,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     );
   }
 
-  /// Bars stay unfilled: the picture shows through and only the glyphs get a
-  /// soft shadow for legibility. Filling them with a rounded surface reads as
-  /// a heavy slab over the video.
+  /// Top controls stay light; only the transport group gets a compact surface.
   Widget _readableBar({required Widget child}) => DefaultTextStyle.merge(
     style: const TextStyle(
       shadows: [Shadow(color: Color(0xBB000000), blurRadius: 4)],
@@ -2049,39 +2261,24 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     // Whole bar drags on desktop (blank stretches included); the buttons'
     // own recognizers keep working — see WindowDragArea.
     child: WindowDragArea(
-      child: Row(
-        children: [
-          MaterialCustomButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: _popSelf,
-          ),
-          Expanded(child: _episodeTitleText()),
-          _seekButton(),
-          if (Platform.isAndroid)
-            MaterialCustomButton(
-              icon: const Icon(
-                Icons.picture_in_picture_alt,
-                color: Colors.white,
-              ),
-              onPressed: _enterPip,
-            ),
-          _rateButton(),
-          MaterialCustomButton(
-            icon: Icon(
-              _takingScreenshot
-                  ? Icons.hourglass_top
-                  : Icons.photo_camera_outlined,
-              color: Colors.white,
-            ),
-            onPressed: _takingScreenshot ? () {} : _takeScreenshot,
-          ),
-          MaterialCustomButton(
-            icon: Icon(
-              _controlsLocked ? Icons.lock : Icons.lock_open_outlined,
-              color: Colors.white,
-            ),
-            onPressed: () => _setControlsLocked(!_controlsLocked),
-          ),
+      child: PlayerTopBar(
+        leading: MaterialCustomButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: _popSelf,
+        ),
+        title: _episodeTitleText(),
+        seek: _seekButton(),
+        pictureInPicture: Platform.isAndroid
+            ? MaterialCustomButton(
+                icon: const Icon(
+                  Icons.picture_in_picture_alt,
+                  color: Colors.white,
+                ),
+                onPressed: _enterPip,
+              )
+            : null,
+        speed: _rateButton(),
+        trailing: [
           MaterialCustomButton(
             icon: const Icon(Icons.tune, color: Colors.white),
             onPressed: () => _openPanel(_Panel.menu),
@@ -2093,10 +2290,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   );
 
   Widget _readableBottomBar() => _readableBar(
-    child: Row(
-      children: [
-        _touchTransportGroup(),
-        const Spacer(),
+    child: PlayerBottomBar(
+      transport: _touchTransportGroup(),
+      trailing: [
         if (widget.episodes.length > 1)
           MaterialCustomButton(
             icon: const Icon(Icons.playlist_play, color: Colors.white),
@@ -2150,9 +2346,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
     ],
   );
 
-  /// Use 30px-high transport targets instead of Material's default 48px
-  /// IconButton footprint. It keeps the controls visibly grouped in the
-  /// lower-left corner without sacrificing a usable touch hit area.
+  /// Compact transport targets inside the shared 48dp-high playback surface.
   Widget _compactTouchButton({
     required IconData icon,
     required String tooltip,
@@ -2162,8 +2356,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   }) => Tooltip(
     message: tooltip,
     child: SizedBox(
-      width: icon == Icons.play_arrow || icon == Icons.pause ? 36 : 34,
-      height: 30,
+      width: 40,
+      height: 40,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: enabled ? onTap : null,
@@ -2205,10 +2399,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WindowListener {
   }
 
   Widget _buildUnlockControlsButton() => Align(
-    alignment: Alignment.centerLeft,
+    alignment: Alignment.centerRight,
     child: SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(left: 8),
+        padding: const EdgeInsets.only(right: 24),
         child: Material(
           color: Colors.transparent,
           child: IconButton(
@@ -2770,8 +2964,8 @@ class _PlayerPlayPauseButtonState extends State<_PlayerPlayPauseButton>
   Widget build(BuildContext context) => Tooltip(
     message: _playing ? '暂停' : '播放',
     child: SizedBox(
-      width: 36,
-      height: 30,
+      width: 48,
+      height: 40,
       child: Material(
         color: Theme.of(context).colorScheme.primaryContainer,
         shape: const StadiumBorder(),
@@ -2843,7 +3037,6 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
         'current-vo': '视频输出',
         'video-sync': '同步策略（请求）',
         'display-sync-active': '显示同步（实际）',
-        'interpolation': '插帧（请求）',
         'avsync': '音视频时差（秒）',
         'frame-drop-count': '输出丢帧累计',
         'decoder-frame-drop-count': '解码丢帧累计',
@@ -2948,7 +3141,7 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
       if (_containerFormat != null) ('封装格式', _containerFormat!),
       if (vp.w != null && vp.h != null) ('分辨率', '${vp.w} × ${vp.h}'),
       if (videoCodec != null && videoCodec.isNotEmpty) ('视频编码', videoCodec),
-      if (videoTrack?.decoder case final decoder? when decoder.isNotEmpty)
+      if (nonEmptyMediaProperty(videoTrack?.decoder) case final decoder?)
         ('视频解码器', decoder),
       ('视频码率', formatMediaBitrate(videoBitrate)),
       if (videoTrack?.fps case final fps? when fps > 0)
@@ -2962,7 +3155,6 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
             : '硬件解码（$_hwdec）',
       ),
       ..._renderInfo.entries.map((entry) => (entry.key, entry.value)),
-      ('纹理渲染后端', '实际后端未由插件上报'),
       if (vp.pixelformat != null) ('像素格式', vp.pixelformat!),
       if (hwActive) ('硬解像素格式', vp.hwPixelformat!),
       if (vp.aspect != null) ('宽高比', vp.aspect!.toStringAsFixed(3)),
@@ -2970,7 +3162,7 @@ class _PlaybackInfoSheetState extends State<_PlaybackInfoSheet> {
       if (vp.primaries != null) ('色域', vp.primaries!),
       if (vp.gamma != null) ('传递函数', vp.gamma!),
       if (audioCodec != null && audioCodec.isNotEmpty) ('音频编码', audioCodec),
-      if (audioTrack?.decoder case final decoder? when decoder.isNotEmpty)
+      if (nonEmptyMediaProperty(audioTrack?.decoder) case final decoder?)
         ('音频解码器', decoder),
       if (ap.format != null) ('音频格式', ap.format!),
       if (ap.sampleRate != null) ('采样率', '${ap.sampleRate} Hz'),

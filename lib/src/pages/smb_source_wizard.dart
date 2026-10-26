@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
+import '../ui/page_components.dart';
 import '../rust/models.dart';
 import '../services/network_discovery.dart';
 import '../services/remote_path_selection.dart';
@@ -319,9 +321,13 @@ class _SmbSourceWizardPageState extends ConsumerState<SmbSourceWizardPage> {
                 constraints: const BoxConstraints(maxWidth: 760),
                 child: _step == 3
                     ? _directoryStep()
-                    : ListView(
-                        padding: const EdgeInsets.all(16),
+                    : KurakoPageList(
                         children: [
+                          KurakoPageHeader(
+                            title: ['服务器地址', '登录服务器', '选择共享目录'][_step],
+                            subtitle: 'SMB · 第 ${_step + 1} 步，共 4 步',
+                            icon: Icons.dns_outlined,
+                          ),
                           if (_error != null) _errorBanner(context, _error!),
                           if (_step == 0) _serverStep(),
                           if (_step == 1) _credentialsStep(),

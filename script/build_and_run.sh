@@ -18,10 +18,10 @@ fi
 
 pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 BUILD_TIME="$(date '+%Y-%m-%d %H:%M:%S %z')"
-"$FLUTTER_BIN" build macos --debug "--dart-define=KURAKO_BUILD_TIME=$BUILD_TIME"
+"$FLUTTER_BIN" build macos --debug --no-pub "--dart-define=KURAKO_BUILD_TIME=$BUILD_TIME"
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE" --args --enable-software-rendering
+  /usr/bin/open -n "$APP_BUNDLE" --args --enable-software-rendering --enable-impeller=false
 }
 
 case "$MODE" in
@@ -29,7 +29,7 @@ case "$MODE" in
     open_app
     ;;
   --debug|debug)
-    lldb -- "$APP_BINARY" --enable-software-rendering
+    lldb -- "$APP_BINARY" --enable-software-rendering --enable-impeller=false
     ;;
   --logs|logs|--telemetry|telemetry)
     open_app

@@ -7,8 +7,11 @@ import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/anime_sort.dart';
 import '../state/providers.dart';
+import '../state/interface_preferences.dart';
 import '../ui/responsive_spacing.dart';
 import '../ui/spring.dart';
+import '../ui/page_components.dart';
+import '../ui/menu_item.dart';
 import '../widgets/anime_card.dart';
 import '../widgets/scan_progress_sheet.dart';
 import '../widgets/scroll_reveal_app_bar.dart';
@@ -24,7 +27,7 @@ class LibraryPage extends ConsumerStatefulWidget {
 }
 
 class _LibraryPageState extends ConsumerState<LibraryPage> {
-  final _reveal = ScrollRevealController();
+  final _reveal = ScrollRevealController(leadingGap: 8);
 
   // The entrance stagger is a first-impression moment, not a scrolling
   // effect: the grid destroys and rebuilds items as they leave the viewport,
@@ -32,6 +35,63 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
   // initial screen has played, all later builds render statically.
   bool _entrancePlayed = false;
   bool _entranceTimerArmed = false;
+  String _query = '';
+  bool? _searchExpanded;
+  final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
+  final _scrollController = ScrollController();
+  double _pullDistance = 0;
+
+  bool get _searchVisible =>
+      _searchExpanded ??
+      ref
+          .read(interfacePreferencesProvider)
+          .enabled(InterfaceOption.searchExpanded);
+
+  void _showSearch({bool focus = true}) {
+    setState(() => _searchExpanded = true);
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        0,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutCubic,
+      );
+    }
+    if (focus) _searchFocus.requestFocus();
+  }
+
+  void _closeSearch() {
+    _searchFocus.unfocus();
+    _searchController.clear();
+    setState(() {
+      _searchExpanded = false;
+      _query = '';
+    });
+  }
+
+  bool _onScroll(ScrollNotification event) {
+    if (event.metrics.axis != Axis.vertical || event.depth != 0) return false;
+    if (event is ScrollStartNotification || event is ScrollEndNotification) {
+      _pullDistance = 0;
+    }
+    if (!_searchVisible) {
+      if (event is OverscrollNotification &&
+          event.dragDetails != null &&
+          event.overscroll < 0) {
+        _pullDistance -= event.overscroll;
+      }
+      if (event is ScrollUpdateNotification &&
+          event.dragDetails != null &&
+          event.metrics.pixels < event.metrics.minScrollExtent) {
+        _pullDistance = event.metrics.minScrollExtent - event.metrics.pixels;
+      }
+      if (_pullDistance >= 48) {
+        _pullDistance = 0;
+        _showSearch(focus: false);
+      }
+    }
+    return false;
+  }
 
   static const _sortLabels = {
     LibrarySort.normal: '默认排序',
@@ -44,12 +104,16 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
 
   @override
   void dispose() {
+    _scrollController.dispose();
+    _searchController.dispose();
+    _searchFocus.dispose();
     _reveal.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(interfacePreferencesProvider);
     final animeAsync = ref.watch(animeListProvider);
     final sort = ref.watch(librarySortProvider);
     final grouping = ref.watch(groupingEnabledProvider);
@@ -81,6 +145,13 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
               )
             : null,
         actions: [
+          IconButton(
+            tooltip: _searchVisible ? '收起搜索' : '搜索番剧',
+            icon: Icon(
+              _searchVisible ? Icons.search_off_rounded : Icons.search_rounded,
+            ),
+            onPressed: _searchVisible ? _closeSearch : _showSearch,
+          ),
           _sortMenu(context, ref, sort, grouping, pinCollected),
           IconButton(
             tooltip: '刷新 Bangumi 收藏状态',
@@ -88,6 +159,9 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
             onPressed: () => _syncCollections(context, ref),
           ),
           PopupMenuButton<String>(
+            menuPadding: const EdgeInsets.all(8),
+            clipBehavior: Clip.antiAlias,
+            borderRadius: BorderRadius.circular(20),
             enabled: !ref.watch(scanCoordinatorProvider).running,
             tooltip: '扫描',
             icon: const Icon(Icons.refresh),
@@ -107,7 +181,8 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
               }
             },
             itemBuilder: (context) => const [
-              PopupMenuItem(
+              KurakoPopupMenuItem(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 value: 'incremental',
                 child: ListTile(
                   leading: Icon(Icons.bolt_outlined),
@@ -116,7 +191,8 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              KurakoPopupMenuItem(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 value: 'full',
                 child: ListTile(
                   leading: Icon(Icons.refresh),
@@ -125,7 +201,8 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              PopupMenuItem(
+              KurakoPopupMenuItem(
+                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 value: 'clear',
                 child: ListTile(
                   leading: Icon(Icons.cleaning_services_outlined),
@@ -138,32 +215,47 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
           ),
         ],
       ),
-      body: ScrollRevealListener(
-        controller: _reveal,
-        // A context below the Scaffold is required: only there does
-        // MediaQuery report the body padding that includes the app bar height.
-        child: Builder(
-          builder: (bodyContext) => animeAsync.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) => Center(child: Text('加载失败: $e')),
-            data: (list) {
-              if (list.isEmpty) {
-                return _EmptyState(onScan: () => _startScan(context, ref));
-              }
-              if (!grouping || sort == LibrarySort.normal) {
-                final sorted = sortAnime(
-                  list,
-                  sort,
-                  pinCollected: pinCollected,
+      body: NotificationListener<ScrollNotification>(
+        onNotification: _onScroll,
+        child: ScrollRevealListener(
+          controller: _reveal,
+          // A context below the Scaffold is required: only there does
+          // MediaQuery report the body padding that includes the app bar height.
+          child: Builder(
+            builder: (bodyContext) => animeAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('加载失败: $e')),
+              data: (list) {
+                if (list.isEmpty) {
+                  return _EmptyState(onScan: () => _startScan(context, ref));
+                }
+                final query = _query.trim().toLowerCase();
+                final filtered = query.isEmpty
+                    ? list
+                    : list
+                          .where(
+                            (anime) => [
+                              anime.titleRaw,
+                              anime.name ?? '',
+                              anime.nameCn ?? '',
+                            ].any((name) => name.toLowerCase().contains(query)),
+                          )
+                          .toList();
+                if (!grouping || sort == LibrarySort.normal) {
+                  final sorted = sortAnime(
+                    filtered,
+                    sort,
+                    pinCollected: pinCollected,
+                  );
+                  return _grid(bodyContext, ref, sorted);
+                }
+                return _groupedGrid(
+                  bodyContext,
+                  ref,
+                  groupAnime(filtered, sort, pinCollected: pinCollected),
                 );
-                return _grid(bodyContext, ref, sorted);
-              }
-              return _groupedGrid(
-                bodyContext,
-                ref,
-                groupAnime(list, sort, pinCollected: pinCollected),
-              );
-            },
+              },
+            ),
           ),
         ),
       ),
@@ -178,6 +270,8 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     bool pinCollected,
   ) {
     return PopupMenuButton<String>(
+      menuPadding: const EdgeInsets.all(8),
+      clipBehavior: Clip.antiAlias,
       tooltip: '排序 / 分组',
       icon: const Icon(Icons.sort),
       onSelected: (v) {
@@ -193,18 +287,18 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
       },
       itemBuilder: (context) => [
         for (final e in _sortLabels.entries)
-          CheckedPopupMenuItem(
+          KurakoCheckedMenuItem(
             value: e.key.name,
             checked: sort == e.key,
             child: Text(e.value),
           ),
         const PopupMenuDivider(),
-        CheckedPopupMenuItem(
+        KurakoCheckedMenuItem(
           value: '__group__',
           checked: grouping,
           child: const Text('分组显示'),
         ),
-        CheckedPopupMenuItem(
+        KurakoCheckedMenuItem(
           value: '__pin__',
           checked: pinCollected,
           child: const Text('收藏置顶'),
@@ -218,18 +312,82 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     // With extendBodyBehindAppBar the body starts at the top edge, and the
     // scaffold reports the bar's full height here so the first row can clear it.
     final top = MediaQuery.paddingOf(context).top;
-    return GridView.builder(
-      padding: EdgeInsets.fromLTRB(inset, top + 16, inset, 24),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 200,
-        childAspectRatio: 0.62,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-      ),
-      itemCount: list.length,
-      itemBuilder: (context, i) => _card(context, ref, list[i], index: i),
+    return CustomScrollView(
+      controller: _scrollController,
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(inset, top + 8, inset, 12),
+          sliver: SliverToBoxAdapter(child: _libraryHeader(list.length)),
+        ),
+        if (list.isEmpty)
+          const SliverToBoxAdapter(
+            child: KurakoEmptyState(
+              icon: Icons.search_off_rounded,
+              title: '没有找到匹配的番剧',
+              description: '换个名称试试',
+            ),
+          ),
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(inset, 0, inset, 32),
+          sliver: SliverGrid(
+            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: ref
+                  .watch(interfacePreferencesProvider)
+                  .posterSize
+                  .extent,
+              childAspectRatio: 0.60,
+              crossAxisSpacing: 16,
+              mainAxisSpacing: 20,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, i) => _card(context, ref, list[i], index: i),
+              childCount: list.length,
+            ),
+          ),
+        ),
+      ],
     );
   }
+
+  Widget _libraryHeader(int count) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Padding(
+        padding: EdgeInsets.only(bottom: _searchVisible ? 12 : 0),
+        child: Text(_query.isEmpty ? '$count 部番剧' : '找到 $count 部番剧'),
+      ),
+      AnimatedSize(
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : KurakoSprings.spatial.settleDuration,
+        curve: KurakoSprings.effectsSlow.curve,
+        alignment: Alignment.topCenter,
+        child: _searchVisible
+            ? Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: SearchBar(
+                  controller: _searchController,
+                  focusNode: _searchFocus,
+                  hintText: '搜索番剧名称',
+                  leading: const Icon(Icons.search_rounded),
+                  trailing: [
+                    IconButton(
+                      tooltip: '关闭搜索并清空',
+                      onPressed: _closeSearch,
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                  padding: const WidgetStatePropertyAll(
+                    EdgeInsets.symmetric(horizontal: 20),
+                  ),
+                  onChanged: (value) => setState(() => _query = value),
+                ),
+              )
+            : const SizedBox(width: double.infinity),
+      ),
+    ],
+  );
 
   Widget _groupedGrid(
     BuildContext context,
@@ -239,33 +397,47 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     final inset = adaptiveContentInset(context);
     final top = MediaQuery.paddingOf(context).top;
     return CustomScrollView(
+      controller: _scrollController,
+      physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
+        SliverPadding(
+          padding: EdgeInsets.fromLTRB(inset, top + 8, inset, 0),
+          sliver: SliverToBoxAdapter(
+            child: _libraryHeader(
+              sections.fold<int>(
+                0,
+                (sum, section) => sum + section.items.length,
+              ),
+            ),
+          ),
+        ),
+        if (sections.isEmpty)
+          const SliverToBoxAdapter(
+            child: KurakoEmptyState(
+              icon: Icons.search_off_rounded,
+              title: '没有找到匹配的番剧',
+              description: '换个名称试试',
+            ),
+          ),
         for (final section in sections) ...[
           SliverPadding(
-            padding: EdgeInsets.fromLTRB(inset, top + 20, inset, 8),
+            padding: EdgeInsets.fromLTRB(inset, 0, inset, 8),
             sliver: SliverToBoxAdapter(
-              child: Row(
-                children: [
-                  Text(
-                    section.label,
-                    style: Theme.of(context).textTheme.titleMedium
-                        ?.copyWith(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    '${section.items.length}',
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
+              child: KurakoSectionHeading(
+                title: section.label,
+                count: '${section.items.length}',
               ),
             ),
           ),
           SliverPadding(
             padding: EdgeInsets.symmetric(horizontal: inset),
             sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 200,
-                childAspectRatio: 0.62,
+              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: ref
+                    .watch(interfacePreferencesProvider)
+                    .posterSize
+                    .extent,
+                childAspectRatio: 0.60,
                 crossAxisSpacing: 16,
                 mainAxisSpacing: 16,
               ),
@@ -287,12 +459,16 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     Anime anime, {
     int index = 0,
   }) {
+    final appearance = ref.watch(interfacePreferencesProvider);
     final card = GestureDetector(
       onLongPressStart: (d) =>
           _showBlockMenu(context, ref, anime, d.globalPosition),
       onSecondaryTapDown: (d) =>
           _showBlockMenu(context, ref, anime, d.globalPosition),
       child: AnimeCard(
+        showProgress: appearance.enabled(InterfaceOption.posterProgress),
+        showRating: appearance.enabled(InterfaceOption.posterRating),
+        showBadge: appearance.enabled(InterfaceOption.posterBadge),
         anime: anime,
         onTap: () {
           Navigator.of(context).push(
@@ -386,26 +562,14 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            Icons.movie_filter_outlined,
-            size: 72,
-            color: Theme.of(context).colorScheme.primary,
-          ),
-          const SizedBox(height: 16),
-          Text('番剧库还是空的', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text('在设置里添加本地文件夹，然后点击扫描'),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: onScan,
-            icon: const Icon(Icons.refresh),
-            label: const Text('开始扫描'),
-          ),
-        ],
+    return KurakoEmptyState(
+      icon: Icons.movie_filter_outlined,
+      title: '番剧库还是空的',
+      description: '在设置的媒体来源中添加本地文件夹或网络共享，然后开始扫描。',
+      action: FilledButton.icon(
+        onPressed: onScan,
+        icon: const Icon(Icons.refresh),
+        label: const Text('开始扫描'),
       ),
     );
   }

@@ -6,19 +6,26 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/external_player.dart';
 import '../services/mac_player_picker.dart';
+import '../services/decoder_policy.dart';
+import '../ui/choice_menu.dart';
+import 'keyboard_settings_page.dart';
 import '../state/providers.dart';
 import '../ui/grouped_card.dart';
+import '../ui/page_components.dart';
+import '../widgets/settings_scaffold.dart';
 
 class PlayerSettingsPage extends ConsumerWidget {
-  const PlayerSettingsPage({super.key});
+  const PlayerSettingsPage({super.key, this.embedded = false});
+  final bool embedded;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final settings = ref.watch(settingsProvider);
-    return Scaffold(
-      appBar: AppBar(title: const Text('播放器设置')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+    return SettingsScaffold(
+      title: '播放器设置',
+      embedded: embedded,
+      body: KurakoPageList(
+        maxWidth: 840,
         children: [
           SettingsGroupCard(
             title: '播放行为',
@@ -123,6 +130,20 @@ class PlayerSettingsPage extends ConsumerWidget {
               _superResolution(context, ref, settings),
             ],
           ),
+          SettingsGroupCard(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.keyboard_outlined),
+                title: const Text('键盘快捷键'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const KeyboardSettingsPage(),
+                  ),
+                ),
+              ),
+            ],
+          ),
           if (Platform.isAndroid || Platform.isIOS)
             SettingsGroupCard(
               title: '后台与系统控制',
@@ -211,31 +232,41 @@ class PlayerSettingsPage extends ConsumerWidget {
 
   static Widget _decodeMode(BuildContext context, WidgetRef ref) {
     final mode = ref.watch(decodeModeProvider);
+    final platform = Theme.of(context).platform;
+    final selected = effectiveDecoder(mode, platform);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('解码方式'),
+          Row(
+            children: [
+              const Expanded(child: Text('视频解码器')),
+              Flexible(
+                child: ChoiceMenu<String>(
+                  value: selected,
+                  choices: decoderChoices(platform),
+                  onSelected: (value) async {
+                    try {
+                      await ref.read(decodeModeProvider.notifier).set(value);
+                    } catch (_) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('解码设置未能保存，请重试')),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 2),
           Text(
-            Platform.isLinux
-                ? 'Linux 自动/硬解会请求 VAAPI/VDPAU 复制解码，并使用兼容的像素纹理输出；实际解码器取决于驱动与片源，重新进入播放器后生效'
-                : '自动优先硬解，异常花屏或绿屏时可改用软件解码；重新进入播放器后生效',
+            mode != selected && mode != 'hw' ? '此设备不支持已保存的解码方式，当前使用自动选择。' : '自动根据平台、驱动与视频格式选择兼容硬解，不可用时回退软件解码。手动选择受驱动与播放器构建支持限制；重新打开播放器生效。',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'auto', label: Text('自动')),
-              ButtonSegment(value: 'hw', label: Text('硬件解码')),
-              ButtonSegment(value: 'sw', label: Text('软件解码')),
-            ],
-            selected: {mode},
-            onSelectionChanged: (selection) =>
-                ref.read(decodeModeProvider.notifier).set(selection.first),
           ),
         ],
       ),

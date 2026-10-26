@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:material_ui/material_ui.dart';
@@ -49,22 +50,52 @@ double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
     // SliverAppBar adds the system top padding itself. Count only the toolbar
     // here, otherwise phones reserve the status-bar height twice and leave a
     // conspicuous blank strip below the cover.
-    return kToolbarHeight + 8 + titleHeight + 10 + coverHeight + 8;
+    final factsHeight = _coverFactsHeight(
+      context,
+      anime,
+      contentWidth - 152 - 12,
+      desktop: false,
+      showTitle: false,
+    );
+    return kToolbarHeight +
+        8 +
+        titleHeight +
+        10 +
+        math.max(coverHeight, factsHeight) +
+        8;
   }
   final coverWidth = useCustomCaption ? 196.0 : 168.0;
   final coverHeight = coverWidth * 214 / 150;
-  // Wide facts can grow past the cover once the title wraps to a second line
-  // and the original-name line shows. Measure that growth and let the header
-  // extend downward instead of clipping (BOTTOM OVERFLOWED); entries that fit
-  // in one title line keep the tight budget.
   final contentWidth =
       MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  final histogramWidth =
+      _histogramCounts(anime) != null && coverHeaderShowsInlineRating(context)
+      ? (useCustomCaption ? 360.0 : 320.0) + 16
+      : 0.0;
+  final factsWidth = contentWidth - coverWidth - 16 - histogramWidth;
+  final factsHeight = _coverFactsHeight(
+    context,
+    anime,
+    factsWidth,
+    desktop: useCustomCaption,
+    showTitle: true,
+  );
+  return kToolbarHeight + 8 + math.max(coverHeight, factsHeight) + 8;
+}
+
+double _coverFactsHeight(
+  BuildContext context,
+  Anime anime,
+  double factsWidth, {
+  required bool desktop,
+  required bool showTitle,
+}) {
   final theme = Theme.of(context);
   final textScaler = MediaQuery.textScalerOf(context);
   double measuredHeight(
     String text,
     TextStyle? style,
-    int maxLines,
+    int? maxLines,
     double maxWidth,
   ) {
     final painter = TextPainter(
@@ -72,43 +103,93 @@ double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
       textDirection: Directionality.of(context),
       textScaler: textScaler,
       maxLines: maxLines,
-      ellipsis: '…',
+      ellipsis: maxLines == null ? null : '…',
     )..layout(maxWidth: maxWidth);
     return painter.height;
   }
 
-  final histogramWidth = _histogramCounts(anime) != null
-      ? (useCustomCaption ? 360.0 : 320.0) + 16
-      : 0.0;
-  final factsWidth = contentWidth - coverWidth - 16 - histogramWidth;
-  final titleStyle = useCustomCaption
+  final titleStyle = desktop
       ? theme.textTheme.headlineSmall
       : theme.textTheme.titleLarge;
-  final oneLine = measuredHeight(_titleOf(anime), titleStyle, 1, factsWidth);
-  final wrapped = measuredHeight(_titleOf(anime), titleStyle, 2, factsWidth);
-  var factsExtra = wrapped - oneLine;
-  if (anime.name != null &&
+  var factsHeight = showTitle
+      ? measuredHeight(_titleOf(anime), titleStyle, 2, factsWidth) + 10
+      : 0.0;
+  final labelStyle = desktop
+      ? theme.textTheme.bodyMedium
+      : theme.textTheme.bodySmall;
+  final valueStyle = desktop
+      ? theme.textTheme.titleMedium
+      : theme.textTheme.titleSmall;
+  if (showTitle &&
+      anime.name != null &&
       anime.name!.isNotEmpty &&
       anime.name != _titleOf(anime)) {
-    factsExtra +=
+    factsHeight +=
         2 +
         measuredHeight(
           anime.name!,
-          useCustomCaption
-              ? theme.textTheme.bodyMedium
-              : theme.textTheme.bodySmall,
+          desktop ? theme.textTheme.bodyMedium : theme.textTheme.bodySmall,
           1,
           factsWidth,
         );
   }
-  // SliverAppBar adds the system top padding itself. Count only the toolbar
-  // here, otherwise phones reserve the status-bar height twice and leave a
-  // conspicuous blank strip below the cover.
-  return kToolbarHeight +
-      8 +
-      coverHeight +
-      40 +
-      (factsExtra > 0 ? factsExtra : 0);
+  double lineHeight(String label, String value, double width) =>
+      measuredHeight(label, labelStyle, null, width) +
+      measuredHeight(value, valueStyle, null, width);
+  if (anime.airDate != null) {
+    factsHeight += lineHeight('放送开始', anime.airDate!, factsWidth) + 6;
+  }
+  if (anime.rating != null) {
+    factsHeight +=
+        measuredHeight(
+          anime.ratingTotal == null ? '评分' : '${anime.ratingTotal} 人评分',
+          labelStyle,
+          null,
+          factsWidth,
+        ) +
+        math.max(
+          measuredHeight(
+            anime.rating!.toStringAsFixed(1),
+            valueStyle,
+            1,
+            factsWidth,
+          ),
+          desktop ? 18 : 15,
+        ) +
+        6;
+  }
+  if (anime.ratingRank != null) {
+    factsHeight +=
+        lineHeight('Bangumi Ranked', '#${anime.ratingRank}', factsWidth) + 6;
+  }
+  final scheduleCount =
+      (anime.airWeekday == null ? 0 : 1) + (anime.totalEps == null ? 0 : 1);
+  if (scheduleCount > 0) {
+    final width = (factsWidth - 16 * (scheduleCount - 1)) / scheduleCount;
+    factsHeight +=
+        math.max(
+          anime.airWeekday == null ? 0 : lineHeight('更新', '周一', width),
+          anime.totalEps == null
+              ? 0
+              : lineHeight('话数', '${anime.totalEps} 话', width),
+        ) +
+        4;
+  }
+  // Both the collection button and unmatched chip keep a 48dp touch extent.
+  factsHeight += math.max(
+    48,
+    measuredHeight('待匹配', theme.textTheme.labelLarge, 1, factsWidth) + 20,
+  );
+  return factsHeight;
+}
+
+bool coverHeaderShowsInlineRating(BuildContext context) {
+  final contentWidth =
+      MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  final coverWidth = useCustomCaption ? 196.0 : 168.0;
+  final chartWidth = useCustomCaption ? 360.0 : 320.0;
+  final minimumFactsWidth = MediaQuery.textScalerOf(context).scale(260);
+  return contentWidth >= coverWidth + 16 + minimumFactsWidth + 16 + chartWidth;
 }
 
 bool coverHeaderUsesNarrowLayout(BuildContext context) {
@@ -124,12 +205,14 @@ bool coverHeaderUsesNarrowLayout(BuildContext context) {
 /// independently; see the credits in settings.
 class CoverHeaderHero extends StatelessWidget {
   final Anime anime;
+  final Object? heroTag;
   final double topInset;
   final double? layoutHeight;
   final Widget? collectionControl;
   const CoverHeaderHero({
     super.key,
     required this.anime,
+    this.heroTag,
     this.topInset = 0,
     this.layoutHeight,
     this.collectionControl,
@@ -160,6 +243,7 @@ class CoverHeaderHero extends StatelessWidget {
                   ),
                   child: _HeaderCard(
                     anime: anime,
+                    heroTag: heroTag,
                     collectionControl: collectionControl,
                   ),
                 ),
@@ -258,8 +342,13 @@ class _Backdrop extends StatelessWidget {
 /// places it in a separate scrolling section so the fixed header cannot clip it.
 class _HeaderCard extends StatelessWidget {
   final Anime anime;
+  final Object? heroTag;
   final Widget? collectionControl;
-  const _HeaderCard({required this.anime, this.collectionControl});
+  const _HeaderCard({
+    required this.anime,
+    this.collectionControl,
+    this.heroTag,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -280,7 +369,7 @@ class _HeaderCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Hero(
-              tag: heroTagForAnime(anime.id),
+              tag: heroTag ?? heroTagForAnime(anime.id),
               transitionOnUserGestures: true,
               createRectTween: createCoverHeroRectTween,
               flightShuttleBuilder: coverHeroFlightShuttleBuilder,
@@ -303,7 +392,18 @@ class _HeaderCard extends StatelessWidget {
             SizedBox(width: narrow ? 12 : 16),
             Expanded(
               child: SizedBox(
-                height: narrow ? coverH : null,
+                height: narrow
+                    ? math.max(
+                        coverH,
+                        _coverFactsHeight(
+                          context,
+                          anime,
+                          constraints.maxWidth - coverW - 12,
+                          desktop: false,
+                          showTitle: false,
+                        ),
+                      )
+                    : null,
                 child: _Facts(
                   anime: anime,
                   desktop: desktop,
@@ -314,7 +414,9 @@ class _HeaderCard extends StatelessWidget {
               ),
             ),
             // Histogram beside facts only when there's room.
-            if (!narrow && counts != null) ...[
+            if (!narrow &&
+                counts != null &&
+                coverHeaderShowsInlineRating(context)) ...[
               const SizedBox(width: 16),
               SizedBox(
                 width: desktop ? 360.0 : 320.0,
@@ -490,25 +592,11 @@ class _Facts extends StatelessWidget {
     ];
 
     if (alignControlToBottom) {
-      // The narrow layout caps this column at the cover height so the
-      // control row pins to the cover's bottom edge. The info lines are the
-      // variable part: taller entries (rating + rank + schedule + footer)
-      // used to overflow that cap — they scroll inside it instead, while
-      // the pinned footer keeps its geometry (ui_animation_test depends on
-      // the control's bottom matching the cover's bottom).
+      // Fill short headers to the cover's baseline; taller facts expand the
+      // header itself, without introducing a second scrollable region.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: lines,
-              ),
-            ),
-          ),
-          ?footer,
-        ],
+        children: [...lines, const Spacer(), ?footer],
       );
     }
     return Column(

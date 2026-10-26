@@ -185,16 +185,20 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(
-                        Icons.play_circle_outline,
-                        size: 56,
-                        color: theme.colorScheme.primary,
+                      const Center(
+                        child: Image(
+                          image: AssetImage('assets/images/kurako_icon.png'),
+                          width: 96,
+                          height: 96,
+                        ),
                       ),
                       const SizedBox(height: 16),
                       Text(
                         widget.standalone ? '初始设置' : '欢迎使用 Kurako',
                         textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineSmall,
+                        style: theme.textTheme.headlineLarge?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       Text(
@@ -206,6 +210,8 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                       ),
                       const SizedBox(height: 28),
                       Card(
+                        color: theme.colorScheme.secondaryContainer,
+                        elevation: 0,
                         child: Padding(
                           padding: const EdgeInsets.all(16),
                           child: Column(
@@ -265,9 +271,13 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                         ),
                       ),
                       const SizedBox(height: 24),
-                      FilledButton(
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                        ),
                         onPressed: _busy ? null : _finish,
-                        child: Text(widget.standalone ? '完成' : '开始使用'),
+                        icon: const Icon(Icons.arrow_forward_rounded),
+                        label: Text(widget.standalone ? '完成' : '开始使用'),
                       ),
                     ],
                   ),

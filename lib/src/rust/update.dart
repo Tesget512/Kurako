@@ -44,18 +44,24 @@ class UpdateRelease {
   final String tagName;
   final String htmlUrl;
   final String name;
+  final String? notes;
   final List<UpdateAsset> assets;
 
   const UpdateRelease({
     required this.tagName,
     required this.htmlUrl,
     required this.name,
+    this.notes,
     required this.assets,
   });
 
   @override
   int get hashCode =>
-      tagName.hashCode ^ htmlUrl.hashCode ^ name.hashCode ^ assets.hashCode;
+      tagName.hashCode ^
+      htmlUrl.hashCode ^
+      name.hashCode ^
+      notes.hashCode ^
+      assets.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -65,5 +71,6 @@ class UpdateRelease {
           tagName == other.tagName &&
           htmlUrl == other.htmlUrl &&
           name == other.name &&
+          notes == other.notes &&
           assets == other.assets;
 }

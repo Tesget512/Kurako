@@ -17,4 +17,5 @@ pub mod subtitle;
 #[cfg(test)]
 pub(crate) mod test_http;
 pub mod update;
+pub mod watch_history;
 pub mod webdav;

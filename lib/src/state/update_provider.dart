@@ -32,6 +32,7 @@ final appUpdateServiceProvider = Provider<AppUpdateService>((ref) {
         tagName: release.tagName,
         htmlUrl: release.htmlUrl,
         name: release.name,
+        notes: release.notes,
         assets: [
           for (final asset in release.assets)
             AppUpdateAsset(

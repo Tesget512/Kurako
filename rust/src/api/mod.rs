@@ -1,5 +1,6 @@
 pub mod mirror;
 pub mod update;
+pub mod watch;
 
 use crate::frb_generated::StreamSink;
 use crate::models::{

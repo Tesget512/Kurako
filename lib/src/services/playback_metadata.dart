@@ -27,5 +27,25 @@ String formatMediaBitrate(num? bitsPerSecond) {
 
 String? nonEmptyMediaProperty(String? value) {
   final normalized = value?.trim();
-  return normalized == null || normalized.isEmpty ? null : normalized;
+  if (normalized == null ||
+      normalized.isEmpty ||
+      const {
+        'null',
+        '(null)',
+        'unknown',
+        'n/a',
+      }.contains(normalized.toLowerCase())) {
+    return null;
+  }
+  var cleaned = normalized.replaceAll(
+    RegExp(r'\(\s*null\s*\)', caseSensitive: false),
+    '',
+  );
+  // Nested libmpv placeholders can leave another pair of empty parentheses.
+  final emptyParentheses = RegExp(r'\s*\(\s*\)');
+  while (emptyParentheses.hasMatch(cleaned)) {
+    cleaned = cleaned.replaceAll(emptyParentheses, '');
+  }
+  cleaned = cleaned.trim();
+  return cleaned.isEmpty ? null : cleaned;
 }

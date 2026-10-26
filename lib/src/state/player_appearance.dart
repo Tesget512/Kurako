@@ -28,7 +28,7 @@ class PlayerAppearanceNotifier extends Notifier<PlayerAppearance> {
     return const PlayerAppearance();
   }
 
-  late final Future<void> ready;
+  late Future<void> ready;
   Future<void> _writes = Future<void>.value();
 
   Future<void> _load() async {

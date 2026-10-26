@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
+import '../ui/page_components.dart';
 import '../rust/models.dart';
 import '../services/remote_path_selection.dart';
 import '../state/providers.dart';
@@ -289,9 +291,13 @@ class _WebDavSourceWizardPageState
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 760),
                 child: _step == 0
-                    ? ListView(
-                        padding: const EdgeInsets.all(16),
+                    ? KurakoPageList(
                         children: [
+                          const KurakoPageHeader(
+                            title: '服务器地址',
+                            subtitle: 'WebDAV · 第 1 步，共 2 步',
+                            icon: Icons.cloud_outlined,
+                          ),
                           if (_error != null) _errorBanner(_error!),
                           _credentialsStep(),
                         ],

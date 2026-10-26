@@ -8,8 +8,18 @@ import 'cover_image.dart';
 class AnimeCard extends StatelessWidget {
   final Anime anime;
   final VoidCallback onTap;
+  final bool showProgress;
+  final bool showRating;
+  final bool showBadge;
 
-  const AnimeCard({super.key, required this.anime, required this.onTap});
+  const AnimeCard({
+    super.key,
+    required this.anime,
+    required this.onTap,
+    this.showProgress = true,
+    this.showRating = true,
+    this.showBadge = true,
+  });
 
   String get _displayName {
     if (anime.nameCn != null && anime.nameCn!.isNotEmpty) return anime.nameCn!;
@@ -39,8 +49,10 @@ class AnimeCard extends StatelessWidget {
     final infoParts = <String>[
       '${anime.watchedCount}/$total 集',
       if (anime.specialCount > 0) '+${anime.specialCount}SP',
-      if (anime.rating != null) '★${anime.rating!.toStringAsFixed(1)}',
-      if (anime.airWeekday != null) _weekdays[anime.airWeekday!.toInt()],
+      if (showRating && anime.rating != null)
+        '★${anime.rating!.toStringAsFixed(1)}',
+      if (anime.airWeekday case final day? when day >= 1 && day <= 7)
+        _weekdays[day.toInt()],
     ];
 
     // Expressive press feedback: the whole poster card springs down while
@@ -50,6 +62,8 @@ class AnimeCard extends StatelessWidget {
       onTap: onTap,
       spec: KurakoSprings.snappy,
       child: Card(
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
@@ -90,7 +104,7 @@ class AnimeCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                    if (collected != null)
+                    if (showBadge && collected != null)
                       Positioned(
                         top: 8,
                         right: 8,
@@ -108,7 +122,7 @@ class AnimeCard extends StatelessWidget {
                 ),
               ),
               Padding(
-                padding: const EdgeInsets.all(8),
+                padding: const EdgeInsets.all(12),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -129,6 +143,19 @@ class AnimeCard extends StatelessWidget {
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
                     ),
+                    if (showProgress) ...[
+                      const SizedBox(height: 10),
+                      LinearProgressIndicator(
+                        semanticsLabel: '已看 ${anime.watchedCount} 集，共 $total 集',
+                        value: total > 0
+                            ? (anime.watchedCount / total).clamp(0.0, 1.0)
+                            : 0,
+                        minHeight: 4,
+                        borderRadius: BorderRadius.circular(4),
+                        backgroundColor:
+                            theme.colorScheme.surfaceContainerHighest,
+                      ),
+                    ],
                   ],
                 ),
               ),

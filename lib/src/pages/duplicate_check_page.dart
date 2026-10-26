@@ -1,6 +1,9 @@
 import 'dart:async';
 
 import 'package:material_ui/material_ui.dart';
+
+import '../ui/page_components.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../rust/api.dart' as rust;
@@ -35,8 +38,8 @@ class _DuplicateCheckPageState extends ConsumerState<DuplicateCheckPage> {
         .any((task) => task.active);
     return Scaffold(
       appBar: const SysAppBar(title: Text('疑似重复检查')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: KurakoPageList(
+        maxWidth: 840,
         children: [
           Row(
             children: [

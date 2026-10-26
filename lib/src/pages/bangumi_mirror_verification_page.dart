@@ -362,8 +362,10 @@ class _BangumiMirrorVerificationPageState
         ),
         body: Column(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(20),
+              color: Theme.of(context).colorScheme.secondaryContainer,
               child: Text(
                 _imageStage
                     ? '请确认页面能显示封面图片，然后点击“检查并开启”。无需登录账号。'
@@ -371,6 +373,9 @@ class _BangumiMirrorVerificationPageState
                     : '反向代理 API 通常可直接访问，此时无需任何验证。'
                           '若页面显示人机验证，请等待其完成后再点击“检查并继续”。'
                           '\n当前域名：${Uri.parse(_url).host}。API 与图片都须通过应用实际请求才会开启反向代理。',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
               ),
             ),
             if (_loading || _checking) const LinearProgressIndicator(),
