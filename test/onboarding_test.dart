@@ -1,9 +1,14 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:kurako/src/pages/onboarding_page.dart';
+import 'package:kurako/src/services/scan_coordinator.dart';
 import 'package:kurako/src/state/providers.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:kurako/src/ui/theme.dart';
+import 'package:kurako/src/widgets/media_source_manager.dart';
 
 void main() {
   test('only macOS onboarding mentions sandbox authorization', () {
@@ -70,5 +75,43 @@ void main() {
     await notifier.ready;
     expect(notifier.state, OnboardingStatus.required);
     container.dispose();
+  });
+
+  testWidgets('onboarding places media sources before download location', (
+    tester,
+  ) async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('window_manager'),
+          (call) async => false,
+        );
+    tester.view.physicalSize = const Size(390, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          downloadDirProvider.overrideWithBuild((ref, notifier) => ''),
+          foldersProvider.overrideWith((ref) async => const []),
+          libraryMutationBusyProvider.overrideWith(
+            LibraryMutationBusyNotifier.new,
+          ),
+        ],
+        child: MaterialApp(
+          theme: buildKurakoTheme(
+            ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
+            systemFont: true,
+          ),
+          home: const OnboardingPage(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(MediaSourceOnboardingPanel), findsOneWidget);
+    final sources = tester.getTopLeft(find.text('媒体来源').first).dy;
+    final downloads = tester.getTopLeft(find.text('下载位置')).dy;
+    expect(sources, lessThan(downloads));
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 }

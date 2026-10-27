@@ -46,6 +46,7 @@ class _CollectionPageState extends ConsumerState<CollectionPage> {
         extendBodyBehindAppBar: true,
         appBar: ScrollRevealAppBar(
           controller: _reveal,
+          rounded: MediaQuery.sizeOf(context).width >= 640,
           title: const Text('追番'),
           bottom: TabBar(
             indicatorPadding: EdgeInsets.zero,

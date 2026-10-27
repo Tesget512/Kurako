@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:material_ui/material_ui.dart';
+
+import '../ui/cover_hero.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -10,6 +13,7 @@ import '../rust/models.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../ui/page_components.dart';
+import '../ui/menu_item.dart';
 import '../services/external_player.dart';
 import '../services/scan_coordinator.dart';
 import '../services/bangumi_mirror.dart';
@@ -57,12 +61,17 @@ class _DetailPageState extends ConsumerState<DetailPage> {
             .showSnackBar(const SnackBar(content: Text('这条记录对应的单集已不在当前番剧中')));
         return;
       }
+      // Android snapshots the entering route during its transition, so a
+      // scroll made mid-transition stays hidden and then pops in at the end.
+      // Scroll only once the page has landed, on every platform.
+      await _routeEntered();
+      if (!mounted) return;
       final target = _targetKey.currentContext;
-      if (target == null) return;
+      if (target == null || !target.mounted) return;
       await Scrollable.ensureVisible(
         target,
         alignment: 0.3,
-        duration: MediaQuery.disableAnimationsOf(context)
+        duration: MediaQuery.disableAnimationsOf(target)
             ? Duration.zero
             : const Duration(milliseconds: 350),
       );
@@ -71,6 +80,20 @@ class _DetailPageState extends ConsumerState<DetailPage> {
         if (mounted) setState(() => _targetHighlight = false);
       });
     });
+  }
+
+  Future<void> _routeEntered() {
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.isCompleted) return Future.value();
+    final done = Completer<void>();
+    void listener(AnimationStatus status) {
+      if (status.isAnimating) return;
+      animation.removeStatusListener(listener);
+      if (!done.isCompleted) done.complete();
+    }
+
+    animation.addStatusListener(listener);
+    return done.future;
   }
 
   // Whether the header has scrolled far enough to show the toolbar title.
@@ -163,83 +186,102 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                         onClear: () => _clearCollection(context),
                       ),
               ),
-              if (!coverHeaderShowsInlineRating(context))
-                SliverToBoxAdapter(child: CoverRatingSection(anime: anime)),
-              SliverToBoxAdapter(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    CoverHeaderBody(anime: anime),
-                    const SizedBox(height: 16),
-                    Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        adaptiveContentInset(context),
-                        0,
-                        adaptiveContentInset(context),
-                        8,
+              // The pinned app bar handles its own safe area; the scrolled
+              // content keeps clear of the landscape notch / cutout side.
+              SliverPadding(
+                padding: EdgeInsets.only(
+                  left: MediaQuery.paddingOf(context).left,
+                  right: MediaQuery.paddingOf(context).right,
+                ),
+                sliver: SliverMainAxisGroup(
+                  slivers: [
+                    if (!coverHeaderShowsInlineRating(context))
+                      SliverToBoxAdapter(
+                        child: CoverRatingSection(anime: anime),
                       ),
-                      child: KurakoSectionHeading(
-                        title: '选择剧集',
-                        count: episodesAsync.value == null
-                            ? null
-                            : '${episodesAsync.value!.length} 个文件',
+                    SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          CoverHeaderBody(anime: anime),
+                          const SizedBox(height: 16),
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              adaptiveContentInset(context),
+                              0,
+                              adaptiveContentInset(context),
+                              8,
+                            ),
+                            child: KurakoSectionHeading(
+                              title: '选择剧集',
+                              count: episodesAsync.value == null
+                                  ? null
+                                  : '${episodesAsync.value!.length} 个文件',
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    episodesAsync.when(
+                      loading: () => const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Center(child: CircularProgressIndicator()),
+                        ),
+                      ),
+                      error: (e, _) => SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Text('剧集加载失败: $e'),
+                        ),
+                      ),
+                      data: (episodes) {
+                        _consumeNewFilesAfterFirstFrame(episodes);
+                        _locateTarget(episodes);
+                        return SliverToBoxAdapter(
+                          child: _EpisodeList(
+                            targetEpisodeId: widget.initialEpisodeId,
+                            targetKey: _targetKey,
+                            highlightTarget: _targetHighlight,
+                            episodes: episodes,
+                            onPlay: (e) => _play(context, ref, e),
+                            onPlayWith: (e, external) =>
+                                _play(context, ref, e, forceExternal: external),
+                            onDownload: (e) => _downloadEpisode(context, e),
+                            onBlocked: () async {
+                              ref.invalidate(episodesProvider(widget.animeId));
+                              ref.invalidate(
+                                animeDetailProvider(widget.animeId),
+                              );
+                              await _reloadAnimeSnapshot();
+                            },
+                            onRematched: (newAnimeId) async {
+                              // A single file was split into its own (or an
+                              // existing) entry, or detached to 未分类 — refresh
+                              // this list so it drops out, refresh the library, and
+                              // jump to the entry it now belongs to.
+                              ref.invalidate(episodesProvider(widget.animeId));
+                              ref.invalidate(
+                                animeDetailProvider(widget.animeId),
+                              );
+                              ref.invalidate(animeListProvider);
+                              if (newAnimeId == widget.animeId) {
+                                await _reloadAnimeSnapshot();
+                              } else if (context.mounted) {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        DetailPage(animeId: newAnimeId),
+                                  ),
+                                );
+                              }
+                            },
+                          ),
+                        );
+                      },
                     ),
                   ],
                 ),
-              ),
-              episodesAsync.when(
-                loading: () => const SliverToBoxAdapter(
-                  child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Center(child: CircularProgressIndicator()),
-                  ),
-                ),
-                error: (e, _) => SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text('剧集加载失败: $e'),
-                  ),
-                ),
-                data: (episodes) {
-                  _consumeNewFilesAfterFirstFrame(episodes);
-                  _locateTarget(episodes);
-                  return SliverToBoxAdapter(
-                    child: _EpisodeList(
-                      targetEpisodeId: widget.initialEpisodeId,
-                      targetKey: _targetKey,
-                      highlightTarget: _targetHighlight,
-                      episodes: episodes,
-                      onPlay: (e) => _play(context, ref, e),
-                      onPlayWith: (e, external) =>
-                          _play(context, ref, e, forceExternal: external),
-                      onDownload: (e) => _downloadEpisode(context, e),
-                      onBlocked: () async {
-                        ref.invalidate(episodesProvider(widget.animeId));
-                        ref.invalidate(animeDetailProvider(widget.animeId));
-                        await _reloadAnimeSnapshot();
-                      },
-                      onRematched: (newAnimeId) async {
-                        // A single file was split into its own (or an
-                        // existing) entry, or detached to 未分类 — refresh
-                        // this list so it drops out, refresh the library, and
-                        // jump to the entry it now belongs to.
-                        ref.invalidate(episodesProvider(widget.animeId));
-                        ref.invalidate(animeDetailProvider(widget.animeId));
-                        ref.invalidate(animeListProvider);
-                        if (newAnimeId == widget.animeId) {
-                          await _reloadAnimeSnapshot();
-                        } else if (context.mounted) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => DetailPage(animeId: newAnimeId),
-                            ),
-                          );
-                        }
-                      },
-                    ),
-                  );
-                },
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 96)),
             ],
@@ -306,12 +348,15 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       ],
       flexibleSpace: FlexibleSpaceBar(
         collapseMode: CollapseMode.pin,
-        background: CoverHeaderHero(
-          anime: anime,
-          heroTag: widget.coverHeroTag,
-          topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
-          layoutHeight: expandedHeight + MediaQuery.paddingOf(context).top,
-          collectionControl: collectionControl,
+        background: CoverHeroDetailBoundary(
+          top: MediaQuery.paddingOf(context).top + kToolbarHeight,
+          child: CoverHeaderHero(
+            anime: anime,
+            heroTag: widget.coverHeroTag,
+            topInset: MediaQuery.paddingOf(context).top + kToolbarHeight,
+            layoutHeight: expandedHeight + MediaQuery.paddingOf(context).top,
+            collectionControl: collectionControl,
+          ),
         ),
       ),
     );
@@ -889,6 +934,7 @@ class _CollectionRow extends StatelessWidget {
       menuChildren: [
         for (final entry in _items.entries)
           MenuItemButton(
+            style: kurakoMenuItemStyle(context),
             onPressed: current == entry.key ? null : () => onChanged(entry.key),
             leadingIcon: Icon(
               entry.value.$2,
@@ -907,6 +953,7 @@ class _CollectionRow extends StatelessWidget {
         if (isCollected) ...[
           const Divider(),
           MenuItemButton(
+            style: kurakoMenuItemStyle(context),
             onPressed: onClear,
             leadingIcon: const Icon(Icons.bookmark_remove_outlined),
             child: const Text('取消收藏（仅本地）'),
@@ -1180,7 +1227,7 @@ class _EpisodeTile extends ConsumerWidget {
         Offset.zero & overlay.size,
       ),
       items: [
-        const PopupMenuItem(
+        const KurakoPopupMenuItem(
           value: 'internal',
           child: ListTile(
             dense: true,
@@ -1188,7 +1235,7 @@ class _EpisodeTile extends ConsumerWidget {
             title: Text('用内置播放器播放'),
           ),
         ),
-        const PopupMenuItem(
+        const KurakoPopupMenuItem(
           value: 'external',
           child: ListTile(
             dense: true,
@@ -1197,7 +1244,7 @@ class _EpisodeTile extends ConsumerWidget {
           ),
         ),
         if (isPlainLocal && !Platform.isAndroid && !Platform.isIOS)
-          const PopupMenuItem(
+          const KurakoPopupMenuItem(
             value: 'reveal',
             child: ListTile(
               dense: true,
@@ -1214,7 +1261,7 @@ class _EpisodeTile extends ConsumerWidget {
         // gives a clear message instead.
         if ((isPlainLocal || (isRemote && localCopy != null)) &&
             Platform.isAndroid)
-          const PopupMenuItem(
+          const KurakoPopupMenuItem(
             value: 'choose_app',
             child: ListTile(
               dense: true,
@@ -1223,7 +1270,7 @@ class _EpisodeTile extends ConsumerWidget {
             ),
           ),
         if (isRemote && localCopy == null)
-          const PopupMenuItem(
+          const KurakoPopupMenuItem(
             value: 'download',
             child: ListTile(
               dense: true,
@@ -1232,7 +1279,7 @@ class _EpisodeTile extends ConsumerWidget {
             ),
           ),
         if (isRemote && localCopy != null)
-          const PopupMenuItem(
+          const KurakoPopupMenuItem(
             value: 'delete_copy',
             child: ListTile(
               dense: true,
@@ -1241,7 +1288,7 @@ class _EpisodeTile extends ConsumerWidget {
             ),
           ),
         const PopupMenuDivider(),
-        const PopupMenuItem(
+        const KurakoPopupMenuItem(
           value: 'match',
           child: ListTile(
             dense: true,
@@ -1249,7 +1296,7 @@ class _EpisodeTile extends ConsumerWidget {
             title: Text('单独匹配 Bangumi'),
           ),
         ),
-        const PopupMenuItem(
+        const KurakoPopupMenuItem(
           value: 'detach',
           child: ListTile(
             dense: true,
@@ -1257,7 +1304,7 @@ class _EpisodeTile extends ConsumerWidget {
             title: Text('移出此番剧'),
           ),
         ),
-        const PopupMenuItem(
+        const KurakoPopupMenuItem(
           value: 'block',
           child: ListTile(
             dense: true,

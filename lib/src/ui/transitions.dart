@@ -4,14 +4,14 @@ import 'package:material_ui/material_ui.dart';
 
 /// Explicit transitions for every Flutter target platform.
 ///
-/// Flutter 3.44.8 still gives an omitted iOS entry a Cupertino fallback, while
-/// other omitted platforms fall back to Zoom. Keeping the complete map here
-/// preserves iOS behavior and makes the lighter desktop choices explicit.
+/// Keep native back gestures on mobile and lighter desktop transitions.
 const kPageTransitionsTheme = PageTransitionsTheme(
   builders: {
-    // Snapshot complex Flutter pages during the short in-app transition. The
-    // system still owns predictive back when leaving the app for the launcher.
-    TargetPlatform.android: ZoomPageTransitionsBuilder(allowSnapshotting: true),
+    // material_ui 1.8.0 includes flutter/packages#13161: the fallback
+    // FadeForwards transition now snapshots complex routes.
+    TargetPlatform.android: PredictiveBackPageTransitionsBuilder(
+      allowSnapshotting: true,
+    ),
     TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
     TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
     // Desktop has no edge-back gesture. A translation + fade avoids scaling

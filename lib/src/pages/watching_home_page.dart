@@ -95,10 +95,11 @@ class WatchingHomePage extends ConsumerWidget {
               ),
             ),
           for (final module in visible) ...[
-            if (module == HomeModule.resume)
-              const _ResumeSection()
-            else
-              const _WatchingSection(),
+            switch (module) {
+              HomeModule.resume => const _ResumeSection(),
+              HomeModule.watching => const _CollectionSection(wish: false),
+              HomeModule.wish => const _CollectionSection(wish: true),
+            },
             const SizedBox(height: 24),
           ],
         ],
@@ -172,6 +173,10 @@ class _ResumeCard extends ConsumerWidget {
       margin: EdgeInsets.zero,
       elevation: 0,
       child: InkWell(
+        splashFactory: NoSplash.splashFactory,
+        overlayColor: ModalRoute.isCurrentOf(context) == false
+            ? const WidgetStatePropertyAll(Colors.transparent)
+            : null,
         onTap: () => Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => DetailPage(
@@ -286,34 +291,37 @@ class _ResumeCard extends ConsumerWidget {
   }
 }
 
-class _WatchingSection extends ConsumerWidget {
-  const _WatchingSection();
+class _CollectionSection extends ConsumerWidget {
+  const _CollectionSection({required this.wish});
+  final bool wish;
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final appearance = ref.watch(interfacePreferencesProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const KurakoSectionHeading(title: '在看速览'),
+        KurakoSectionHeading(title: wish ? '想看速览' : '在看速览'),
         const SizedBox(height: 12),
         ref
             .watch(animeListProvider)
             .when(
               loading: () => const LinearProgressIndicator(),
               error: (_, _) => ListTile(
-                title: const Text('在看番剧暂时无法加载'),
+                title: Text(wish ? '想看番剧暂时无法加载' : '在看番剧暂时无法加载'),
                 trailing: IconButton(
-                  tooltip: '重试在看速览',
+                  tooltip: wish ? '重试想看速览' : '重试在看速览',
                   onPressed: () => ref.invalidate(animeListProvider),
                   icon: const Icon(Icons.refresh),
                 ),
               ),
               data: (all) {
-                final list = all.where((a) => a.collection == 3).toList();
+                final list = all
+                    .where((a) => a.collection == (wish ? 1 : 3))
+                    .toList();
                 if (list.isEmpty) {
-                  return const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24),
-                    child: Text('还没有在看的番剧'),
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Text(wish ? '还没有想看的番剧' : '还没有在看的番剧'),
                   );
                 }
                 return LayoutBuilder(

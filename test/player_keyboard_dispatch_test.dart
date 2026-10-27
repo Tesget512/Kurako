@@ -27,6 +27,67 @@ class _VideoController implements VideoController {
 
 void main() {
   testWidgets(
+    'repeated vertical drags retain their anchor until fade completes',
+    (tester) async {
+      final player = Player(platformPlayer: _Player());
+      final controller = _VideoController(player);
+      MaterialVerticalGestureIndicatorData? sample;
+      final theme = MaterialVideoControlsThemeData(
+        visibleOnMount: false,
+        volumeGesture: true,
+        brightnessGesture: false,
+        gesturesEnabledWhileControlsVisible: true,
+        controlsTransitionDuration: const Duration(milliseconds: 300),
+        verticalGestureIndicatorBuilder: (_, data) {
+          sample = data;
+          return const SizedBox();
+        },
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MaterialVideoControlsTheme(
+              normal: theme,
+              fullscreen: theme,
+              child: Video(
+                controller: controller,
+                controls: MaterialVideoControls,
+                wakelock: false,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      Future<void> drag(Offset position) async {
+        final gesture = await tester.startGesture(position);
+        await gesture.moveBy(const Offset(0, -30));
+        await tester.pump();
+        await gesture.moveBy(const Offset(0, -25));
+        await tester.pump();
+        await gesture.up();
+        await tester.pump();
+      }
+
+      await drag(const Offset(600, 340));
+      final first = sample!.position;
+      expect(first, isNotNull);
+      await tester.pump(const Duration(milliseconds: 900));
+      await drag(const Offset(680, 400));
+      expect(sample!.position, first);
+      await tester.pump(const Duration(milliseconds: 800));
+      await tester.pump(const Duration(milliseconds: 350));
+      await drag(const Offset(650, 380));
+      expect(sample!.position, isNot(first));
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump(const Duration(seconds: 4));
+      await player.dispose();
+      controller.notifier.dispose();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'custom bindings replace built-ins and remain available when locked',
     (tester) async {
       final native = _Player();

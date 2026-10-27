@@ -1,5 +1,29 @@
 import 'package:material_ui/material_ui.dart';
 
+ButtonStyle kurakoMenuItemStyle(BuildContext context) {
+  final scheme = Theme.of(context).colorScheme;
+  return ButtonStyle(
+    minimumSize: const WidgetStatePropertyAll(Size.fromHeight(48)),
+    padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12)),
+    shape: WidgetStatePropertyAll(
+      RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+    ),
+    backgroundColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.selected)
+          ? scheme.secondaryContainer
+          : null,
+    ),
+    overlayColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.pressed)
+          ? scheme.onSurface.withValues(alpha: 0.12)
+          : states.contains(WidgetState.hovered) ||
+                states.contains(WidgetState.focused)
+          ? scheme.onSurface.withValues(alpha: 0.08)
+          : null,
+    ),
+  );
+}
+
 /// The ink needs its own clipped surface, not just a rounded menu outline.
 class KurakoPopupMenuItem<T> extends PopupMenuItem<T> {
   const KurakoPopupMenuItem({

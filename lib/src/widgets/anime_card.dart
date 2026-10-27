@@ -67,6 +67,12 @@ class AnimeCard extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
+          // Do not bake a pressed ink layer into the outgoing route snapshot.
+          // Hover/focus feedback remains unchanged while this route is current.
+          splashFactory: NoSplash.splashFactory,
+          overlayColor: ModalRoute.isCurrentOf(context) == false
+              ? const WidgetStatePropertyAll(Colors.transparent)
+              : null,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

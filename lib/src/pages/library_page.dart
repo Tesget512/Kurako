@@ -41,6 +41,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
   final _searchFocus = FocusNode();
   final _scrollController = ScrollController();
   double _pullDistance = 0;
+  double _searchScrollDistance = 0;
 
   bool get _searchVisible =>
       _searchExpanded ??
@@ -73,6 +74,19 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
     if (event.metrics.axis != Axis.vertical || event.depth != 0) return false;
     if (event is ScrollStartNotification || event is ScrollEndNotification) {
       _pullDistance = 0;
+      _searchScrollDistance = 0;
+    }
+    if (_searchVisible &&
+        event is ScrollUpdateNotification &&
+        event.dragDetails != null &&
+        event.metrics.pixels > event.metrics.minScrollExtent) {
+      final delta = event.scrollDelta ?? 0;
+      _searchScrollDistance = delta > 0 ? _searchScrollDistance + delta : 0;
+      if (_searchScrollDistance >= 32) {
+        _searchFocus.unfocus();
+        setState(() => _searchExpanded = false);
+        _searchScrollDistance = 0;
+      }
     }
     if (!_searchVisible) {
       if (event is OverscrollNotification &&
@@ -136,6 +150,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
       appBar: ScrollRevealAppBar(
         controller: _reveal,
         title: const Text('番剧库'),
+        rounded: MediaQuery.sizeOf(context).width >= 640,
         // The inline scan row cannot float over artwork.
         opaque: scanning,
         bottom: scanning
@@ -504,7 +519,7 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
         overlay.size.height - position.dy,
       ),
       items: const [
-        PopupMenuItem(
+        KurakoPopupMenuItem(
           value: 'block',
           child: ListTile(
             leading: Icon(Icons.block_outlined),

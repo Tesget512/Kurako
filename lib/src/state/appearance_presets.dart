@@ -24,6 +24,11 @@ const appearanceDefaults = <String, Object>{
   playerVolumeColorKey: defaultPlayerVolumeColor,
 };
 
+Map<String, Object> currentAppearanceDefaults() => {
+  ...appearanceDefaults,
+  'use_system_font': true,
+};
+
 bool _validValue(String key, Object? value) {
   if (appearanceDefaults[key] is bool) return value is bool;
   return switch (key) {
@@ -144,7 +149,7 @@ class AppearancePresetsNotifier extends Notifier<List<AppearancePreset>> {
         }
         if (index >= 0 && !replace) throw const FormatException('已存在同名预设');
         final values = <String, Object>{
-          for (final e in appearanceDefaults.entries)
+          for (final e in currentAppearanceDefaults().entries)
             e.key: _validValue(e.key, prefs.get(e.key))
                 ? prefs.get(e.key)!
                 : e.value,
@@ -172,7 +177,7 @@ class AppearancePresetsNotifier extends Notifier<List<AppearancePreset>> {
     (prefs) => _apply(prefs, state.firstWhere((p) => p.name == name).values),
   );
   Future<void> resetAppearance() =>
-      _queue((prefs) => _apply(prefs, appearanceDefaults));
+      _queue((prefs) => _apply(prefs, currentAppearanceDefaults()));
   Future<void> _apply(
     SharedPreferences prefs,
     Map<String, Object> values,

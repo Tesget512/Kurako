@@ -82,7 +82,7 @@ void main() {
     expect(screenshot.center.dx, lock.center.dx);
     expect(screenshot.bottom, lessThan(lock.top));
     expect((screenshot.top + lock.bottom) / 2, closeTo(300, 1));
-    expect(lock.right, lessThanOrEqualTo(780));
+    expect(lock.right, closeTo(784, 0.1));
     await tester.tap(find.byTooltip('截取当前画面'));
     await tester.tap(find.byTooltip('锁定播放器'));
     expect(screenshots, 1);

@@ -7,11 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/external_player.dart';
 import '../services/mac_player_picker.dart';
 import '../services/decoder_policy.dart';
-import '../ui/choice_menu.dart';
-import 'keyboard_settings_page.dart';
+import 'decoder_settings_page.dart';
 import '../state/providers.dart';
 import '../ui/grouped_card.dart';
 import '../ui/page_components.dart';
+import '../ui/segmented_control.dart';
 import '../widgets/settings_scaffold.dart';
 
 class PlayerSettingsPage extends ConsumerWidget {
@@ -126,22 +126,27 @@ class PlayerSettingsPage extends ConsumerWidget {
           SettingsGroupCard(
             title: '解码与画质',
             children: [
-              _decodeMode(context, ref),
-              _superResolution(context, ref, settings),
-            ],
-          ),
-          SettingsGroupCard(
-            children: [
-              ListTile(
-                leading: const Icon(Icons.keyboard_outlined),
-                title: const Text('键盘快捷键'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const KeyboardSettingsPage(),
+              ValueListenableBuilder<String?>(
+                valueListenable: DecoderSettingsPage.runtimeHwdec,
+                builder: (context, runtimeHwdec, _) => ListTile(
+                  leading: const Icon(Icons.memory_outlined),
+                  title: const Text('视频解码器'),
+                  subtitle: Text(
+                    decoderSelectionSummary(
+                      ref.watch(decodeModeProvider),
+                      currentDecoderPlatform(),
+                      runtimeHwdec: runtimeHwdec,
+                    ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const DecoderSettingsPage(),
+                    ),
                   ),
                 ),
               ),
+              _superResolution(context, ref, settings),
             ],
           ),
           if (Platform.isAndroid || Platform.isIOS)
@@ -230,49 +235,6 @@ class PlayerSettingsPage extends ConsumerWidget {
     ),
   );
 
-  static Widget _decodeMode(BuildContext context, WidgetRef ref) {
-    final mode = ref.watch(decodeModeProvider);
-    final platform = Theme.of(context).platform;
-    final selected = effectiveDecoder(mode, platform);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Expanded(child: Text('视频解码器')),
-              Flexible(
-                child: ChoiceMenu<String>(
-                  value: selected,
-                  choices: decoderChoices(platform),
-                  onSelected: (value) async {
-                    try {
-                      await ref.read(decodeModeProvider.notifier).set(value);
-                    } catch (_) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('解码设置未能保存，请重试')),
-                        );
-                      }
-                    }
-                  },
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          Text(
-            mode != selected && mode != 'hw' ? '此设备不支持已保存的解码方式，当前使用自动选择。' : '自动根据平台、驱动与视频格式选择兼容硬解，不可用时回退软件解码。手动选择受驱动与播放器构建支持限制；重新打开播放器生效。',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   static Widget _superResolution(
     BuildContext context,
     WidgetRef ref,
@@ -290,16 +252,15 @@ class PlayerSettingsPage extends ConsumerWidget {
               ?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
         ),
         const SizedBox(height: 8),
-        SegmentedButton<String>(
+        KurakoSegmentedControl<String>(
+          value: settings.superResolutionMode,
           segments: const [
-            ButtonSegment(value: 'off', label: Text('关闭')),
-            ButtonSegment(value: 'anime4k-light', label: Text('轻度')),
-            ButtonSegment(value: 'anime4k-balanced', label: Text('标准')),
+            KurakoSegment(value: 'off', label: '关闭'),
+            KurakoSegment(value: 'anime4k-light', label: '轻度'),
+            KurakoSegment(value: 'anime4k-balanced', label: '标准'),
           ],
-          selected: {settings.superResolutionMode},
-          onSelectionChanged: (selection) => ref
-              .read(settingsProvider.notifier)
-              .setSuperResolutionMode(selection.first),
+          onChanged: (mode) =>
+              ref.read(settingsProvider.notifier).setSuperResolutionMode(mode),
         ),
       ],
     ),

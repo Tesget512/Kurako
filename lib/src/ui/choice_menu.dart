@@ -1,5 +1,7 @@
 import 'package:material_ui/material_ui.dart';
 
+import 'menu_item.dart';
+
 class ChoiceMenu<T> extends StatelessWidget {
   const ChoiceMenu({
     super.key,
@@ -26,6 +28,7 @@ class ChoiceMenu<T> extends StatelessWidget {
     menuChildren: [
       for (final entry in choices.entries)
         MenuItemButton(
+          style: kurakoMenuItemStyle(context),
           leadingIcon: Icon(value == entry.key ? Icons.check : null, size: 20),
           onPressed: () => onSelected(entry.key),
           child: Text(entry.value),

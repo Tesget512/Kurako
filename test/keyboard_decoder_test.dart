@@ -37,9 +37,10 @@ void main() {
           expect(validDecoderPreference(choice), isTrue);
           final config = decoderConfiguration(choice, platform);
           if (platform == TargetPlatform.linux) {
-            expect(config.enableHardwareAcceleration, isFalse);
             expect(
-              config.hwdec == 'no' || config.hwdec!.endsWith('copy'),
+              config.hwdec == 'no' ||
+                  config.hwdec!.endsWith('copy') ||
+                  choice == 'drm',
               isTrue,
             );
           }
@@ -50,6 +51,82 @@ void main() {
       expect(validDecoderPreference('untrusted-option'), isFalse);
     },
   );
+
+  test('decoder menu exposes automatic variants and platform explanation', () {
+    for (final platform in TargetPlatform.values) {
+      final choices = decoderChoices(platform);
+      expect(
+        choices.keys,
+        containsAll(['auto', 'auto-safe', 'auto-copy', 'sw']),
+      );
+      expect(decoderPlatformLabel(platform), isNotEmpty);
+    }
+    expect(decoderChoices(TargetPlatform.macOS), contains('videotoolbox-copy'));
+    expect(decoderChoices(TargetPlatform.windows), contains('nvdec-copy'));
+    expect(
+      decoderConfiguration('auto-copy', TargetPlatform.macOS).hwdec,
+      'auto-copy',
+    );
+  });
+
+  test('automatic decoder label reports the runtime backend', () {
+    expect(
+      decoderSelectionSummary(
+        'auto',
+        TargetPlatform.macOS,
+        runtimeHwdec: 'videotoolbox',
+      ),
+      '自动：「VideoToolbox」',
+    );
+    expect(
+      decoderSelectionSummary(
+        'auto-safe',
+        TargetPlatform.windows,
+        runtimeHwdec: 'd3d11va',
+      ),
+      '自动：「D3D11VA」',
+    );
+    expect(
+      decoderSelectionSummary('auto', TargetPlatform.macOS, runtimeHwdec: 'no'),
+      '自动：「软件解码」',
+    );
+    expect(
+      decoderSelectionSummary('auto', TargetPlatform.macOS, runtimeHwdec: null),
+      '自动：尚未播放视频',
+    );
+  });
+
+  test('decoder choices only advertise hardware that can apply here', () {
+    final macBeforePlayback = availableDecoderChoices(
+      TargetPlatform.macOS,
+      runtimeHwdec: null,
+    );
+    expect(macBeforePlayback, contains('videotoolbox'));
+    expect(macBeforePlayback, isNot(contains('nvdec')));
+    expect(macBeforePlayback, isNot(contains('cuda')));
+
+    final windowsAmd = availableDecoderChoices(
+      TargetPlatform.windows,
+      runtimeHwdec: 'd3d11va',
+    );
+    expect(windowsAmd, contains('d3d11va'));
+    expect(windowsAmd, isNot(contains('nvdec')));
+    expect(windowsAmd, isNot(contains('cuda')));
+
+    final windowsNvidia = availableDecoderChoices(
+      TargetPlatform.windows,
+      runtimeHwdec: 'nvdec',
+    );
+    expect(windowsNvidia, contains('nvdec'));
+    expect(windowsNvidia, contains('nvdec-copy'));
+
+    final linuxNvidia = availableDecoderChoices(
+      TargetPlatform.linux,
+      runtimeHwdec: 'nvdec',
+    );
+    expect(linuxNvidia, contains('nvdec-copy'));
+    expect(linuxNvidia, isNot(contains('vaapi')));
+  });
 
   test('bindings reject conflicts reserved keys and malformed backups', () {
     final prefs = KeyboardPreferences();

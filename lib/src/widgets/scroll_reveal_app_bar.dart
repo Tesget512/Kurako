@@ -41,10 +41,11 @@ class ScrollRevealController extends ValueNotifier<double> {
   /// nesting depth matters on the collection page: its `TabBarView` is a
   /// horizontal `PageView`, so each tab's grid sits one level deeper — a depth
   /// check would silently ignore the only vertical list there.
-  void update(ScrollMetrics metrics) {
+  void update(ScrollMetrics metrics, {double? revealAfter}) {
     if (metrics.axis != Axis.vertical) return;
+    final gap = revealAfter ?? leadingGap;
     final next = scrollRevealProgress(
-      offset: metrics.pixels - leadingGap,
+      offset: metrics.pixels - gap,
       distance: distance,
     );
     if (next != value) value = next;
@@ -70,6 +71,8 @@ class ScrollRevealListener extends StatelessWidget {
         // position after a fling settles, so both keep the bar in sync.
         if (notification is ScrollUpdateNotification ||
             notification is ScrollStartNotification) {
+          // Body padding already places content below the toolbar. Once that
+          // leading gap is consumed, artwork is entering the toolbar itself.
           controller.update(notification.metrics);
         }
         return false;
@@ -99,6 +102,7 @@ class ScrollRevealAppBar extends StatelessWidget
     this.leading,
     this.bottom,
     this.opaque = false,
+    this.rounded = true,
     this.automaticallyImplyLeading = true,
     this.flexibleSpace,
   });
@@ -116,6 +120,7 @@ class ScrollRevealAppBar extends StatelessWidget
   /// inline scan progress row lives in [bottom] and would otherwise float on
   /// top of the covers.
   final bool opaque;
+  final bool rounded;
   final bool automaticallyImplyLeading;
 
   @override
@@ -147,8 +152,10 @@ class ScrollRevealAppBar extends StatelessWidget
           backgroundColor: background.withValues(alpha: progress),
           // Keep the reveal tone-based; a line would read as a second mask over
           // cover art instead of as the surface settling into place.
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: rounded
+                ? const BorderRadius.vertical(top: Radius.circular(20))
+                : BorderRadius.zero,
           ),
           clipBehavior: Clip.antiAlias,
         );

@@ -6,6 +6,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../services/security_scope.dart';
 import '../state/providers.dart';
+import '../ui/page_components.dart';
+import '../ui/settings_pane_scope.dart';
+import '../widgets/media_source_manager.dart';
+import '../widgets/settings_scaffold.dart';
 import '../widgets/window_caption.dart';
 
 enum OnboardingPlatform { macos, windows, linux, ios, android, other }
@@ -50,8 +54,8 @@ OnboardingCopy onboardingCopyFor(
   return switch (platform) {
     OnboardingPlatform.macos => const OnboardingCopy(
       intro:
-          '先确认下载位置。在 macOS 上，这一步会记住该文件夹的安全书签，'
-          '否则应用重启后无法写入下载。',
+          '先连接番剧所在的媒体来源，再确认下载位置。在 macOS 上，'
+          '下载文件夹会保存安全书签，否则应用重启后无法写入下载。',
       chooseFolderLabel: '选择文件夹并授权',
       savedMessage: '下载位置已设置，应用已记住该文件夹的访问权限。',
       locationDescription: null,
@@ -59,14 +63,14 @@ OnboardingCopy onboardingCopyFor(
     ),
     OnboardingPlatform.windows ||
     OnboardingPlatform.linux => const OnboardingCopy(
-      intro: '先确认视频下载保存的位置，之后也可以随时修改。',
+      intro: '先连接番剧所在的媒体来源，再确认视频下载保存的位置；之后也可以随时修改。',
       chooseFolderLabel: '选择文件夹',
       savedMessage: '下载位置已设置。',
       locationDescription: null,
       accessSummary: '重新确认默认下载位置',
     ),
     OnboardingPlatform.ios => const OnboardingCopy(
-      intro: '视频会保存在“文件”App 中可见的 Kurako Downloads 文件夹。',
+      intro: '先连接番剧所在的媒体来源。视频会保存在“文件”App 中可见的 Kurako Downloads 文件夹。',
       chooseFolderLabel: null,
       savedMessage: '下载位置已设置。',
       locationDescription: 'Kurako Downloads（文件 App）',
@@ -74,8 +78,8 @@ OnboardingCopy onboardingCopyFor(
     ),
     OnboardingPlatform.android => OnboardingCopy(
       intro: androidLegacy
-          ? 'Android 8–9 会把视频保存在应用私有下载目录，不需要额外存储权限。'
-          : '视频会下载到系统 Download/Kurako 目录，不需要额外存储权限。',
+          ? '先连接番剧所在的媒体来源。Android 8–9 会把视频保存在应用私有下载目录，不需要额外存储权限。'
+          : '先连接番剧所在的媒体来源。视频会下载到系统 Download/Kurako 目录，不需要额外存储权限。',
       chooseFolderLabel: null,
       savedMessage: '下载位置已设置。',
       locationDescription: androidLegacy
@@ -84,7 +88,7 @@ OnboardingCopy onboardingCopyFor(
       accessSummary: androidLegacy ? '应用私有下载位置' : 'Download/Kurako',
     ),
     OnboardingPlatform.other => const OnboardingCopy(
-      intro: '先确认视频下载保存的位置，之后也可以随时修改。',
+      intro: '先连接番剧所在的媒体来源，再确认视频下载保存的位置；之后也可以随时修改。',
       chooseFolderLabel: '选择文件夹',
       savedMessage: '下载位置已设置。',
       locationDescription: null,
@@ -100,11 +104,16 @@ OnboardingCopy onboardingCopyFor(
 /// here is what creates that bookmark, so downloads cannot silently fail on
 /// the next launch. The same screen is reachable again from Maintenance.
 class OnboardingPage extends ConsumerStatefulWidget {
-  const OnboardingPage({super.key, this.standalone = false});
+  const OnboardingPage({
+    super.key,
+    this.standalone = false,
+    this.embedded = false,
+  });
 
   /// True when opened as a normal route (from Maintenance) instead of the
   /// first-run gate, which controls whether closing is allowed.
   final bool standalone;
+  final bool embedded;
 
   @override
   ConsumerState<OnboardingPage> createState() => _OnboardingPageState();
@@ -172,120 +181,138 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
       currentOnboardingPlatform(),
       androidLegacy: androidUsesLegacyPrivateStorage,
     );
+    final embedded = widget.embedded || SettingsPaneScope.of(context);
+    if (embedded) {
+      return SettingsScaffold(
+        title: '初始设置',
+        embedded: true,
+        body: _content(context, theme, copy, downloadDir, embedded: true),
+      );
+    }
     return Scaffold(
       body: Column(
         children: [
           WindowCaption(title: widget.standalone ? '初始设置' : '欢迎使用 Kurako'),
           Expanded(
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Center(
-                        child: Image(
-                          image: AssetImage('assets/images/kurako_icon.png'),
-                          width: 96,
-                          height: 96,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        widget.standalone ? '初始设置' : '欢迎使用 Kurako',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.headlineLarge?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        copy.intro,
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-                      Card(
-                        color: theme.colorScheme.secondaryContainer,
-                        elevation: 0,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('下载位置', style: theme.textTheme.titleSmall),
-                              const SizedBox(height: 6),
-                              SelectableText(
-                                copy.locationDescription ?? downloadDir,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                              const SizedBox(height: 12),
-                              if (copy.chooseFolderLabel case final label?)
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: FilledButton.tonalIcon(
-                                    onPressed: _busy
-                                        ? null
-                                        : _pickDownloadFolder,
-                                    icon: const Icon(
-                                      Icons.folder_open,
-                                      size: 18,
-                                    ),
-                                    label: Text(label),
-                                  ),
-                                ),
-                              if (_message != null) ...[
-                                const SizedBox(height: 12),
-                                Text(
-                                  _message!,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.primary,
-                                  ),
-                                ),
-                              ],
-                              if (_error != null) ...[
-                                const SizedBox(height: 12),
-                                Text(
-                                  _error!,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.error,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Text(
-                        '之后也可以在「维护」中重新进入此页面调整。',
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(height: 24),
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
-                        ),
-                        onPressed: _busy ? null : _finish,
-                        icon: const Icon(Icons.arrow_forward_rounded),
-                        label: Text(widget.standalone ? '完成' : '开始使用'),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+            child: _content(context, theme, copy, downloadDir, embedded: false),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _content(
+    BuildContext context,
+    ThemeData theme,
+    OnboardingCopy copy,
+    String downloadDir, {
+    required bool embedded,
+  }) {
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Center(
+          child: Image(
+            image: AssetImage('assets/images/kurako_icon.png'),
+            width: 96,
+            height: 96,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          widget.standalone ? '初始设置' : '欢迎使用 Kurako',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.headlineLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          copy.intro,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 24),
+        const MediaSourceOnboardingPanel(),
+        const SizedBox(height: 12),
+        Card(
+          color: theme.colorScheme.secondaryContainer,
+          elevation: 0,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('下载位置', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 6),
+                SelectableText(
+                  copy.locationDescription ?? downloadDir,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (copy.chooseFolderLabel case final label?)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: FilledButton.tonalIcon(
+                      onPressed: _busy ? null : _pickDownloadFolder,
+                      icon: const Icon(Icons.folder_open, size: 18),
+                      label: Text(label),
+                    ),
+                  ),
+                if (_message != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _message!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                ],
+                if (_error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(
+                    _error!,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          '之后也可以在「维护」中重新进入此页面调整。',
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(56)),
+          onPressed: _busy ? null : _finish,
+          icon: const Icon(Icons.arrow_forward_rounded),
+          label: Text(widget.standalone ? '完成' : '开始使用'),
+        ),
+      ],
+    );
+    final constrained = ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 560),
+      child: content,
+    );
+    if (embedded) {
+      return KurakoPageList(maxWidth: 560, children: [constrained]);
+    }
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+        child: Align(alignment: Alignment.topCenter, child: constrained),
       ),
     );
   }

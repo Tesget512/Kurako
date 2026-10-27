@@ -21,8 +21,7 @@ String _titleOf(Anime a) {
 double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
   if (coverHeaderUsesNarrowLayout(context)) {
     const coverHeight = 152.0 * 214 / 150;
-    final contentWidth =
-        MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+    final contentWidth = adaptiveContentWidth(context);
     final theme = Theme.of(context);
     final textScaler = MediaQuery.textScalerOf(context);
     double measuredHeight(String text, TextStyle? style, int maxLines) {
@@ -66,8 +65,7 @@ double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
   }
   final coverWidth = useCustomCaption ? 196.0 : 168.0;
   final coverHeight = coverWidth * 214 / 150;
-  final contentWidth =
-      MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  final contentWidth = adaptiveContentWidth(context);
   final histogramWidth =
       _histogramCounts(anime) != null && coverHeaderShowsInlineRating(context)
       ? (useCustomCaption ? 360.0 : 320.0) + 16
@@ -184,8 +182,7 @@ double _coverFactsHeight(
 }
 
 bool coverHeaderShowsInlineRating(BuildContext context) {
-  final contentWidth =
-      MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  final contentWidth = adaptiveContentWidth(context);
   final coverWidth = useCustomCaption ? 196.0 : 168.0;
   final chartWidth = useCustomCaption ? 360.0 : 320.0;
   final minimumFactsWidth = MediaQuery.textScalerOf(context).scale(260);
@@ -193,8 +190,7 @@ bool coverHeaderShowsInlineRating(BuildContext context) {
 }
 
 bool coverHeaderUsesNarrowLayout(BuildContext context) {
-  final contentWidth =
-      MediaQuery.sizeOf(context).width - adaptiveContentInset(context) * 2;
+  final contentWidth = adaptiveContentWidth(context);
   return contentWidth < 560;
 }
 
@@ -221,6 +217,9 @@ class CoverHeaderHero extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final inset = adaptiveContentInset(context);
+    // The blurred backdrop stays full-bleed; only content avoids the
+    // landscape notch / cutout side.
+    final safe = MediaQuery.paddingOf(context);
     return LayoutBuilder(
       builder: (context, constraints) {
         final contentHeight = layoutHeight ?? constraints.maxHeight;
@@ -237,8 +236,8 @@ class CoverHeaderHero extends StatelessWidget {
                 Padding(
                   padding: EdgeInsets.only(
                     top: topInset + 8,
-                    left: inset,
-                    right: inset,
+                    left: inset + safe.left,
+                    right: inset + safe.right,
                     bottom: 8,
                   ),
                   child: _HeaderCard(

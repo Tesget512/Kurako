@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
 import 'package:kurako/src/widgets/settings_scaffold.dart';
 import 'package:kurako/src/widgets/scroll_reveal_app_bar.dart';
+import 'package:kurako/src/ui/settings_pane_scope.dart';
+import 'package:kurako/src/ui/page_components.dart';
 
 void main() {
   group('scrollRevealProgress', () {
@@ -205,6 +207,124 @@ void main() {
     scroll.jumpTo(0);
     await tester.pump();
     expect(controller.value, 0);
+  });
+
+  testWidgets('reveal protects the toolbar before content reaches its title', (
+    tester,
+  ) async {
+    final controller = ScrollRevealController(leadingGap: 8);
+    addTearDown(controller.dispose);
+    final scroll = ScrollController();
+    addTearDown(scroll.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(padding: EdgeInsets.only(top: 64)),
+          child: Scaffold(
+            extendBodyBehindAppBar: true,
+            appBar: AppBar(title: const Text('首页')),
+            body: ScrollRevealListener(
+              controller: controller,
+              child: ListView.builder(
+                controller: scroll,
+                padding: const EdgeInsets.only(top: 72),
+                itemCount: 20,
+                itemBuilder: (_, i) => SizedBox(height: 80, child: Text('$i')),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    scroll.jumpTo(8);
+    await tester.pump();
+    expect(controller.value, 0);
+    scroll.jumpTo(24);
+    await tester.pump();
+    expect(controller.value, 0.5);
+    scroll.jumpTo(40);
+    await tester.pump();
+    expect(controller.value, 1);
+    scroll.jumpTo(-20);
+    await tester.pump();
+    expect(controller.value, 0);
+  });
+
+  testWidgets('revealed surface can round its top edge into the page frame', (
+    tester,
+  ) async {
+    final controller = ScrollRevealController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          appBar: ScrollRevealAppBar(
+            controller: controller,
+            title: const Text('首页'),
+          ),
+        ),
+      ),
+    );
+    final shape =
+        tester.widget<AppBar>(find.byType(AppBar)).shape!
+            as RoundedRectangleBorder;
+    final radius = shape.borderRadius as BorderRadius;
+    expect(radius.topLeft.x, 20);
+    expect(radius.topRight.x, 20);
+    expect(radius.bottomLeft, Radius.zero);
+    expect(radius.bottomRight, Radius.zero);
+  });
+
+  testWidgets('settings surfaces avoid floating rounded corners', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
+          useMaterial3: true,
+        ),
+        home: const SettingsPaneScope(
+          child: SettingsScaffold(
+            title: '外观设置',
+            embedded: true,
+            body: SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+    final shape =
+        tester.widget<AppBar>(find.byType(AppBar)).shape!
+            as RoundedRectangleBorder;
+    expect(shape.borderRadius, BorderRadius.zero);
+  });
+
+  testWidgets('embedded settings content clears the rounded app bar corners', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF6750A4)),
+          useMaterial3: true,
+        ),
+        home: const MediaQuery(
+          data: MediaQueryData(padding: EdgeInsets.only(top: 64)),
+          child: SettingsPaneScope(
+            child: SettingsScaffold(
+              title: '播放器设置',
+              embedded: true,
+              body: KurakoPageList(children: [Text('播放行为')]),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.text('播放行为')).dx, greaterThanOrEqualTo(28));
+    expect(tester.getTopLeft(find.text('播放器设置')).dx, greaterThanOrEqualTo(12));
   });
 }
 

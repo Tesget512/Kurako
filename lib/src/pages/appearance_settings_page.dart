@@ -9,6 +9,8 @@ import '../ui/grouped_card.dart';
 import '../ui/page_components.dart';
 import '../ui/app_viewport.dart';
 import '../state/player_appearance.dart';
+import '../ui/spring.dart';
+import '../ui/segmented_control.dart';
 import '../widgets/settings_scaffold.dart';
 import 'appearance_presets_page.dart';
 import 'home_settings_page.dart';
@@ -58,27 +60,27 @@ class AppearanceSettingsPage extends ConsumerWidget {
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: SegmentedButton<AppThemeMode>(
+                child: KurakoSegmentedControl<AppThemeMode>(
+                  value: theme.mode,
                   segments: const [
-                    ButtonSegment(
+                    KurakoSegment(
                       value: AppThemeMode.system,
-                      icon: Icon(Icons.brightness_auto_outlined),
-                      label: Text('跟随系统'),
+                      icon: Icons.brightness_auto_outlined,
+                      label: '跟随系统',
                     ),
-                    ButtonSegment(
+                    KurakoSegment(
                       value: AppThemeMode.light,
-                      icon: Icon(Icons.light_mode_outlined),
-                      label: Text('浅色'),
+                      icon: Icons.light_mode_outlined,
+                      label: '浅色',
                     ),
-                    ButtonSegment(
+                    KurakoSegment(
                       value: AppThemeMode.dark,
-                      icon: Icon(Icons.dark_mode_outlined),
-                      label: Text('深色'),
+                      icon: Icons.dark_mode_outlined,
+                      label: '深色',
                     ),
                   ],
-                  selected: {theme.mode},
-                  onSelectionChanged: (selection) =>
-                      ref.read(themeProvider.notifier).setMode(selection.first),
+                  onChanged: (mode) =>
+                      ref.read(themeProvider.notifier).setMode(mode),
                 ),
               ),
               if (Platform.isAndroid)
@@ -137,27 +139,16 @@ class AppearanceSettingsPage extends ConsumerWidget {
                   children: [
                     const Text('海报尺寸'),
                     const SizedBox(height: 12),
-                    SegmentedButton<PosterSize>(
+                    KurakoSegmentedControl<PosterSize>(
+                      value: ref.watch(interfacePreferencesProvider).posterSize,
                       segments: const [
-                        ButtonSegment(
-                          value: PosterSize.compact,
-                          label: Text('紧凑'),
-                        ),
-                        ButtonSegment(
-                          value: PosterSize.standard,
-                          label: Text('标准'),
-                        ),
-                        ButtonSegment(
-                          value: PosterSize.large,
-                          label: Text('宽大'),
-                        ),
+                        KurakoSegment(value: PosterSize.compact, label: '紧凑'),
+                        KurakoSegment(value: PosterSize.standard, label: '标准'),
+                        KurakoSegment(value: PosterSize.large, label: '宽大'),
                       ],
-                      selected: {
-                        ref.watch(interfacePreferencesProvider).posterSize,
-                      },
-                      onSelectionChanged: (values) => ref
+                      onChanged: (size) => ref
                           .read(interfacePreferencesProvider.notifier)
-                          .setPosterSize(values.first),
+                          .setPosterSize(size),
                     ),
                   ],
                 ),
@@ -166,12 +157,21 @@ class AppearanceSettingsPage extends ConsumerWidget {
           ),
           SettingsGroupCard(
             title: '播放器指示条颜色',
+            dividers: false,
             children: [
               _option(
                 ref,
                 InterfaceOption.playerSideTools,
                 '显示播放器侧边快捷按钮',
                 subtitle: '截图与锁定；关闭后仍可从播放设置进入',
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+                child: Text(
+                  '播放器手势外观',
+                  style: Theme.of(context).textTheme.titleSmall
+                      ?.copyWith(color: Theme.of(context).colorScheme.primary),
+                ),
               ),
               const _PlayerGestureColors(),
             ],
@@ -192,11 +192,11 @@ class AppearanceSettingsPage extends ConsumerWidget {
               ),
               Consumer(
                 builder: (context, ref, _) => SwitchListTile(
-                  title: const Text('使用系统默认字体'),
-                  subtitle: const Text('关闭则使用软件内置的霞鹜文楷屏幕字体'),
-                  value: ref.watch(useSystemFontProvider),
+                  title: const Text('使用霞鹜文楷屏幕字体'),
+                  subtitle: const Text('关闭则使用系统默认字体'),
+                  value: !ref.watch(useSystemFontProvider),
                   onChanged: (value) =>
-                      ref.read(useSystemFontProvider.notifier).set(value),
+                      ref.read(useSystemFontProvider.notifier).set(!value),
                 ),
               ),
               // Desktop only: window geometry restore (hidden on mobile).
@@ -223,14 +223,49 @@ class AppearanceSettingsPage extends ConsumerWidget {
     InterfaceOption option,
     String title, {
     String? subtitle,
-  }) => SwitchListTile(
-    title: Text(title),
-    subtitle: subtitle == null ? null : Text(subtitle),
-    value: ref.watch(interfacePreferencesProvider).enabled(option),
-    onChanged: (value) => ref
-        .read(interfacePreferencesProvider.notifier)
-        .setOption(option, value),
-  );
+  }) {
+    final value = ref.watch(interfacePreferencesProvider).enabled(option);
+    return _AnimatedOptionSelection(
+      selected: value,
+      child: SwitchListTile(
+        title: Text(title),
+        subtitle: subtitle == null ? null : Text(subtitle),
+        value: value,
+        onChanged: (value) => ref
+            .read(interfacePreferencesProvider.notifier)
+            .setOption(option, value),
+      ),
+    );
+  }
+}
+
+/// Selection transitions share the effects spring so colour changes never
+/// overshoot and reduced-motion users see the final state immediately.
+class _AnimatedOptionSelection extends StatelessWidget {
+  const _AnimatedOptionSelection({required this.selected, required this.child});
+
+  final bool selected;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: selected ? 1 : 0),
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : KurakoSprings.effectsFast.settleDuration,
+      curve: KurakoSprings.effectsFast.curve,
+      builder: (context, value, child) => Material(
+        color: scheme.surfaceContainer.withValues(alpha: 0.12 * value),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        clipBehavior: Clip.antiAlias,
+        child: child,
+      ),
+      child: child,
+    );
+  }
 }
 
 class _UiScaleControl extends ConsumerWidget {
@@ -439,14 +474,10 @@ class _PlayerGestureColors extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16),
-          child: Text('播放器手势外观'),
-        ),
         tile(true, appearance.brightness),
         tile(false, appearance.volume),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: TextButton(
             onPressed: () async {
               final notifier = ref.read(playerAppearanceProvider.notifier);

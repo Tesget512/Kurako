@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../state/appearance_presets.dart';
 import '../state/providers.dart';
+import '../ui/menu_item.dart';
 import '../ui/page_components.dart';
 import '../widgets/settings_scaffold.dart';
 
@@ -151,6 +152,8 @@ class _AppearancePresetsPageState extends ConsumerState<AppearancePresetsPage> {
                           PopupMenuButton<String>(
                             enabled: !_busy,
                             tooltip: '管理预设',
+                            menuPadding: const EdgeInsets.all(8),
+                            borderRadius: BorderRadius.circular(20),
                             onSelected: (action) async {
                               if (action == 'rename') {
                                 final name = await _name(current: preset.name);
@@ -180,15 +183,18 @@ class _AppearancePresetsPageState extends ConsumerState<AppearancePresetsPage> {
                               }
                             },
                             itemBuilder: (_) => const [
-                              PopupMenuItem(
+                              KurakoPopupMenuItem(
                                 value: 'update',
                                 child: Text('用当前外观更新'),
                               ),
-                              PopupMenuItem(
+                              KurakoPopupMenuItem(
                                 value: 'rename',
                                 child: Text('重命名'),
                               ),
-                              PopupMenuItem(value: 'delete', child: Text('删除')),
+                              KurakoPopupMenuItem(
+                                value: 'delete',
+                                child: Text('删除'),
+                              ),
                             ],
                           ),
                         ],

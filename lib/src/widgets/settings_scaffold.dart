@@ -37,6 +37,7 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
       extendBodyBehindAppBar: true,
       appBar: ScrollRevealAppBar(
         controller: _reveal,
+        rounded: !embedded,
         title: embedded
             ? Text(widget.title)
             : WindowDragArea(child: Text(widget.title)),
@@ -48,7 +49,12 @@ class _SettingsScaffoldState extends State<SettingsScaffold> {
             (SettingsPaneScope.of(context) && Navigator.of(context).canPop()),
         actions: [...widget.actions, if (!embedded) const WindowButtons()],
       ),
-      body: ScrollRevealListener(controller: _reveal, child: widget.body),
+      body: Padding(
+        padding: embedded
+            ? const EdgeInsets.symmetric(horizontal: 8)
+            : EdgeInsets.zero,
+        child: ScrollRevealListener(controller: _reveal, child: widget.body),
+      ),
     );
   }
 }

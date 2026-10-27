@@ -22,7 +22,9 @@ import 'preferences_page.dart';
 import 'watch_pages.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.active = true});
+
+  final bool active;
 
   @override
   ConsumerState<SettingsPage> createState() => _SettingsPageState();
@@ -30,6 +32,55 @@ class SettingsPage extends ConsumerStatefulWidget {
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   bool _loggingIn = false;
+  bool _showRenewalSuccess = false;
+  Timer? _renewalNoticeTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    ref.listenManual(bangumiRefreshStateProvider, (previous, next) {
+      _renewalNoticeTimer?.cancel();
+      final visible =
+          widget.active && (ModalRoute.of(context)?.isCurrent ?? true);
+      setState(() {
+        _showRenewalSuccess =
+            visible &&
+            next.status == BangumiRefreshStatus.success &&
+            (previous?.status != next.status ||
+                previous?.lastSuccess != next.lastSuccess);
+      });
+      if (_showRenewalSuccess) {
+        _renewalNoticeTimer = Timer(const Duration(seconds: 3), () {
+          if (mounted) setState(() => _showRenewalSuccess = false);
+        });
+      }
+    });
+  }
+
+  void _clearRenewalNotice() {
+    _renewalNoticeTimer?.cancel();
+    _showRenewalSuccess = false;
+  }
+
+  @override
+  void didUpdateWidget(covariant SettingsPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.active) _clearRenewalNotice();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!(ModalRoute.of(context)?.isCurrent ?? true)) {
+      _clearRenewalNotice();
+    }
+  }
+
+  @override
+  void dispose() {
+    _renewalNoticeTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -76,15 +127,18 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ],
                 );
               }
-              return IntrinsicHeight(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(flex: 2, child: account),
-                    const SizedBox(width: 12),
-                    const Expanded(child: WatchSummaryCard()),
-                  ],
-                ),
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 2, child: account),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: WatchSummaryCard(),
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -113,7 +167,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 tone: NavCardTone.neutral,
                 onTap: () => open(
                   MediaQuery.sizeOf(context).width >= 840
-                      ? const PreferencesPage(initialIndex: 3)
+                      ? const PreferencesPage(initialIndex: 4)
                       : const MaintenancePage(),
                 ),
               ),
@@ -130,7 +184,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 tone: NavCardTone.tertiary,
                 onTap: () => open(
                   MediaQuery.sizeOf(context).width >= 840
-                      ? const PreferencesPage(initialIndex: 2)
+                      ? const PreferencesPage(initialIndex: 3)
                       : const MediaSourcesPage(),
                 ),
               ),
@@ -199,15 +253,17 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                         // renewal status lines stay hidden there.
                         if (settings.bangumiAuthKind !=
                             BangumiAuthKind.personalAccessToken) ...[
-                          switch (renewal.status) {
-                            BangumiRefreshStatus.refreshing => '正在续期…',
-                            BangumiRefreshStatus.success => '续期成功',
-                            BangumiRefreshStatus.networkFailure =>
-                              '续期未完成，已保留现有登录信息。请检查网络后重试。',
-                            BangumiRefreshStatus.reloginRequired =>
-                              '授权已失效或缺少续期凭据，请重新登录。',
-                            BangumiRefreshStatus.ready => '到期前自动检查续期',
-                          },
+                          if (renewal.status != BangumiRefreshStatus.success ||
+                              _showRenewalSuccess)
+                            switch (renewal.status) {
+                              BangumiRefreshStatus.refreshing => '正在续期…',
+                              BangumiRefreshStatus.success => '续期成功',
+                              BangumiRefreshStatus.networkFailure =>
+                                '续期未完成，已保留现有登录信息。请检查网络后重试。',
+                              BangumiRefreshStatus.reloginRequired =>
+                                '授权已失效或缺少续期凭据，请重新登录。',
+                              BangumiRefreshStatus.ready => '到期前自动检查续期',
+                            },
                           if (renewal.lastSuccess != null)
                             '上次续期成功：${_accountTime(renewal.lastSuccess!)}',
                         ],

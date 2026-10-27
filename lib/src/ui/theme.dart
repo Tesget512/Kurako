@@ -80,6 +80,22 @@ ThemeData buildKurakoTheme(ColorScheme scheme, {required bool systemFont}) {
       shape: KurakoShapes.dialog,
       labelTextStyle: WidgetStatePropertyAll(text.labelLarge),
     ),
+    menuButtonTheme: MenuButtonThemeData(
+      style: ButtonStyle(
+        minimumSize: const WidgetStatePropertyAll(Size.fromHeight(48)),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        ),
+        overlayColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.pressed)
+              ? scheme.onSurface.withValues(alpha: 0.12)
+              : states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused)
+              ? scheme.onSurface.withValues(alpha: 0.08)
+              : null,
+        ),
+      ),
+    ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
         shape: KurakoShapes.pill,

@@ -13,7 +13,8 @@ const bangumiMirrorApiProbe =
 const bangumiMirrorImageHost = 'lain.bangumi.lat';
 const bangumiMirrorFailureMessage =
     '反向代理验证已失效或请求被拦截。请重新验证，或关闭反向代理回退官方；'
-    '请确保 WebView 与应用使用相同网络和代理出口，网络/IP 或 User-Agent 改变会使验证失效。';
+    '请确保 WebView 与应用使用相同网络和代理出口，网络/IP 或 User-Agent 改变会使验证失效。'
+    '若浏览器直接访问 bangumi.lat 也异常，多为反向代理服务自身故障，可稍后重试或暂时回退官方。';
 
 /// User-Agent used when probing the mirror directly, without a WebView.
 ///

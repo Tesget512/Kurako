@@ -18,6 +18,7 @@ import '../state/player_appearance.dart';
 import '../state/interface_preferences.dart';
 import '../state/providers.dart';
 import '../ui/grouped_card.dart';
+import '../ui/settings_pane_scope.dart';
 import '../ui/page_components.dart';
 import '../widgets/settings_scaffold.dart';
 import 'onboarding_page.dart';
@@ -259,7 +260,10 @@ class _MaintenancePageState extends ConsumerState<MaintenancePage> {
           ? null
           : () => Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => const OnboardingPage(standalone: true),
+                builder: (_) => OnboardingPage(
+                  standalone: true,
+                  embedded: SettingsPaneScope.of(context),
+                ),
               ),
             ),
     );

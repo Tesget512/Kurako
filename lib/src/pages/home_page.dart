@@ -8,6 +8,7 @@ import 'watching_home_page.dart';
 import '../ui/navigation.dart';
 import '../ui/page_switch_transition.dart';
 import '../widgets/window_caption.dart';
+import '../widgets/compact_navigation_scaffold.dart';
 import 'collection_page.dart';
 import 'library_page.dart';
 import 'settings_page.dart';
@@ -82,7 +83,14 @@ class _HomePageState extends ConsumerState<HomePage> {
     });
     // Responsive: phones (narrow) get a bottom NavigationBar; tablets/desktop
     // (wide) get a side NavigationRail. Breakpoint follows Material guidance.
-    final isWide = MediaQuery.sizeOf(context).width >= 640;
+    final size = MediaQuery.sizeOf(context);
+    final platform = Theme.of(context).platform;
+    final phoneLandscape =
+        (platform == TargetPlatform.android ||
+            platform == TargetPlatform.iOS) &&
+        size.width > size.height &&
+        size.shortestSide < 600;
+    final isWide = size.width >= 640;
     final body = PageSwitchTransition(
       key: _bodyKey,
       identity: _index,
@@ -102,7 +110,10 @@ class _HomePageState extends ConsumerState<HomePage> {
           ),
           TickerMode(
             enabled: _index == 2,
-            child: HeroMode(enabled: _index == 2, child: const SettingsPage()),
+            child: HeroMode(
+              enabled: _index == 2,
+              child: SettingsPage(active: _index == 2),
+            ),
           ),
           TickerMode(
             enabled: _index == 3,
@@ -124,27 +135,33 @@ class _HomePageState extends ConsumerState<HomePage> {
           children: [
             const WindowCaption(title: 'Kurako'),
             Expanded(
-              child: Row(
-                children: [
-                  KurakoNavigation(
-                    index: selected,
-                    onSelected: select,
-                    showHome: preferences.enabled,
-                    expanded: _navigationExpanded,
-                    onToggle: () => setState(
-                      () => _navigationExpanded = !_navigationExpanded,
-                    ),
-                  ),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(0, 8, 12, 12),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(28),
-                        child: body,
+              child: SafeArea(
+                left: false,
+                top: false,
+                bottom: false,
+                child: Row(
+                  children: [
+                    KurakoNavigation(
+                      index: selected,
+                      onSelected: select,
+                      showHome: preferences.enabled,
+                      showLabels: !phoneLandscape || _navigationExpanded,
+                      expanded: _navigationExpanded,
+                      onToggle: () => setState(
+                        () => _navigationExpanded = !_navigationExpanded,
                       ),
                     ),
-                  ),
-                ],
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(0, 8, 12, 12),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(28),
+                          child: body,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -152,14 +169,21 @@ class _HomePageState extends ConsumerState<HomePage> {
       );
     }
 
-    return Scaffold(
+    return CompactNavigationScaffold(
+      destination: _index,
       body: Column(
         children: [
           const WindowCaption(title: 'Kurako'),
           Expanded(child: body),
         ],
       ),
-      bottomNavigationBar: NavigationBar(
+      navigationBar: NavigationBar(
+        labelBehavior: phoneLandscape
+            ? NavigationDestinationLabelBehavior.alwaysHide
+            : NavigationDestinationLabelBehavior.alwaysShow,
+        height: 64,
+        elevation: 0,
+        surfaceTintColor: Colors.transparent,
         backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
         indicatorShape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(20),

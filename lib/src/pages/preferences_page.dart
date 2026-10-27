@@ -7,6 +7,7 @@ import '../ui/settings_pane_scope.dart';
 import '../widgets/window_caption.dart';
 import 'about_page.dart';
 import 'appearance_settings_page.dart';
+import 'keyboard_settings_page.dart';
 import 'maintenance_page.dart';
 import 'media_sources_page.dart';
 import 'player_settings_page.dart';
@@ -25,6 +26,7 @@ class _PreferencesPageState extends ConsumerState<PreferencesPage> {
   final _detailKey = GlobalKey<NavigatorState>();
   static const _items = [
     ('播放', '播放器', Icons.play_circle_outline_rounded),
+    ('播放', '键盘快捷键', Icons.keyboard_alt_outlined),
     ('应用', '外观', Icons.palette_outlined),
     ('资源', '媒体来源', Icons.folder_outlined),
     ('资源', '维护', Icons.build_outlined),
@@ -33,9 +35,10 @@ class _PreferencesPageState extends ConsumerState<PreferencesPage> {
 
   Widget _page(int index, {bool embedded = false}) => switch (index) {
     0 => PlayerSettingsPage(embedded: embedded),
-    1 => AppearanceSettingsPage(embedded: embedded),
-    2 => MediaSourcesPage(embedded: embedded),
-    3 => MaintenancePage(embedded: embedded),
+    1 => const KeyboardSettingsPage(),
+    2 => AppearanceSettingsPage(embedded: embedded),
+    3 => MediaSourcesPage(embedded: embedded),
+    4 => MaintenancePage(embedded: embedded),
     _ => AboutPage(embedded: embedded),
   };
 

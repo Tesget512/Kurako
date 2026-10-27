@@ -17,6 +17,7 @@ import 'state/update_provider.dart';
 import 'widgets/update_banner.dart';
 import 'ui/theme.dart';
 import 'ui/app_viewport.dart';
+import 'ui/notch_safe_area.dart';
 
 /// Dev-only acceptance switch: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
 const kMirrorOAuthAcceptanceEnabled = bool.fromEnvironment(
@@ -316,10 +317,12 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
             // once third_party/media_kit_video moves to material_ui (stage D).
             // ignore: deprecated_member_use
             content = MaterialUiCompatibilityBridge(child: content);
-            return AppViewport(
-              desktop: _isDesktopPlatform,
-              scalePercent: scalePercent,
-              child: content,
+            return NotchSafeArea(
+              child: AppViewport(
+                desktop: _isDesktopPlatform,
+                scalePercent: scalePercent,
+                child: content,
+              ),
             );
           },
         );

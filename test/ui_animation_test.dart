@@ -3,6 +3,7 @@ import 'package:cupertino_ui/cupertino_ui.dart'
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:kurako/src/pages/detail_page.dart';
 import 'package:kurako/src/rust/models.dart';
 import 'package:kurako/src/state/providers.dart';
@@ -34,13 +35,189 @@ const _anime = Anime(
 );
 
 void main() {
+  testWidgets(
+    'Android predictive back cancels then commits with a cover Hero',
+    (tester) async {
+      Widget poster() => Hero(
+        tag: 'predictive-cover',
+        transitionOnUserGestures: true,
+        child: const SizedBox(
+          width: 100,
+          height: 160,
+          child: ColoredBox(color: Colors.red),
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(
+            platform: TargetPlatform.android,
+            pageTransitionsTheme: kPageTransitionsTheme,
+          ),
+          routes: {
+            '/': (context) => Scaffold(
+              body: Column(
+                children: [
+                  poster(),
+                  TextButton(
+                    onPressed: () => Navigator.pushNamed(context, '/detail'),
+                    child: const Text('open'),
+                  ),
+                ],
+              ),
+            ),
+            '/detail': (_) => Scaffold(
+              body: Column(children: [poster(), const Text('detail')]),
+            ),
+          },
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      Future<void> event(String name, [double? progress]) async {
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(
+              name,
+              progress == null
+                  ? null
+                  : <String, dynamic>{
+                      'touchOffset': <double>[100, 300],
+                      'progress': progress,
+                      'swipeEdge': 0,
+                    },
+            ),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+      }
+
+      await event('startBackGesture', 0);
+      await event('updateBackGestureProgress', 0.4);
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        Navigator.of(tester.element(find.text('detail'))).userGestureInProgress,
+        isTrue,
+      );
+      await event('cancelBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.text('detail'), findsOneWidget);
+      await event('startBackGesture', 0);
+      await event('updateBackGestureProgress', 0.6);
+      await event('commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.text('detail'), findsNothing);
+      expect(find.text('open'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
+  testWidgets(
+    'predictive back commit continues the cover Hero from the release point',
+    (tester) async {
+      Widget poster() => Hero(
+        tag: 'commit-cover',
+        transitionOnUserGestures: true,
+        createRectTween: createCoverHeroRectTween,
+        flightShuttleBuilder: coverHeroFlightShuttleBuilder,
+        child: const SizedBox(
+          width: 100,
+          height: 160,
+          child: ColoredBox(color: Colors.red),
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(
+            platform: TargetPlatform.android,
+            pageTransitionsTheme: kPageTransitionsTheme,
+          ),
+          routes: {
+            '/': (context) => Scaffold(
+              body: ListView(
+                children: [
+                  Align(alignment: Alignment.topLeft, child: poster()),
+                  TextButton(
+                    onPressed: () => Navigator.pushNamed(context, '/detail'),
+                    child: const Text('open'),
+                  ),
+                ],
+              ),
+            ),
+            '/detail': (_) => Scaffold(
+              body: Stack(
+                children: [
+                  Positioned(left: 20, top: 400, child: poster()),
+                  const Text('detail'),
+                ],
+              ),
+            ),
+          },
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      Future<void> event(String name, [double? progress]) async {
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'flutter/backgesture',
+          const StandardMethodCodec().encodeMethodCall(
+            MethodCall(
+              name,
+              progress == null
+                  ? null
+                  : <String, dynamic>{
+                      'touchOffset': <double>[100, 300],
+                      'progress': progress,
+                      'swipeEdge': 0,
+                    },
+            ),
+          ),
+          (_) {},
+        );
+        await tester.pump();
+      }
+
+      await event('startBackGesture', 0);
+      await event('updateBackGestureProgress', 0.7);
+      await tester.pump();
+      final cover = find.byKey(const ValueKey('cover-hero-flight-cover'));
+      final releaseTop = tester.getRect(cover).top;
+      expect(releaseTop, lessThan(400));
+
+      await event('commitBackGesture');
+      var previous = releaseTop;
+      var retargetedFrames = 0;
+      for (var frame = 0; frame < 30; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        if (cover.evaluate().isEmpty) break;
+        final retarget = find.byType(CoverHeroRetarget);
+        final top = retarget.evaluate().isEmpty
+            ? tester.getRect(cover).top
+            : tester.widget<CoverHeroRetarget>(retarget).targetRect.top;
+        if (retarget.evaluate().isNotEmpty) retargetedFrames++;
+        // Never jumps back toward the detail position (top 400).
+        expect(top, lessThanOrEqualTo(previous + 0.5));
+        previous = top;
+      }
+      expect(retargetedFrames, greaterThan(0));
+      expect(previous, lessThan(releaseTop));
+      await tester.pumpAndSettle();
+      expect(find.text('detail'), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
   test('page transitions are explicit for every target platform', () {
     final builders = kPageTransitionsTheme.builders;
 
     final androidBuilder = builders[TargetPlatform.android];
-    expect(androidBuilder, isA<ZoomPageTransitionsBuilder>());
+    expect(androidBuilder, isA<PredictiveBackPageTransitionsBuilder>());
     expect(
-      (androidBuilder! as ZoomPageTransitionsBuilder).allowSnapshotting,
+      (androidBuilder! as PredictiveBackPageTransitionsBuilder)
+          .allowSnapshotting,
       isTrue,
     );
     expect(
@@ -160,6 +337,64 @@ void main() {
       ),
       const Rect.fromLTWH(0, 0, 100, 160),
     );
+  });
+
+  testWidgets('moving detail hero stays below its pinned toolbar', (
+    tester,
+  ) async {
+    final navigator = GlobalKey<NavigatorState>();
+    final targetTop = ValueNotifier<double>(150);
+    addTearDown(targetTop.dispose);
+    Widget poster() => Hero(
+      tag: 'mask-test',
+      createRectTween: createCoverHeroRectTween,
+      flightShuttleBuilder: coverHeroFlightShuttleBuilder,
+      child: const SizedBox(
+        width: 100,
+        height: 160,
+        child: ColoredBox(color: Colors.red),
+      ),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: navigator,
+        home: Scaffold(
+          body: ListView(
+            children: [
+              SizedBox(height: 300),
+              Align(alignment: Alignment.centerLeft, child: poster()),
+            ],
+          ),
+        ),
+      ),
+    );
+    navigator.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          body: CoverHeroDetailBoundary(
+            top: 80,
+            child: ValueListenableBuilder<double>(
+              valueListenable: targetTop,
+              builder: (_, top, _) => Stack(
+                children: [Positioned(left: 20, top: top, child: poster())],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 70));
+    targetTop.value = -40;
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 170));
+    final finder = find.byKey(const ValueKey('cover-hero-viewport-clip'));
+    final clip = tester.widget<ClipRect>(finder);
+    final rect = clip.clipper!.getClip(tester.getSize(finder));
+    expect(rect.top, greaterThan(0));
+    expect(tester.getTopLeft(finder).dy + rect.top, greaterThanOrEqualTo(79.5));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(
@@ -283,6 +518,18 @@ void main() {
       await tester.tap(find.byType(AnimeCard).first);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 150));
+      final outgoingInk = tester.widget<InkWell>(
+        find
+            .descendant(
+              of: find.byType(AnimeCard, skipOffstage: false).first,
+              matching: find.byType(InkWell, skipOffstage: false),
+            )
+            .first,
+      );
+      expect(
+        outgoingInk.overlayColor?.resolve({WidgetState.pressed}),
+        Colors.transparent,
+      );
       expect(
         tester.widget<FadeTransition>(collectionFade).opacity.value,
         inExclusiveRange(0, 1),

@@ -95,6 +95,31 @@ void main() {
       expect(validAppearancePresets(jsonEncode(bad)), isFalse);
     }
   });
+
+  test(
+    'legacy presets keep their stored font choice after default migration',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        appearancePresetsKey: jsonEncode([
+          {'name': '旧预设', 'values': appearanceDefaults},
+        ]),
+      });
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      await c.read(appearancePresetsProvider.notifier).ready;
+      expect(
+        c.read(appearancePresetsProvider).single.values['use_system_font'],
+        isFalse,
+      );
+      final current = await SharedPreferences.getInstance();
+      await c.read(appearancePresetsProvider.notifier).save('新预设');
+      expect(current.getString(appearancePresetsKey), contains('"新预设"'));
+      expect(
+        c.read(appearancePresetsProvider).last.values['use_system_font'],
+        isTrue,
+      );
+    },
+  );
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
@@ -205,10 +230,24 @@ void main() {
     final value = HomePreferences.decode(
       (await SharedPreferences.getInstance()).getString(homePreferencesKey)!,
     );
-    expect(value.modules, [HomeModule.watching, HomeModule.resume]);
-    expect(value.hidden, {HomeModule.resume, HomeModule.watching});
+    expect(value.modules, [
+      HomeModule.watching,
+      HomeModule.resume,
+      HomeModule.wish,
+    ]);
+    expect(value.hidden, {
+      HomeModule.resume,
+      HomeModule.watching,
+      HomeModule.wish,
+    });
+    await n.show(HomeModule.wish, true);
+    final saved = HomePreferences.decode(
+      (await SharedPreferences.getInstance()).getString(homePreferencesKey)!,
+    );
+    expect(saved.hidden, isNot(contains(HomeModule.wish)));
+    expect(saved.modules, value.modules);
     await n.reset();
-    expect(c.read(homePreferencesProvider).hidden, isEmpty);
+    expect(c.read(homePreferencesProvider).hidden, {HomeModule.wish});
   });
 
   test(

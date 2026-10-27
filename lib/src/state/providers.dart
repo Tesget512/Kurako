@@ -102,9 +102,11 @@ class _BoolPrefNotifier extends Notifier<bool> {
 
   @override
   bool build() {
-    _load();
+    ready = _load();
     return _defaultValue;
   }
+
+  late Future<void> ready;
 
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -298,10 +300,10 @@ final touchModePlayerProvider = NotifierProvider<_BoolPrefNotifier, bool>(
   () => _BoolPrefNotifier('touch_mode_player', defaultValue: false),
 );
 
-/// Use the operating-system default font instead of the bundled LXGW WenKai.
-/// Off by default (the app ships its own screen-tuned CJK font). Persisted.
+/// The system font is the default. Users may opt into the bundled LXGW WenKai
+/// screen font, which remains part of the appearance preset whitelist.
 final useSystemFontProvider = NotifierProvider<_BoolPrefNotifier, bool>(
-  () => _BoolPrefNotifier('use_system_font', defaultValue: false),
+  () => _BoolPrefNotifier('use_system_font', defaultValue: true),
 );
 
 // ---- Decode mode (player hardware/software acceleration) ----

@@ -2,6 +2,10 @@ import 'dart:math' as math;
 
 import 'package:material_ui/material_ui.dart';
 
+/// Shared translucency for floating player chrome (side tools, transport bar,
+/// gesture level and loading capsules), so they read as one family.
+const double kPlayerChromeAlpha = 0.42;
+
 /// Responsive control chrome, independent of the native playback lifecycle.
 class PlayerTopBar extends StatelessWidget {
   const PlayerTopBar({
@@ -52,10 +56,10 @@ class PlayerSideTools extends StatelessWidget {
     child: Align(
       alignment: Alignment.centerRight,
       child: Padding(
-        padding: const EdgeInsets.only(right: 20),
+        padding: const EdgeInsets.only(right: 8),
         child: Material(
           color: Theme.of(context).colorScheme.surfaceContainerHigh
-              .withValues(alpha: 0.42),
+              .withValues(alpha: kPlayerChromeAlpha),
           borderRadius: BorderRadius.circular(28),
           clipBehavior: Clip.antiAlias,
           child: Padding(
@@ -107,7 +111,8 @@ class PlayerBottomBar extends StatelessWidget {
           scrollDirection: Axis.horizontal,
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: const Color(0xB31C1B1F),
+              color: Theme.of(context).colorScheme.surfaceContainerHigh
+                  .withValues(alpha: kPlayerChromeAlpha),
               borderRadius: BorderRadius.circular(28),
             ),
             child: Padding(
@@ -188,7 +193,9 @@ class PlayerLevelIndicator extends StatelessWidget {
           final showText = constraints.maxHeight >= 88;
           final cs = Theme.of(context).colorScheme;
           return Material(
-            color: cs.surfaceContainerHigh.withValues(alpha: 0.94),
+            color: cs.surfaceContainerHigh.withValues(
+              alpha: kPlayerChromeAlpha,
+            ),
             borderRadius: BorderRadius.circular(32),
             clipBehavior: Clip.antiAlias,
             child: Padding(
@@ -271,7 +278,7 @@ class PlayerBufferingIndicator extends StatelessWidget {
     return Semantics(
       label: '正在加载视频',
       child: Material(
-        color: cs.surfaceContainerHigh.withValues(alpha: 0.92),
+        color: cs.surfaceContainerHigh.withValues(alpha: kPlayerChromeAlpha),
         borderRadius: BorderRadius.circular(28),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),

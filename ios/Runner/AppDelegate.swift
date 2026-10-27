@@ -10,10 +10,19 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
   // their paths. Keep them open for this app process and restore them at launch.
   private var activeFolderUrls: [URL] = []
   private let folderBookmarksKey = "kurako.securityScopedFolderBookmarks"
+  private var channel: FlutterMethodChannel?
 
   func register(with messenger: FlutterBinaryMessenger) {
     restoreFolderAccess()
     let channel = FlutterMethodChannel(name: "kurako/ios", binaryMessenger: messenger)
+    self.channel = channel
+    // A 180-degree landscape flip keeps Flutter's size and (symmetric) safe
+    // area unchanged, so push the real interface orientation to Dart.
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(deviceOrientationChanged),
+      name: UIDevice.orientationDidChangeNotification,
+      object: nil)
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self else {
         result(FlutterError(code: "bridge_unavailable", message: nil, details: nil))
@@ -31,9 +40,34 @@ private final class KurakoIosBridge: NSObject, UIDocumentPickerDelegate {
       case "openExternalUrl":
         let args = call.arguments as? [String: Any]
         self.openExternalUrl(args?["url"] as? String, result: result)
+      case "interfaceOrientation":
+        result(self.interfaceOrientationName())
       default:
         result(FlutterMethodNotImplemented)
       }
+    }
+  }
+
+  @objc private func deviceOrientationChanged() {
+    // The scene reports the new interface orientation once rotation settles.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+      guard let self else { return }
+      self.channel?.invokeMethod(
+        "interfaceOrientationChanged", arguments: self.interfaceOrientationName())
+    }
+  }
+
+  private func interfaceOrientationName() -> String {
+    let scene = UIApplication.shared.connectedScenes
+      .compactMap { $0 as? UIWindowScene }
+      .first { $0.activationState == .foregroundActive }
+      ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+    switch scene?.interfaceOrientation {
+    case .landscapeLeft: return "landscapeLeft"
+    case .landscapeRight: return "landscapeRight"
+    case .portraitUpsideDown: return "portraitUpsideDown"
+    case .portrait: return "portrait"
+    default: return "unknown"
     }
   }
 

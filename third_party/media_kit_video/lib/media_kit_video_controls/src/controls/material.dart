@@ -1107,7 +1107,11 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
           if (mounted && !_volumeInterceptEventStream) {
             setState(() {
               _volumeValue = value;
-              _verticalPosition = null;
+              if (_lastVerticalKind != MaterialVerticalGestureKind.volume) {
+                _verticalPosition = null;
+              }
+              _brightnessIndicator = false;
+              _brightnessTimer?.cancel();
               _volumeIndicator = true;
               _lastVerticalKind = MaterialVerticalGestureKind.volume;
             });
@@ -1254,6 +1258,8 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
   @override
   Widget build(BuildContext context) {
     final controlsLocked = _theme(context).controlsLocked;
+    final verticalIndicatorVisible = !controlsLocked &&
+        (_verticalDragging || _brightnessIndicator || _volumeIndicator);
     var seekOnDoubleTapEnabledWhileControlsAreVisible =
         (_theme(context).seekOnDoubleTap &&
             _theme(context).seekOnDoubleTapEnabledWhileControlsVisible);
@@ -1547,24 +1553,23 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                                   .brightness
                                               : MaterialVerticalGestureKind
                                                   .volume;
+                                          // Keep the anchor through the hold
+                                          // and fade, including a new drag.
+                                          if (_lastVerticalKind !=
+                                              _verticalKind) {
+                                            _verticalPosition = null;
+                                          }
+                                          _verticalPosition ??= position;
                                           _lastVerticalKind = _verticalKind;
-                                          // The indicator stays where the drag
-                                          // started; following the finger made
-                                          // the level readout slide out from
-                                          // under it.
-                                          _verticalPosition = position;
+                                          _volumeTimer?.cancel();
+                                          _brightnessTimer?.cancel();
+                                          _volumeIndicator = false;
+                                          _brightnessIndicator = false;
                                           _verticalDragging = true;
                                           _verticalDeltaTotal = 0.0;
                                           _verticalStartValue = left
                                               ? _brightnessValue
                                               : _volumeValue;
-                                          if (left) {
-                                            _volumeIndicator = false;
-                                            _volumeTimer?.cancel();
-                                          } else {
-                                            _brightnessIndicator = false;
-                                            _brightnessTimer?.cancel();
-                                          }
                                         });
                                       },
                                 onVerticalDragEnd: (_) => _endVerticalGesture(),
@@ -1805,6 +1810,17 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                             ? 1
                             : 0,
                         duration: _theme(context).controlsTransitionDuration,
+                        onEnd: () {
+                          // A fade-in may finish after the hold timer fires.
+                          // Only the completed fade-out may release the anchor.
+                          if (!verticalIndicatorVisible &&
+                              !_verticalDragging &&
+                              !_brightnessIndicator &&
+                              !_volumeIndicator &&
+                              _verticalPosition != null) {
+                            setState(() => _verticalPosition = null);
+                          }
+                        },
                         child: _buildVerticalGestureIndicator(context),
                       ))),
                     // Volume Indicator.

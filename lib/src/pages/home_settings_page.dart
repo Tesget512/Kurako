@@ -13,8 +13,11 @@ String destinationLabel(AppDestination page) => switch (page) {
   AppDestination.collection => '追番',
   AppDestination.settings => '设置',
 };
-String moduleLabel(HomeModule module) =>
-    module == HomeModule.resume ? '继续观看' : '在看速览';
+String moduleLabel(HomeModule module) => switch (module) {
+  HomeModule.resume => '继续观看',
+  HomeModule.watching => '在看速览',
+  HomeModule.wish => '想看速览',
+};
 
 class HomeSettingsPage extends ConsumerWidget {
   const HomeSettingsPage({super.key});
@@ -43,7 +46,7 @@ class HomeSettingsPage extends ConsumerWidget {
             children: [
               SwitchListTile(
                 title: const Text('启用首页'),
-                subtitle: const Text('独立展示继续观看与在看速览'),
+                subtitle: const Text('独立展示已启用的首页模块'),
                 value: prefs.enabled,
                 onChanged: (value) => change(notifier.setEnabled(value)),
               ),

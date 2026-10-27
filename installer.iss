@@ -11,7 +11,7 @@
 #define AppName "Kurako"
 #define AppNameEn "Kurako"
 #ifndef AppVersion
-#define AppVersion "1.1.1"
+#define AppVersion "1.2.0"
 #endif
 #define AppPublisher "Tesget512"
 #define AppExeName "kurako.exe"
@@ -44,7 +44,7 @@ VersionInfoDescription=Kurako Windows 安装程序
 VersionInfoCompany={#AppPublisher}
 VersionInfoProductName={#AppName}
 VersionInfoCopyright=Copyright (C) 2026 Tesget512 and Kurako contributors
-VersionInfoVersion=1.1.1.0
+VersionInfoVersion=1.2.0.6
 VersionInfoTextVersion={#AppVersion}
 
 [Languages]
@@ -115,6 +115,39 @@ var
   ExistingInstallPage: TInputOptionWizardPage;
   ExistingInstallDir: String;
   ExistingInstallVersion: String;
+  WizardRaised: Boolean;
+
+const
+  HWND_TOPMOST = -1;
+  HWND_NOTOPMOST = -2;
+  SWP_NOSIZE = $0001;
+  SWP_NOMOVE = $0002;
+  SWP_SHOWWINDOW = $0040;
+
+function SetWindowPos(hWnd: HWND; hWndInsertAfter: HWND; X, Y, cx, cy: Integer;
+  uFlags: UINT): BOOL; external 'SetWindowPos@user32.dll stdcall';
+function SetForegroundWindow(hWnd: HWND): BOOL;
+  external 'SetForegroundWindow@user32.dll stdcall';
+
+{ After the UAC elevation prompt the elevated wizard often opens behind the
+  window that launched it. Raise it once: a brief topmost toggle changes the
+  Z-order even when Windows refuses the foreground request. }
+procedure RaiseWizardOnce;
+begin
+  if WizardRaised or WizardSilent then
+    Exit;
+  WizardRaised := True;
+  SetWindowPos(WizardForm.Handle, HWND_TOPMOST, 0, 0, 0, 0,
+    SWP_NOMOVE or SWP_NOSIZE or SWP_SHOWWINDOW);
+  SetWindowPos(WizardForm.Handle, HWND_NOTOPMOST, 0, 0, 0, 0,
+    SWP_NOMOVE or SWP_NOSIZE or SWP_SHOWWINDOW);
+  SetForegroundWindow(WizardForm.Handle);
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  RaiseWizardOnce;
+end;
 
 function FindExistingInstall(): Boolean;
 begin

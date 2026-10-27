@@ -39,7 +39,7 @@ const _portableSettingsV3 = <String, _SettingDefinition>{
   'seek_duration_sec': _SettingDefinition(40, _seekDurationValidator),
   'ui_scale_percent': _SettingDefinition(100, _uiScaleValidator),
   'touch_mode_player': _SettingDefinition(false, _isBool),
-  'use_system_font': _SettingDefinition(false, _isBool),
+  'use_system_font': _SettingDefinition(true, _isBool),
   'decode_mode': _SettingDefinition('auto', _decodeModeValidator),
   'bangumi_mirror': _SettingDefinition(false, _isBool),
   'use_external_player': _SettingDefinition(false, _isBool),

@@ -7,14 +7,18 @@ const homePreferencesKey = 'home_preferences';
 
 enum AppDestination { home, library, collection, settings }
 
-enum HomeModule { resume, watching }
+enum HomeModule { resume, watching, wish }
 
 class HomePreferences {
   const HomePreferences({
     this.enabled = true,
     this.initial = AppDestination.library,
-    this.modules = const [HomeModule.resume, HomeModule.watching],
-    this.hidden = const {},
+    this.modules = const [
+      HomeModule.resume,
+      HomeModule.watching,
+      HomeModule.wish,
+    ],
+    this.hidden = const {HomeModule.wish},
     this.loaded = false,
   });
   final bool enabled, loaded;
@@ -61,19 +65,27 @@ class HomePreferences {
     final order = data['modules'] as List;
     final hidden = data['hidden'] as List;
     final names = HomeModule.values.map((m) => m.name).toSet();
-    if (order.length != names.length ||
-        order.toSet().length != names.length ||
+    final legacy =
+        order.length == 2 && order.toSet().containsAll({'resume', 'watching'});
+    if ((!legacy && order.length != names.length) ||
+        order.toSet().length != order.length ||
         !names.containsAll(order) ||
         hidden.length > names.length ||
         hidden.toSet().length != hidden.length ||
-        !names.containsAll(hidden)) {
+        !order.toSet().containsAll(hidden)) {
       throw const FormatException('首页模块配置无效');
     }
     return HomePreferences(
       enabled: data['enabled'] as bool,
       initial: AppDestination.values.byName(data['initial'] as String),
-      modules: order.map((m) => HomeModule.values.byName(m as String)).toList(),
-      hidden: hidden.map((m) => HomeModule.values.byName(m as String)).toSet(),
+      modules: [
+        ...order.map((m) => HomeModule.values.byName(m as String)),
+        if (legacy) HomeModule.wish,
+      ],
+      hidden: {
+        ...hidden.map((m) => HomeModule.values.byName(m as String)),
+        if (legacy) HomeModule.wish,
+      },
       loaded: true,
     ).copyWith();
   }

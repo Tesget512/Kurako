@@ -60,9 +60,10 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
-      # KURAKO itself supports iOS 13 and later. Raise legacy pods to the same
-      # floor so Xcode 26 no longer warns for their obsolete iOS 9 settings.
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      # Keep pods aligned with the app's iOS 15 floor. Plugins such as
+      # file_picker_darwin use iOS 14+ APIs even though their own podspecs
+      # still advertise older deployment targets.
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       # No Flutter plugin uses App Intents. Suppress Xcode's empty metadata
       # pass, which otherwise reports one warning for each CocoaPods target.
       config.build_settings['EXTRACT_APPINTENTS_METADATA'] = 'NO'

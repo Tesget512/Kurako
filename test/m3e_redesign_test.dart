@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:kurako/src/pages/appearance_settings_page.dart';
 import 'package:kurako/src/pages/collection_page.dart';
 import 'package:kurako/src/pages/detail_page.dart';
+import 'package:kurako/src/pages/decoder_settings_page.dart';
 import 'package:kurako/src/pages/home_page.dart';
 import 'package:kurako/src/pages/watching_home_page.dart';
 import 'package:kurako/src/pages/home_settings_page.dart';
@@ -24,6 +25,7 @@ import 'package:kurako/src/pages/player_settings_page.dart';
 import 'package:kurako/src/pages/keyboard_settings_page.dart';
 import 'package:kurako/src/pages/settings_page.dart';
 import 'package:kurako/src/pages/media_sources_page.dart';
+import 'package:kurako/src/pages/onboarding_page.dart';
 import 'package:kurako/src/pages/preferences_page.dart';
 import 'package:kurako/src/pages/watch_pages.dart';
 import 'package:kurako/src/rust/watch_history.dart';
@@ -36,6 +38,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:kurako/src/services/bangumi_mirror.dart';
 import 'package:kurako/src/services/bangumi_credentials.dart';
 import 'package:kurako/src/ui/navigation.dart';
+import 'package:kurako/src/ui/settings_pane_scope.dart';
 import 'package:kurako/src/ui/app_viewport.dart';
 import 'package:kurako/src/ui/menu_item.dart';
 import 'package:kurako/src/ui/nav_card.dart';
@@ -157,6 +160,8 @@ Future<void> _mount(
   int episodeCount = 3,
   bool delayedEpisodes = false,
   bool resumeFixture = false,
+  int libraryCount = 2,
+  EdgeInsets safePadding = EdgeInsets.zero,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -269,8 +274,13 @@ Future<void> _mount(
           ],
         ),
         settingsProvider.overrideWith(_PreviewSettings.new),
+        downloadDirProvider.overrideWithBuild((ref, notifier) => ''),
         foldersProvider.overrideWith((ref) async => const []),
-        animeListProvider.overrideWith((ref) async => [_first, _second]),
+        animeListProvider.overrideWith(
+          (ref) async => [
+            for (var i = 0; i < libraryCount; i++) i.isEven ? _first : _second,
+          ],
+        ),
         episodesProvider.overrideWith((ref, id) async {
           if (delayedEpisodes) {
             await Future<void>.delayed(const Duration(milliseconds: 400));
@@ -308,8 +318,11 @@ Future<void> _mount(
           systemFont: false,
         ),
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(textScale)),
+          data: MediaQuery.of(context).copyWith(
+            textScaler: TextScaler.linear(textScale),
+            padding: safePadding,
+            viewPadding: safePadding,
+          ),
           child: RepaintBoundary(
             key: boundary,
             child: viewport
@@ -440,6 +453,39 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('landscape detail content stays clear of the notch side', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const DetailPage(animeId: 1, initialAnime: _first),
+      size: const Size(844, 390),
+      safePadding: const EdgeInsets.only(left: 59, bottom: 21),
+    );
+    final cover = tester.getRect(
+      find.byKey(const ValueKey('detail-header-cover')),
+    );
+    expect(cover.left, greaterThanOrEqualTo(59));
+    final tile = tester.getRect(
+      find.byKey(const ValueKey('episode-1'), skipOffstage: false),
+    );
+    expect(tile.left, greaterThanOrEqualTo(59));
+    expect(tile.right, lessThanOrEqualTo(844));
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  testWidgets('labelled navigation items do not repeat a hover tooltip', (
+    tester,
+  ) async {
+    await _mount(tester, const HomePage(), size: const Size(1280, 800));
+    final nav = find.byType(KurakoNavigation);
+    expect(find.descendant(of: nav, matching: find.text('番剧库')), findsWidgets);
+    expect(find.byTooltip('番剧库'), findsNothing);
+    expect(find.byTooltip('展开导航'), findsOneWidget);
+    await _unmount(tester);
+  });
+
   testWidgets('late loading history target scrolls deep into a long list', (
     tester,
   ) async {
@@ -503,6 +549,121 @@ void main() {
       await _unmount(tester);
     });
   }
+  testWidgets('wish module is opt-in and shows only wish collection', (
+    tester,
+  ) async {
+    await _mount(tester, const WatchingHomePage(), size: const Size(390, 844));
+    expect(find.text('想看速览'), findsNothing);
+    final c = ProviderScope.containerOf(
+      tester.element(find.byType(WatchingHomePage)),
+    );
+    final prefs = c.read(homePreferencesProvider.notifier);
+    await prefs.show(HomeModule.resume, false);
+    await prefs.show(HomeModule.watching, false);
+    await prefs.show(HomeModule.wish, true);
+    await tester.pumpAndSettle();
+    expect(find.text('想看速览'), findsOneWidget);
+    expect(find.text('星空来信'), findsOneWidget);
+    expect(find.text('夏日旅途'), findsNothing);
+    final card = find.byType(AnimeCard);
+    await tester.tap(card);
+    await tester.pumpAndSettle();
+    expect(tester.widget<DetailPage>(find.byType(DetailPage)).animeId, 2);
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  for (final rightCutout in [false, true]) {
+    testWidgets(
+      'landscape navigation handles cutout $rightCutout and large text',
+      (tester) async {
+        final boundary = GlobalKey();
+        await _mount(
+          tester,
+          const HomePage(),
+          size: const Size(844, 390),
+          textScale: 1.5,
+          boundary: boundary,
+          safePadding: EdgeInsets.fromLTRB(
+            rightCutout ? 0 : 47,
+            0,
+            rightCutout ? 47 : 0,
+            21,
+          ),
+        );
+        final nav = find.byType(KurakoNavigation);
+        for (final title in ['首页', '番剧库', '追番', '设置']) {
+          final target = find.descendant(
+            of: nav,
+            matching: find.byTooltip(title),
+          );
+          await tester.ensureVisible(target);
+          await tester.tap(target);
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+        }
+        await _capture(
+          tester,
+          boundary,
+          'feedback-landscape-${rightCutout ? 'right' : 'left'}',
+        );
+        tester.view.physicalSize = const Size(390, 844);
+        await tester.pumpAndSettle();
+        expect(find.byType(NavigationBar), findsOneWidget);
+        expect(find.byType(SettingsPage), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await _unmount(tester);
+      },
+    );
+  }
+
+  testWidgets(
+    'phone landscape hides only navigation labels and restores them upright',
+    (tester) async {
+      final boundary = GlobalKey();
+      await _mount(
+        tester,
+        const HomePage(),
+        size: const Size(844, 390),
+        boundary: boundary,
+        safePadding: const EdgeInsets.only(left: 47, bottom: 21),
+      );
+      final nav = find.byType(KurakoNavigation);
+      expect(
+        find.descendant(of: nav, matching: find.text('番剧库')),
+        findsNothing,
+      );
+      expect(find.byTooltip('番剧库'), findsOneWidget);
+      await tester.tap(find.byTooltip('设置'));
+      await tester.pumpAndSettle();
+      expect(find.text('Bangumi 账号'), findsOneWidget);
+      await _capture(tester, boundary, 'feedback-phone-landscape-icons');
+      tester.view.physicalSize = const Size(600, 390);
+      await tester.pumpAndSettle();
+      final compactBar = tester.widget<NavigationBar>(
+        find.byType(NavigationBar),
+      );
+      expect(
+        compactBar.labelBehavior,
+        NavigationDestinationLabelBehavior.alwaysHide,
+      );
+      await tester.tap(find.byType(NavigationDestination).at(1));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(NavigationDestination).at(3));
+      await tester.pumpAndSettle();
+      await _capture(tester, boundary, 'feedback-phone-landscape-bottom-icons');
+      tester.view.physicalSize = const Size(390, 844);
+      await tester.pumpAndSettle();
+      final bar = tester.widget<NavigationBar>(find.byType(NavigationBar));
+      expect(bar.labelBehavior, NavigationDestinationLabelBehavior.alwaysShow);
+      expect(bar.selectedIndex, 3);
+      expect(find.text('设置'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await _unmount(tester);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
   testWidgets('resume poster owns the Hero used by its detail route', (
     tester,
   ) async {
@@ -877,7 +1038,7 @@ void main() {
     final boundary = GlobalKey();
     await _mount(
       tester,
-      const PreferencesPage(initialIndex: 1),
+      const PreferencesPage(initialIndex: 2),
       size: const Size(1400, 1000),
       viewport: true,
       boundary: boundary,
@@ -997,6 +1158,131 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('mobile search collapses on browsing without losing the filter', (
+    tester,
+  ) async {
+    await _mount(tester, const LibraryPage(), libraryCount: 30);
+    await tester.tap(find.byTooltip('搜索番剧'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'summer');
+    await tester.pumpAndSettle();
+    expect(find.text('找到 15 部番剧'), findsOneWidget);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, -180));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('搜索番剧'), findsOneWidget);
+    expect(find.byType(SearchBar), findsNothing);
+    expect(find.byType(AnimeCard), findsWidgets);
+    for (final card in tester.widgetList<AnimeCard>(find.byType(AnimeCard))) {
+      expect(card.anime.id, 1);
+    }
+    await tester.tap(find.byTooltip('搜索番剧'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller!.text,
+      'summer',
+    );
+    await tester.tap(find.byTooltip('关闭搜索并清空'));
+    await tester.pumpAndSettle();
+    expect(find.text('30 部番剧'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  testWidgets('compact navigation uses one bottom inset and no top inset', (
+    tester,
+  ) async {
+    final boundary = GlobalKey();
+    await _mount(
+      tester,
+      const HomePage(),
+      safePadding: const EdgeInsets.only(top: 47, bottom: 34),
+      boundary: boundary,
+    );
+    expect(tester.getSize(find.byType(NavigationBar)).height, 98);
+    await _capture(tester, boundary, 'mobile-120-navigation');
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  testWidgets('compact navigation hides for browsing and returns on reverse', (
+    tester,
+  ) async {
+    final boundary = GlobalKey();
+    await _mount(
+      tester,
+      const HomePage(),
+      libraryCount: 30,
+      brightness: Brightness.dark,
+      boundary: boundary,
+      safePadding: const EdgeInsets.only(top: 47, bottom: 34),
+    );
+    final library = find.byType(LibraryPage);
+    final scroll = find.descendant(
+      of: library,
+      matching: find.byType(CustomScrollView),
+    );
+    final pageState = tester.state(library);
+    final position = tester
+        .state<ScrollableState>(
+          find.descendant(of: scroll, matching: find.byType(Scrollable)).first,
+        )
+        .position;
+    final initialHeight = tester.getSize(scroll).height;
+    await tester.drag(scroll, const Offset(0, -240));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(scroll).height, closeTo(initialHeight + 98, 1));
+    expect(tester.getSize(find.byType(NavigationBar)).height, 98);
+    expect(find.byType(NavigationDestination).hitTestable(), findsNothing);
+    expect(tester.state(library), same(pageState));
+    await _capture(tester, boundary, 'mobile-120-immersive');
+    await tester.drag(scroll, const Offset(0, 100));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(scroll).height, closeTo(initialHeight, 1));
+    expect(find.byType(NavigationDestination).hitTestable(), findsNWidgets(4));
+    expect(
+      tester
+          .state<ScrollableState>(
+            find
+                .descendant(of: scroll, matching: find.byType(Scrollable))
+                .first,
+          )
+          .position,
+      same(position),
+    );
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  testWidgets('programmatic library scrolling does not dismiss search', (
+    tester,
+  ) async {
+    await _mount(tester, const LibraryPage(), libraryCount: 30);
+    await tester.tap(find.byTooltip('搜索番剧'));
+    await tester.pumpAndSettle();
+    final scroll = tester.state<ScrollableState>(find.byType(Scrollable).first);
+    scroll.position.jumpTo(300);
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('收起搜索'), findsOneWidget);
+    scroll.position.jumpTo(0);
+    await tester.pumpAndSettle();
+    expect(find.byType(SearchBar), findsOneWidget);
+    await _unmount(tester);
+  });
+
+  testWidgets('compact navigation remains readable with larger text', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const HomePage(),
+      textScale: 1.5,
+      safePadding: const EdgeInsets.only(top: 47, bottom: 34),
+    );
+    expect(find.byType(NavigationDestination).hitTestable(), findsNWidgets(4));
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
   testWidgets('poster preferences change real card rendering and grid size', (
     tester,
   ) async {
@@ -1105,10 +1391,47 @@ void main() {
       find.byKey(const ValueKey('bangumi-account')),
     );
     final summary = tester.getRect(find.byType(WatchSummaryCard));
-    expect(summary.bottom, closeTo(account.bottom, 1));
+    expect(summary.top, closeTo(account.top, 1));
     await tester.tap(find.text('关于 Kurako'));
     await tester.pumpAndSettle();
     expect(find.byType(AboutPanel), findsOneWidget);
+    await _unmount(tester);
+  });
+
+  testWidgets('onboarding presents media sources before download setup', (
+    tester,
+  ) async {
+    final boundary = GlobalKey();
+    await _mount(
+      tester,
+      const OnboardingPage(),
+      size: const Size(390, 1000),
+      boundary: boundary,
+    );
+    expect(
+      tester.getTopLeft(find.text('媒体来源').first).dy,
+      lessThan(tester.getTopLeft(find.text('下载位置')).dy),
+    );
+    await _capture(tester, boundary, 'onboarding-390-light');
+    await _unmount(tester);
+  });
+
+  testWidgets('embedded onboarding reuses the settings frame at wide size', (
+    tester,
+  ) async {
+    final boundary = GlobalKey();
+    await _mount(
+      tester,
+      const SettingsPaneScope(
+        child: OnboardingPage(standalone: true, embedded: true),
+      ),
+      size: const Size(1280, 1000),
+      boundary: boundary,
+    );
+    expect(find.byType(WindowCaption), findsNothing);
+    expect(find.byType(WindowButtons), findsNothing);
+    expect(tester.takeException(), isNull);
+    await _capture(tester, boundary, 'onboarding-embedded-1280-dark');
     await _unmount(tester);
   });
 
@@ -1300,6 +1623,7 @@ void main() {
     'collection': const CollectionPage(),
     'appearance': const AppearanceSettingsPage(),
     'player-settings': const PlayerSettingsPage(),
+    'decoder-settings': const DecoderSettingsPage(),
     'detail': const DetailPage(animeId: 1, initialAnime: _first),
     'preferences': const PreferencesPage(),
     'about': const AboutPage(),

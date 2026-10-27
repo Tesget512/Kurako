@@ -38,6 +38,7 @@ import '../widgets/player_visuals.dart';
 import '../widgets/window_caption.dart';
 import '../ui/shapes.dart';
 import '../ui/spring.dart';
+import 'decoder_settings_page.dart';
 
 /// A video chapter marker parsed from mpv's `chapter-list`.
 class _Chapter {
@@ -101,18 +102,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     configuration: _decodeConfig(),
   );
 
-  static VideoControllerConfiguration _decodeConfig() => decoderConfiguration(
-    decodeModeStartupValue,
-    Platform.isAndroid
-        ? TargetPlatform.android
-        : Platform.isIOS
-        ? TargetPlatform.iOS
-        : Platform.isMacOS
-        ? TargetPlatform.macOS
-        : Platform.isWindows
-        ? TargetPlatform.windows
-        : TargetPlatform.linux,
-  );
+  static VideoControllerConfiguration _decodeConfig() =>
+      decoderConfiguration(decodeModeStartupValue, currentDecoderPlatform());
 
   late int _index = widget.initialIndex;
   Episode get _ep => widget.episodes[_index];
@@ -122,6 +113,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   late final WatchRecorder _watchRecorder;
   StreamSubscription? _bufferingSub;
   bool _windowMinimized = false;
+  Timer? _decoderRuntimeTimer;
 
   WatchTarget get _watchTarget => WatchTarget(
     mediaKey: sha256
@@ -382,6 +374,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     // no native fullscreen events to refresh it. Sync on that notification.
     fullscreenExitNotifier.addListener(_syncFullscreenFromWindow);
     _listen();
+    _decoderRuntimeTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => unawaited(_refreshDecoderRuntime()),
+    );
     // A back gesture or any other pop we did not initiate still has to restore
     // the system chrome, and it must happen while the route is animating out —
     // not in dispose(), which runs only after the previous route has laid out.
@@ -596,6 +592,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
             unawaited(_applyConfiguredSuperResolution(seq));
             _loadExternalSubtitles(seq, episode);
             _loadChapters(seq);
+            unawaited(_refreshDecoderRuntime());
           }
           break;
         }
@@ -1112,6 +1109,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     });
   }
 
+  Future<void> _refreshDecoderRuntime() async {
+    try {
+      final platform = _player.platform as dynamic;
+      final raw = await platform?.getProperty('hwdec-current') as String?;
+      final actual = nonEmptyMediaProperty(raw);
+      if (actual != null) DecoderSettingsPage.runtimeHwdec.value = actual;
+    } catch (_) {}
+  }
+
   Future<void> _handlePlaybackCompleted() async {
     _watchRecorder.update(playing: false);
     if (_completionHandled) return;
@@ -1433,6 +1439,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     _watchRecorder.stop();
     WidgetsBinding.instance.removeObserver(this);
     _bufferingSub?.cancel();
+    _decoderRuntimeTimer?.cancel();
     // NOTE: no removeCurrentSnackBar here — removing during route teardown
     // leaves a ghost bar on the next page (see _leavePlayer). The exit paths
     // remove the notice before popping.
@@ -2402,7 +2409,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
     alignment: Alignment.centerRight,
     child: SafeArea(
       child: Padding(
-        padding: const EdgeInsets.only(right: 24),
+        padding: const EdgeInsets.only(right: 8),
         child: Material(
           color: Colors.transparent,
           child: IconButton(
