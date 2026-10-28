@@ -237,6 +237,20 @@ class AppearanceSettingsPage extends ConsumerWidget {
                       ref.read(useSystemFontProvider.notifier).set(!value),
                 ),
               ),
+              // Android only: the preview needs the system's predictive back
+              // gesture (Android 14+). Elsewhere there is nothing to switch.
+              if (Theme.of(context).platform == TargetPlatform.android)
+                Consumer(
+                  builder: (context, ref, _) => SwitchListTile(
+                    title: const Text('预测性返回动画'),
+                    subtitle: const Text(
+                      '拖动返回手势时预览上一页，需要 Android 14 及以上；关闭后返回手势照常使用',
+                    ),
+                    value: ref.watch(predictiveBackProvider),
+                    onChanged: (value) =>
+                        ref.read(predictiveBackProvider.notifier).set(value),
+                  ),
+                ),
               // Desktop only: window geometry restore (hidden on mobile).
               if (Platform.isWindows || Platform.isLinux || Platform.isMacOS)
                 Consumer(

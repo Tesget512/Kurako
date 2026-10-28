@@ -306,6 +306,13 @@ final useSystemFontProvider = NotifierProvider<_BoolPrefNotifier, bool>(
   () => _BoolPrefNotifier('use_system_font', defaultValue: true),
 );
 
+/// Android back-gesture preview (the previous page follows the finger).
+/// Off by default; kept out of appearance presets and configuration backups
+/// because it depends on the device (Android 14+), not on the user's look.
+final predictiveBackProvider = NotifierProvider<_BoolPrefNotifier, bool>(
+  () => _BoolPrefNotifier('predictive_back', defaultValue: false),
+);
+
 // ---- Decode mode (player hardware/software acceleration) ----
 
 /// Cached at startup so PlayerPage's static _decodeConfig() can read it

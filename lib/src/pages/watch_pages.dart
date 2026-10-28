@@ -199,8 +199,20 @@ class WatchStatisticsPage extends ConsumerStatefulWidget {
 }
 
 class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
+  /// [_selection] value for the whole history; 0 is a custom date range.
+  static const _lifetime = -1;
   int _selection = 7;
   late WatchRange _range = _recent(7);
+
+  String _rangeLabel(WatchLifetime? lifetime) {
+    if (_selection != _lifetime) {
+      return '${_date(_range.start)} - ${_date(_range.end.subtract(const Duration(milliseconds: 1)))}';
+    }
+    final first = lifetime?.firstWatchedMs;
+    if (lifetime == null || first == null) return '全部观看记录';
+    final last = lifetime.range.end.subtract(const Duration(milliseconds: 1));
+    return '${_date(DateTime.fromMillisecondsSinceEpoch(first))} - ${_date(last)}';
+  }
 
   WatchRange _recent(int days) {
     final now = DateTime.now();
@@ -237,8 +249,21 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final stats = ref.watch(watchStatisticsProvider(_range));
+    final lifetime = _selection == _lifetime
+        ? ref.watch(watchLifetimeProvider)
+        : null;
+    final stats = lifetime == null
+        ? ref.watch(watchStatisticsProvider(_range))
+        : lifetime.whenData((value) => value.report);
+    final monthly = lifetime?.value?.range.bucket == WatchBucket.month;
     ref.watch(watchRevisionProvider);
+    void refresh() {
+      // Whole families: the lifetime view queries a range of its own.
+      ref.invalidate(watchStatisticsProvider);
+      ref.invalidate(watchSummaryProvider);
+      ref.invalidate(watchLifetimeProvider);
+    }
+
     return Scaffold(
       appBar: SysAppBar(
         title: const Text('观看统计'),
@@ -246,10 +271,7 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
           IconButton(
             tooltip: '刷新统计',
             icon: const Icon(Icons.refresh),
-            onPressed: () {
-              ref.invalidate(watchStatisticsProvider(_range));
-              ref.invalidate(watchSummaryProvider);
-            },
+            onPressed: refresh,
           ),
         ],
       ),
@@ -268,6 +290,11 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
                     _range = _recent(days);
                   }),
                 ),
+              ChoiceChip(
+                label: const Text('生涯'),
+                selected: _selection == _lifetime,
+                onSelected: (_) => setState(() => _selection = _lifetime),
+              ),
               ActionChip(
                 avatar: const Icon(Icons.date_range_outlined),
                 label: const Text('自选日期'),
@@ -276,9 +303,7 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
             ],
           ),
           const SizedBox(height: 16),
-          Text(
-            '${_date(_range.start)} - ${_date(_range.end.subtract(const Duration(milliseconds: 1)))}',
-          ),
+          Text(_rangeLabel(lifetime?.value)),
           const SizedBox(height: 16),
           if (watchWriteQueue.hasError) const Text('部分记录尚未保存，正在重试。'),
           stats.when(
@@ -286,9 +311,7 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
               padding: EdgeInsets.all(32),
               child: Center(child: CircularProgressIndicator()),
             ),
-            error: (_, _) => _LoadFailure(
-              onRetry: () => ref.invalidate(watchStatisticsProvider(_range)),
-            ),
+            error: (_, _) => _LoadFailure(onRetry: refresh),
             data: (report) => Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -305,14 +328,16 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
                 const Text('仅记录内置播放器的前台播放时间；暂停和缓冲不计入。历史续播位置不会补算。'),
                 const SizedBox(height: 24),
                 if (report.totalMs == 0)
-                  const KurakoEmptyState(
+                  KurakoEmptyState(
                     icon: Icons.bar_chart_rounded,
-                    title: '这段时间还没有观看记录',
+                    title: lifetime == null ? '这段时间还没有观看记录' : '还没有观看记录',
                   )
                 else ...[
-                  const KurakoSectionHeading(title: '每日时长'),
-                  _DailyChart(days: report.days),
-                  const SizedBox(height: 24),
+                  if (report.days.isNotEmpty) ...[
+                    KurakoSectionHeading(title: monthly ? '每月时长' : '每日时长'),
+                    _BucketChart(days: report.days, monthly: monthly),
+                    const SizedBox(height: 24),
+                  ],
                   const KurakoSectionHeading(title: '单集明细'),
                   for (final entry in report.episodes)
                     _WatchTile(entry: entry, history: false),
@@ -326,9 +351,24 @@ class _WatchStatisticsPageState extends ConsumerState<WatchStatisticsPage> {
   }
 }
 
-class _DailyChart extends StatelessWidget {
-  const _DailyChart({required this.days});
+class _BucketChart extends StatelessWidget {
+  const _BucketChart({required this.days, required this.monthly});
   final List<WatchDay> days;
+  final bool monthly;
+
+  String _title(WatchDay day) {
+    final date = DateTime.fromMillisecondsSinceEpoch(day.startMs);
+    return monthly
+        ? '${date.year}/${date.month.toString().padLeft(2, '0')}'
+        : _date(date);
+  }
+
+  String _axis(WatchDay day) {
+    final date = DateTime.fromMillisecondsSinceEpoch(day.startMs);
+    return monthly
+        ? '${(date.year % 100).toString().padLeft(2, '0')}/${date.month}'
+        : '${date.month}/${date.day}';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -354,11 +394,10 @@ class _DailyChart extends StatelessWidget {
                     width: width,
                     child: Tooltip(
                       message:
-                          '${_date(DateTime.fromMillisecondsSinceEpoch(day.startMs))} · ${watchDuration(day.watchedMs)}',
+                          '${_title(day)} · ${watchDuration(day.watchedMs)}',
                       triggerMode: TooltipTriggerMode.tap,
                       child: Semantics(
-                        label:
-                            '${_date(DateTime.fromMillisecondsSinceEpoch(day.startMs))} ${watchDuration(day.watchedMs)}',
+                        label: '${_title(day)} ${watchDuration(day.watchedMs)}',
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -375,7 +414,7 @@ class _DailyChart extends StatelessWidget {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              '${DateTime.fromMillisecondsSinceEpoch(day.startMs).month}/${DateTime.fromMillisecondsSinceEpoch(day.startMs).day}',
+                              _axis(day),
                               style: Theme.of(context).textTheme.labelSmall,
                             ),
                           ],

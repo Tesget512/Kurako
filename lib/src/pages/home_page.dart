@@ -66,25 +66,32 @@ class _HomePageState extends ConsumerState<HomePage> {
     (Icons.home_outlined, Icons.home_rounded, '首页'),
   ];
 
-  @override
-  Widget build(BuildContext context) {
-    final preferences = ref.watch(homePreferencesProvider);
-    if (preferences.loaded && !_startupApplied) {
-      _startupApplied = true;
-      _index = switch (preferences.initial) {
-        AppDestination.home => 3,
+  /// Index into [_destinations] of the page the user chose to start on. With
+  /// the home page switched off the library starts in its place.
+  static int _startIndex(HomePreferences preferences) =>
+      switch (preferences.initial) {
+        AppDestination.home => preferences.enabled ? 3 : 0,
         AppDestination.library => 0,
         AppDestination.collection => 1,
         AppDestination.settings => 2,
       };
+
+  @override
+  Widget build(BuildContext context) {
+    final preferences = ref.watch(homePreferencesProvider);
+    final startIndex = _startIndex(preferences);
+    if (preferences.loaded && !_startupApplied) {
+      _startupApplied = true;
+      _index = startIndex;
     }
     if (!preferences.enabled && _index == 3) _index = 0;
     final visible = [if (preferences.enabled) 3, 0, 1, 2];
     final selected = visible.indexOf(_index);
-    void select(int index) => setState(() {
+    void goTo(int index) => setState(() {
       _startupApplied = true;
-      _index = visible[index];
+      _index = index;
     });
+    void select(int visibleIndex) => goTo(visible[visibleIndex]);
     // Responsive: phones (narrow) get a bottom NavigationBar; tablets/desktop
     // (wide) get a side NavigationRail. Breakpoint follows Material guidance.
     final size = MediaQuery.sizeOf(context);
@@ -95,6 +102,21 @@ class _HomePageState extends ConsumerState<HomePage> {
         size.width > size.height &&
         size.shortestSide < 600;
     final isWide = size.width >= 640;
+    // Phone landscape is short and the system bars already take most of it, so
+    // the margin the app adds itself is halved there.
+    final topGap = phoneLandscape ? 4.0 : 8.0;
+    final bottomGap = phoneLandscape ? 6.0 : 12.0;
+    // Android's back gesture and button: away from the start page they return
+    // to it first, and only from there do they leave the app.
+    final backToStart =
+        platform == TargetPlatform.android && _index != startIndex;
+    Widget guardBack(Widget child) => PopScope(
+      canPop: !backToStart,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) goTo(startIndex);
+      },
+      child: child,
+    );
     final body = PageSwitchTransition(
       key: _bodyKey,
       identity: _index,
@@ -133,78 +155,89 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
 
     if (isWide) {
-      return Scaffold(
-        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
-        body: Column(
-          children: [
-            const WindowCaption(title: 'Kurako'),
-            Expanded(
-              // Top and bottom are applied once for the rail and the panel
-              // together. The panel used to skip the top inset while the rail
-              // applied it, so on a phone in landscape the panel slid under the
-              // status bar and the two edges no longer lined up. The left side
-              // stays with the rail so its cutout padding is unchanged.
-              child: SafeArea(
-                left: false,
-                child: Row(
-                  children: [
-                    KurakoNavigation(
-                      index: selected,
-                      onSelected: select,
-                      showHome: preferences.enabled,
-                      showLabels: !phoneLandscape || _navigationExpanded,
-                      expanded: _navigationExpanded,
-                      onToggle: () => setState(
-                        () => _navigationExpanded = !_navigationExpanded,
-                      ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(0, 8, 12, 12),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(28),
-                          child: body,
+      return guardBack(
+        Scaffold(
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
+          body: Column(
+            children: [
+              const WindowCaption(title: 'Kurako'),
+              Expanded(
+                // Top and bottom are applied once for the rail and the panel
+                // together. The panel used to skip the top inset while the rail
+                // applied it, so on a phone in landscape the panel slid under the
+                // status bar and the two edges no longer lined up. The left side
+                // stays with the rail so its cutout padding is unchanged.
+                child: SafeArea(
+                  left: false,
+                  child: Row(
+                    children: [
+                      KurakoNavigation(
+                        index: selected,
+                        onSelected: select,
+                        showHome: preferences.enabled,
+                        showLabels: !phoneLandscape || _navigationExpanded,
+                        expanded: _navigationExpanded,
+                        topGap: topGap,
+                        bottomGap: bottomGap,
+                        onToggle: () => setState(
+                          () => _navigationExpanded = !_navigationExpanded,
                         ),
                       ),
-                    ),
-                  ],
+                      Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            0,
+                            topGap,
+                            12,
+                            bottomGap,
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(28),
+                            child: body,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
 
-    return CompactNavigationScaffold(
-      destination: _index,
-      body: Column(
-        children: [
-          const WindowCaption(title: 'Kurako'),
-          Expanded(child: body),
-        ],
-      ),
-      navigationBar: NavigationBar(
-        labelBehavior: phoneLandscape
-            ? NavigationDestinationLabelBehavior.alwaysHide
-            : NavigationDestinationLabelBehavior.alwaysShow,
-        height: 64,
-        elevation: 0,
-        surfaceTintColor: Colors.transparent,
-        backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
-        indicatorShape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
+    return guardBack(
+      CompactNavigationScaffold(
+        destination: _index,
+        body: Column(
+          children: [
+            const WindowCaption(title: 'Kurako'),
+            Expanded(child: body),
+          ],
         ),
-        selectedIndex: selected,
-        onDestinationSelected: select,
-        destinations: [
-          for (final i in visible)
-            NavigationDestination(
-              icon: Icon(_destinations[i].$1),
-              selectedIcon: Icon(_destinations[i].$2),
-              label: _destinations[i].$3,
-            ),
-        ],
+        navigationBar: NavigationBar(
+          labelBehavior: phoneLandscape
+              ? NavigationDestinationLabelBehavior.alwaysHide
+              : NavigationDestinationLabelBehavior.alwaysShow,
+          height: 64,
+          elevation: 0,
+          surfaceTintColor: Colors.transparent,
+          backgroundColor: Theme.of(context).colorScheme.surfaceContainerLow,
+          indicatorShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          selectedIndex: selected,
+          onDestinationSelected: select,
+          destinations: [
+            for (final i in visible)
+              NavigationDestination(
+                icon: Icon(_destinations[i].$1),
+                selectedIcon: Icon(_destinations[i].$2),
+                label: _destinations[i].$3,
+              ),
+          ],
+        ),
       ),
     );
   }

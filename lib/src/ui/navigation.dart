@@ -11,6 +11,8 @@ class KurakoNavigation extends StatelessWidget {
     required this.onToggle,
     this.showHome = false,
     this.showLabels = true,
+    this.topGap = 8,
+    this.bottomGap = 12,
   });
   final int index;
   final ValueChanged<int> onSelected;
@@ -18,6 +20,11 @@ class KurakoNavigation extends StatelessWidget {
   final VoidCallback onToggle;
   final bool showHome;
   final bool showLabels;
+
+  /// Space the app leaves above and below the rail card, beyond the system
+  /// bars. Phone landscape passes smaller values: the bars already take most
+  /// of the short height.
+  final double topGap, bottomGap;
   List<(IconData, IconData, String)> get items => [
     if (showHome) (Icons.home_outlined, Icons.home_rounded, '首页'),
     ...destinations,
@@ -44,7 +51,7 @@ class KurakoNavigation extends StatelessWidget {
                 : KurakoSprings.spatial.settleDuration,
             curve: KurakoSprings.spatial.curve,
             width: expanded ? 216 : 88,
-            margin: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+            margin: EdgeInsets.fromLTRB(12, topGap, 12, bottomGap),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surfaceContainer,
               borderRadius: BorderRadius.circular(32),

@@ -162,6 +162,7 @@ Future<void> _mount(
   bool resumeFixture = false,
   int libraryCount = 2,
   bool releaseDetails = false,
+  bool longTitles = false,
   EdgeInsets safePadding = EdgeInsets.zero,
 }) async {
   tester.view.physicalSize = size;
@@ -294,7 +295,7 @@ Future<void> _mount(
               filePath: '/preview/episode.mkv',
               fileName: '第 ${index + 1} 集 · 夏日的起点',
               title: index == 0
-                  ? '旅途的起点'
+                  ? (longTitles ? '旅途的起点与那个无论如何都念不完的非常非常长的副标题名称' : '旅途的起点')
                   : index == 1
                   ? '  '
                   : null,
@@ -524,6 +525,33 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('long episode titles scroll and keep the row height', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const DetailPage(animeId: 1, initialAnime: _first),
+      size: const Size(360, 800),
+      releaseDetails: true,
+      longTitles: true,
+      episodeCount: 3,
+    );
+    final tiles = [
+      for (var id = 1; id <= 3; id++)
+        find.byKey(ValueKey('episode-$id'), skipOffstage: false),
+    ];
+    final heights = <double>[];
+    for (final tile in tiles) {
+      await tester.ensureVisible(tile);
+      await tester.pump(const Duration(seconds: 5));
+      heights.add(tester.getSize(tile).height);
+    }
+    expect(heights.toSet().length, 1, reason: '$heights');
+    await tester.pump(const Duration(seconds: 2));
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
   testWidgets('landscape empty collection sits below the bars', (tester) async {
     await _mount(
       tester,
@@ -668,6 +696,53 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('phone landscape halves the margin the app adds itself', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const HomePage(),
+      size: const Size(844, 390),
+      safePadding: const EdgeInsets.only(top: 24, left: 47, bottom: 21),
+    );
+    final railCard = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(KurakoNavigation),
+            matching: find.byType(DecoratedBox),
+          )
+          .first,
+    );
+    final panel = tester.getRect(find.byType(ClipRRect).first);
+    // The custom window caption exists on desktop hosts only, so measure it.
+    final caption = tester.getSize(find.byType(WindowCaption)).height;
+    // System bar plus 4dp above and 6dp below, half of the usual 8 and 12.
+    expect(railCard.top, closeTo(caption + 24 + 4, 0.5));
+    expect(panel.top, closeTo(caption + 24 + 4, 0.5));
+    expect(railCard.bottom, closeTo(390 - 21 - 6, 0.5));
+    expect(panel.bottom, closeTo(390 - 21 - 6, 0.5));
+    await _unmount(tester);
+  });
+
+  testWidgets('wider screens keep the regular margin', (tester) async {
+    await _mount(tester, const HomePage(), size: const Size(1280, 800));
+    final railCard = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(KurakoNavigation),
+            matching: find.byType(DecoratedBox),
+          )
+          .first,
+    );
+    final panel = tester.getRect(find.byType(ClipRRect).first);
+    final caption = tester.getSize(find.byType(WindowCaption)).height;
+    expect(railCard.top, closeTo(caption + 8, 0.5));
+    expect(panel.top, closeTo(caption + 8, 0.5));
+    expect(railCard.bottom, closeTo(800 - 12, 0.5));
+    expect(panel.bottom, closeTo(800 - 12, 0.5));
+    await _unmount(tester);
+  });
+
   testWidgets('phone landscape rail is centred and not draggable', (
     tester,
   ) async {
@@ -703,6 +778,162 @@ void main() {
     expect((gapAbove - gapBelow).abs(), lessThan(8));
     expect(gapAbove, greaterThan(0));
     await _unmount(tester);
+  });
+
+  group('system back returns to the start page first', () {
+    Future<void> systemBack(WidgetTester tester) async {
+      await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+        'flutter/navigation',
+        const JSONMethodCodec().encodeMethodCall(const MethodCall('popRoute')),
+        (_) {},
+      );
+      await tester.pumpAndSettle();
+    }
+
+    // Records the calls that would close the app.
+    List<String> trackAppExit() {
+      final exits = <String>[];
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        if (call.method == 'SystemNavigator.pop') exits.add(call.method);
+        return null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+      );
+      return exits;
+    }
+
+    int selectedTab(WidgetTester tester) =>
+        tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex;
+
+    testWidgets(
+      'a non-start tab goes back to the library start page, then exits',
+      (tester) async {
+        final exits = trackAppExit();
+        await _mount(tester, const HomePage());
+        expect(selectedTab(tester), 1);
+
+        await tester.tap(find.byType(NavigationDestination).at(3));
+        await tester.pumpAndSettle();
+        expect(selectedTab(tester), 3);
+        await systemBack(tester);
+        expect(selectedTab(tester), 1);
+        expect(exits, isEmpty);
+
+        // The home page is also a non-start page here.
+        await tester.tap(find.byType(NavigationDestination).at(0));
+        await tester.pumpAndSettle();
+        await systemBack(tester);
+        expect(selectedTab(tester), 1);
+        expect(exits, isEmpty);
+
+        await tester.tap(find.byType(NavigationDestination).at(2));
+        await tester.pumpAndSettle();
+        await systemBack(tester);
+        expect(selectedTab(tester), 1);
+        expect(exits, isEmpty);
+
+        await systemBack(tester);
+        expect(exits, hasLength(1));
+        await _unmount(tester);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.android),
+    );
+
+    testWidgets(
+      'the chosen start page is where back lands, and where it exits',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({
+          homePreferencesKey: const HomePreferences(
+            initial: AppDestination.settings,
+          ).encode(),
+        });
+        final exits = trackAppExit();
+        await _mount(tester, const HomePage());
+        expect(selectedTab(tester), 3);
+
+        await tester.tap(find.byType(NavigationDestination).at(1));
+        await tester.pumpAndSettle();
+        expect(selectedTab(tester), 1);
+        await systemBack(tester);
+        expect(selectedTab(tester), 3);
+        expect(exits, isEmpty);
+
+        await systemBack(tester);
+        expect(exits, hasLength(1));
+        await _unmount(tester);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.android),
+    );
+
+    testWidgets(
+      'with the home page switched off the start page is the library',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({
+          homePreferencesKey: const HomePreferences(
+            enabled: false,
+            initial: AppDestination.home,
+          ).encode(),
+        });
+        final exits = trackAppExit();
+        await _mount(tester, const HomePage());
+        expect(find.byType(NavigationDestination), findsNWidgets(3));
+        expect(selectedTab(tester), 0);
+
+        await tester.tap(find.byType(NavigationDestination).at(2));
+        await tester.pumpAndSettle();
+        await systemBack(tester);
+        expect(selectedTab(tester), 0);
+        expect(exits, isEmpty);
+
+        await systemBack(tester);
+        expect(exits, hasLength(1));
+        await _unmount(tester);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.android),
+    );
+
+    testWidgets(
+      'the side navigation of a wide Android screen behaves the same',
+      (tester) async {
+        final exits = trackAppExit();
+        await _mount(tester, const HomePage(), size: const Size(1280, 800));
+        int selected() => tester
+            .widget<KurakoNavigation>(find.byType(KurakoNavigation))
+            .index;
+        expect(selected(), 1);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(KurakoNavigation),
+            matching: find.text('设置'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(selected(), 3);
+        await systemBack(tester);
+        expect(selected(), 1);
+        expect(exits, isEmpty);
+
+        await systemBack(tester);
+        expect(exits, hasLength(1));
+        await _unmount(tester);
+      },
+      variant: TargetPlatformVariant.only(TargetPlatform.android),
+    );
+
+    testWidgets('other platforms are not intercepted', (tester) async {
+      final exits = trackAppExit();
+      await _mount(tester, const HomePage());
+      await tester.tap(find.byType(NavigationDestination).at(3));
+      await tester.pumpAndSettle();
+      await systemBack(tester);
+      expect(selectedTab(tester), 3);
+      expect(exits, hasLength(1));
+      await _unmount(tester);
+    }, variant: TargetPlatformVariant.only(TargetPlatform.iOS));
   });
 
   for (final rightCutout in [false, true]) {
@@ -1969,6 +2200,106 @@ void main() {
     expect(find.byType(DateRangePickerDialog), findsOneWidget);
     Navigator.of(tester.element(find.byType(DateRangePickerDialog))).pop();
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  WatchLifetime lifetimeFixture({int? firstWatchedMs, required int totalMs}) {
+    final range = lifetimeWatchRange(
+      firstWatchedMs: firstWatchedMs,
+      now: DateTime(2026, 10, 28, 12),
+    );
+    final starts = range.boundaries.take(range.boundaries.length - 1).toList();
+    return WatchLifetime(
+      range: range,
+      firstWatchedMs: firstWatchedMs,
+      report: WatchStatistics(
+        totalMs: totalMs,
+        animeCount: totalMs == 0 ? 0 : 3,
+        episodeCount: totalMs == 0 ? 0 : 20,
+        days: [
+          for (var i = 0; i < starts.length; i++)
+            WatchDay(
+              startMs: starts[i],
+              watchedMs: totalMs == 0 ? 0 : [3600000, 7200000, 1800000][i % 3],
+            ),
+        ],
+        episodes: totalMs == 0
+            ? const []
+            : const [
+                WatchEntry(
+                  sessionId: 'life',
+                  mediaKey: 'life',
+                  animeId: 1,
+                  episodeId: 1,
+                  episodeNo: 1,
+                  animeTitle: '夏日旅途',
+                  episodeTitle: '旅途的起点',
+                  fileName: '[Preview] Summer Journey 01.mkv',
+                  startedMs: 1792972800000,
+                  lastWatchedMs: 1792974600000,
+                  watchedMs: 1800000,
+                  available: true,
+                ),
+              ],
+      ),
+    );
+  }
+
+  testWidgets('statistics lifetime range charts every month of history', (
+    tester,
+  ) async {
+    final first = DateTime(2026, 8, 15, 21).millisecondsSinceEpoch;
+    await _mount(
+      tester,
+      ProviderScope(
+        overrides: [
+          watchLifetimeProvider.overrideWith(
+            (ref) async =>
+                lifetimeFixture(firstWatchedMs: first, totalMs: 36000000),
+          ),
+        ],
+        child: const WatchStatisticsPage(),
+      ),
+    );
+    await tester.tap(find.text('生涯'));
+    await tester.pumpAndSettle();
+    final selected = tester
+        .widgetList<ChoiceChip>(find.byType(ChoiceChip))
+        .where((c) => c.selected)
+        .single;
+    expect((selected.label as Text).data, '生涯');
+    expect(find.text('每月时长'), findsOneWidget);
+    expect(find.text('每日时长'), findsNothing);
+    expect(find.text('10 小时 0 分钟'), findsOneWidget);
+    expect(find.text('2026/08/15 - 2026/10/28'), findsOneWidget);
+    for (final label in ['26/8', '26/9', '26/10']) {
+      expect(find.text(label), findsOneWidget);
+    }
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  testWidgets('statistics lifetime range without records says so', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      ProviderScope(
+        overrides: [
+          watchLifetimeProvider.overrideWith(
+            (ref) async => lifetimeFixture(totalMs: 0),
+          ),
+        ],
+        child: const WatchStatisticsPage(),
+      ),
+    );
+    await tester.tap(find.text('生涯'));
+    await tester.pumpAndSettle();
+    expect(find.text('还没有观看记录'), findsOneWidget);
+    expect(find.text('这段时间还没有观看记录'), findsNothing);
+    expect(find.text('全部观看记录'), findsOneWidget);
+    expect(find.text('每月时长'), findsNothing);
     expect(tester.takeException(), isNull);
     await _unmount(tester);
   });

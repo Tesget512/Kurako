@@ -35,6 +35,72 @@ const _anime = Anime(
 );
 
 void main() {
+  Future<void> backGesture(
+    WidgetTester tester,
+    String name, [
+    double? progress,
+  ]) async {
+    await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+      'flutter/backgesture',
+      const StandardMethodCodec().encodeMethodCall(
+        MethodCall(
+          name,
+          progress == null
+              ? null
+              : <String, dynamic>{
+                  'touchOffset': <double>[100, 300],
+                  'progress': progress,
+                  'swipeEdge': 0,
+                },
+        ),
+      ),
+      (_) {},
+    );
+    await tester.pump();
+  }
+
+  testWidgets(
+    'with predictive back off the system back gesture still pops normally',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(
+            platform: TargetPlatform.android,
+            pageTransitionsTheme: buildPageTransitionsTheme(
+              predictiveBack: false,
+            ),
+          ),
+          routes: {
+            '/': (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => Navigator.pushNamed(context, '/detail'),
+                child: const Text('open'),
+              ),
+            ),
+            '/detail': (_) => const Scaffold(body: Text('detail')),
+          },
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+
+      await backGesture(tester, 'startBackGesture', 0);
+      await backGesture(tester, 'updateBackGestureProgress', 0.5);
+      // Nothing follows the finger: no page is being dragged.
+      expect(
+        Navigator.of(tester.element(find.text('detail'))).userGestureInProgress,
+        isFalse,
+      );
+      expect(find.text('detail'), findsOneWidget);
+      await backGesture(tester, 'commitBackGesture');
+      await tester.pumpAndSettle();
+      expect(find.text('detail'), findsNothing);
+      expect(find.text('open'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
+
   testWidgets(
     'Android predictive back cancels then commits with a cover Hero',
     (tester) async {
@@ -51,7 +117,7 @@ void main() {
         MaterialApp(
           theme: ThemeData(
             platform: TargetPlatform.android,
-            pageTransitionsTheme: kPageTransitionsTheme,
+            pageTransitionsTheme: kPredictiveBackPageTransitionsTheme,
           ),
           routes: {
             '/': (context) => Scaffold(
@@ -132,7 +198,7 @@ void main() {
         MaterialApp(
           theme: ThemeData(
             platform: TargetPlatform.android,
-            pageTransitionsTheme: kPageTransitionsTheme,
+            pageTransitionsTheme: kPredictiveBackPageTransitionsTheme,
           ),
           routes: {
             '/': (context) => Scaffold(
@@ -211,34 +277,53 @@ void main() {
   );
 
   test('page transitions are explicit for every target platform', () {
-    final builders = kPageTransitionsTheme.builders;
+    for (final theme in [
+      kPageTransitionsTheme,
+      kPredictiveBackPageTransitionsTheme,
+    ]) {
+      final builders = theme.builders;
+      expect(
+        builders[TargetPlatform.iOS],
+        isA<CupertinoPageTransitionsBuilder>(),
+      );
+      expect(
+        builders[TargetPlatform.macOS],
+        isA<CupertinoPageTransitionsBuilder>(),
+      );
+      expect(
+        builders[TargetPlatform.windows],
+        isA<FadeUpwardsPageTransitionsBuilder>(),
+      );
+      expect(
+        builders[TargetPlatform.linux],
+        isA<FadeUpwardsPageTransitionsBuilder>(),
+      );
+      expect(
+        builders[TargetPlatform.fuchsia],
+        isA<FadeUpwardsPageTransitionsBuilder>(),
+      );
+    }
+  });
 
-    final androidBuilder = builders[TargetPlatform.android];
-    expect(androidBuilder, isA<PredictiveBackPageTransitionsBuilder>());
+  test('predictive back is opt-in and only changes the Android builder', () {
     expect(
-      (androidBuilder! as PredictiveBackPageTransitionsBuilder)
-          .allowSnapshotting,
+      kPageTransitionsTheme.builders[TargetPlatform.android],
+      isA<FadeForwardsPageTransitionsBuilder>(),
+    );
+    final predictive =
+        kPredictiveBackPageTransitionsTheme.builders[TargetPlatform.android];
+    expect(predictive, isA<PredictiveBackPageTransitionsBuilder>());
+    expect(
+      (predictive! as PredictiveBackPageTransitionsBuilder).allowSnapshotting,
       isTrue,
     );
     expect(
-      builders[TargetPlatform.iOS],
-      isA<CupertinoPageTransitionsBuilder>(),
+      buildPageTransitionsTheme(predictiveBack: false),
+      same(kPageTransitionsTheme),
     );
     expect(
-      builders[TargetPlatform.macOS],
-      isA<CupertinoPageTransitionsBuilder>(),
-    );
-    expect(
-      builders[TargetPlatform.windows],
-      isA<FadeUpwardsPageTransitionsBuilder>(),
-    );
-    expect(
-      builders[TargetPlatform.linux],
-      isA<FadeUpwardsPageTransitionsBuilder>(),
-    );
-    expect(
-      builders[TargetPlatform.fuchsia],
-      isA<FadeUpwardsPageTransitionsBuilder>(),
+      buildPageTransitionsTheme(predictiveBack: true),
+      same(kPredictiveBackPageTransitionsTheme),
     );
   });
 

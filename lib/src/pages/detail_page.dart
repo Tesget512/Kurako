@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
 import '../state/interface_preferences.dart';
+import '../state/episode_title_marks.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../ui/page_components.dart';
@@ -42,6 +43,10 @@ class DetailPage extends ConsumerStatefulWidget {
 }
 
 class _DetailPageState extends ConsumerState<DetailPage> {
+  /// Anime whose missing episode titles were already retried in this run, so
+  /// reopening a page never re-hits the API for a show Bangumi has no titles for.
+  static final _titleBackfillTried = <int>{};
+
   bool _refreshing = false;
   final _scrollController = ScrollController();
   Anime? _animeSnapshot;
@@ -50,6 +55,34 @@ class _DetailPageState extends ConsumerState<DetailPage> {
   bool _targetHandled = false;
   bool _targetHighlight = true;
   Timer? _targetTimer;
+
+  /// The startup refresh is one attempt per launch and stays quiet when it
+  /// fails (offline, Bangumi unreachable), which used to leave episode rows
+  /// without titles for good. Retry when the page is opened, but only for
+  /// episodes not yet looked up: once a refresh succeeds the episodes are
+  /// marked, so a title Bangumi really does not have is not fetched again.
+  void _backfillTitlesAfterFirstFrame(Anime anime, List<Episode> episodes) {
+    if (anime.bangumiId == null) return;
+    final missing = <String>{
+      for (final e in episodes)
+        if (e.episodeNo != null && (e.title?.trim().isEmpty ?? true))
+          EpisodeTitleMarks.keyFor(widget.animeId, e.episodeNo!.toInt()),
+    };
+    if (missing.isEmpty || !_titleBackfillTried.add(widget.animeId)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final marked = await EpisodeTitleMarks.load();
+        if (missing.every(marked.contains)) return;
+        await rust.refreshMetadata(animeId: widget.animeId);
+        await EpisodeTitleMarks.add(missing);
+        if (!mounted) return;
+        ref.invalidate(episodesProvider(widget.animeId));
+        ref.invalidate(episodesProvider);
+      } catch (_) {
+        // Offline or unreachable: nothing is marked, so a later run retries.
+      }
+    });
+  }
 
   void _locateTarget(List<Episode> episodes) {
     if (_targetHandled || widget.initialEpisodeId == null) return;
@@ -238,6 +271,7 @@ class _DetailPageState extends ConsumerState<DetailPage> {
                       ),
                       data: (episodes) {
                         _consumeNewFilesAfterFirstFrame(episodes);
+                        _backfillTitlesAfterFirstFrame(anime, episodes);
                         _locateTarget(episodes);
                         return SliverToBoxAdapter(
                           child: _EpisodeList(
@@ -437,7 +471,10 @@ class _DetailPageState extends ConsumerState<DetailPage> {
 
   /// Open this subject's Bangumi page in the system browser.
   Future<void> _openBangumi(int subjectId) async {
-    final uri = Uri.parse('https://bgm.tv/subject/$subjectId');
+    final uri = bangumiSubjectUri(
+      subjectId,
+      mirror: ref.read(bangumiMirrorProvider),
+    );
     await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
@@ -851,25 +888,31 @@ class _MarqueeTextState extends State<_MarqueeText>
         // natural width; ClipRect (sized to the original bounded constraints)
         // then clips the *visible window* around whatever Transform slides
         // into it.
-        return ClipRect(
-          child: OverflowBox(
-            alignment: Alignment.centerLeft,
-            minWidth: 0,
-            maxWidth: double.infinity,
-            child: AnimatedBuilder(
-              animation: _controller,
-              child: Text(
-                widget.text,
-                maxLines: 1,
-                softWrap: false,
-                style: style,
+        // The height is pinned to one text line: inside a ListTile the height
+        // is unbounded, and an OverflowBox would otherwise grow without limit.
+        return SizedBox(
+          height: painter.height,
+          child: ClipRect(
+            child: OverflowBox(
+              alignment: Alignment.centerLeft,
+              minWidth: 0,
+              maxWidth: double.infinity,
+              maxHeight: painter.height,
+              child: AnimatedBuilder(
+                animation: _controller,
+                child: Text(
+                  widget.text,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: style,
+                ),
+                builder: (context, child) {
+                  return Transform.translate(
+                    offset: Offset(-overflow * _controller.value, 0),
+                    child: child,
+                  );
+                },
               ),
-              builder: (context, child) {
-                return Transform.translate(
-                  offset: Offset(-overflow * _controller.value, 0),
-                  child: child,
-                );
-              },
             ),
           ),
         );
@@ -1131,6 +1174,61 @@ EpisodeRowLabel episodeRowLabel(Episode episode, EpisodeNaming naming) {
   );
 }
 
+/// Episode number in a circle. When [resumeProgress] is set, a ring around the
+/// circle shows how much was watched; the whole badge carries the "可续播"
+/// tooltip, so the state needs no extra text or trailing icon.
+class _EpisodeNumberBadge extends StatelessWidget {
+  const _EpisodeNumberBadge({required this.number, this.resumeProgress});
+
+  final String number;
+  final double? resumeProgress;
+
+  static const double _size = 48;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final resumable = resumeProgress != null;
+    final badge = SizedBox.square(
+      dimension: _size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          if (resumable)
+            SizedBox.expand(
+              child: CircularProgressIndicator(
+                value: resumeProgress,
+                strokeWidth: 3,
+                strokeCap: StrokeCap.round,
+                color: scheme.primary,
+                backgroundColor: scheme.primary.withValues(alpha: 0.2),
+              ),
+            ),
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: resumable
+                ? scheme.primaryContainer
+                : scheme.secondaryContainer,
+            foregroundColor: resumable
+                ? scheme.onPrimaryContainer
+                : scheme.onSecondaryContainer,
+            // 4-digit episode numbers (or any manual value) must shrink to one
+            // line inside the circle instead of soft-wrapping.
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(number, maxLines: 1, softWrap: false),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    return resumable ? Tooltip(message: '可续播', child: badge) : badge;
+  }
+}
+
 class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
   final VoidCallback onPlay;
@@ -1182,22 +1280,20 @@ class _EpisodeTile extends ConsumerWidget {
           child: ListTile(
             // One height for every row, whether or not a subtitle is present.
             minTileHeight: 72,
-            leading: CircleAvatar(
-              // 4-digit episode numbers (or any manual value) must shrink to one
-              // line inside the 40px circle instead of soft-wrapping.
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  episode.episodeNo?.toString() ?? '?',
-                  maxLines: 1,
-                  softWrap: false,
-                ),
-              ),
+            leading: _EpisodeNumberBadge(
+              number: episode.episodeNo?.toString() ?? '?',
+              // A ring around the number shows how far playback got; it uses
+              // the theme's primary colour so it follows dynamic colour.
+              resumeProgress: label.resumable ? _resumeFraction(episode) : null,
             ),
-            title: Text(
+            // A title wider than the row scrolls slowly instead of being cut
+            // off; one that fits renders as plain single-line text.
+            title: _MarqueeText(
               label.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodyLarge?.copyWith(
+                color: theme.colorScheme.onSurface,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             subtitle: label.subtitle.isEmpty
                 ? null
@@ -1212,14 +1308,6 @@ class _EpisodeTile extends ConsumerWidget {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (label.resumable)
-                  Tooltip(
-                    message: '可续播',
-                    child: Icon(
-                      Icons.history_rounded,
-                      color: theme.colorScheme.tertiary,
-                    ),
-                  ),
                 if (episode.isDownloaded)
                   Tooltip(
                     message: '已下载到本地',
@@ -1243,6 +1331,14 @@ class _EpisodeTile extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  /// Watched share of the episode, kept visible even when the duration is
+  /// unknown or the position is tiny.
+  static double _resumeFraction(Episode episode) {
+    final duration = episode.durationMs.toInt();
+    if (duration <= 0) return 0.25;
+    return (episode.lastPositionMs.toInt() / duration).clamp(0.06, 1.0);
   }
 
   void _showMenuCentered(BuildContext context, WidgetRef ref) {

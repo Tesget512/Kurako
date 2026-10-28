@@ -103,4 +103,43 @@ void main() {
       greaterThan(8),
     );
   });
+
+  testWidgets('predictive back is an Android switch that starts off', (
+    tester,
+  ) async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    await container.read(predictiveBackProvider.notifier).ready;
+    expect(container.read(predictiveBackProvider), isFalse);
+
+    await _mount(tester, const AppearanceSettingsPage());
+    final title = find.text('预测性返回动画');
+    await tester.scrollUntilVisible(title, 300);
+    // The tile can already be built inside the cache extent while still
+    // below the viewport, so bring it on screen before tapping.
+    await tester.ensureVisible(title);
+    await tester.pumpAndSettle();
+    final tile = find.ancestor(
+      of: title,
+      matching: find.byType(SwitchListTile),
+    );
+    expect(tester.widget<SwitchListTile>(tile).value, isFalse);
+    await tester.tap(title);
+    await tester.pumpAndSettle();
+    expect(tester.widget<SwitchListTile>(tile).value, isTrue);
+    expect(
+      (await SharedPreferences.getInstance()).getBool('predictive_back'),
+      isTrue,
+    );
+  }, variant: TargetPlatformVariant.only(TargetPlatform.android));
+
+  testWidgets(
+    'predictive back switch is hidden where the system has no such gesture',
+    (tester) async {
+      await _mount(tester, const AppearanceSettingsPage());
+      await tester.scrollUntilVisible(find.text('使用霞鹜文楷屏幕字体'), 300);
+      expect(find.text('预测性返回动画'), findsNothing);
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.iOS),
+  );
 }

@@ -36,6 +36,27 @@ void main() {
     },
   );
 
+  test('subject page link follows the reverse proxy switch', () {
+    expect(bangumiMirrorSiteHost, 'bangumi.lat');
+    expect(
+      bangumiSubjectUri(541285, mirror: false).toString(),
+      'https://bgm.tv/subject/541285',
+    );
+    expect(
+      bangumiSubjectUri(541285, mirror: true).toString(),
+      'https://bangumi.lat/subject/541285',
+    );
+    // The API and image hosts are not the browsable site.
+    expect(
+      bangumiSubjectUri(1, mirror: true).host,
+      isNot(bangumiMirrorApiHost),
+    );
+    expect(
+      bangumiSubjectUri(1, mirror: true).host,
+      isNot(bangumiMirrorImageHost),
+    );
+  });
+
   test('reverse proxy probe targets subject 541285', () {
     expect(bangumiMirrorApiProbe, 'https://api.bangumi.lat/v0/subjects/541285');
   });

@@ -2141,12 +2141,9 @@ async fn subject_episode_titles_at(
         );
         let resp = send_with_backoff(|| auth(client.get(&url)), "bangumi episode titles").await?;
         if !resp.status().is_success() {
-            break;
+            anyhow::bail!("bangumi episode titles failed: {}", resp.status());
         }
-        let page: RawEpisodePage = match resp.json().await {
-            Ok(page) => page,
-            Err(_) => break,
-        };
+        let page: RawEpisodePage = resp.json().await.context("parse bangumi episode titles")?;
         let received = page.data.len().min(page_limit as usize) as u32;
         titles.extend(
             page.data
@@ -2224,6 +2221,20 @@ mod episode_title_tests {
             .unwrap();
         assert_eq!(titles.iter().map(|t| t.ep).collect::<Vec<_>>(), [2, 3]);
         assert_eq!(server.requests().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_title_request_is_an_error_not_an_empty_list() {
+        let server = MockHttpServer::start(vec![respond_json(503, r#"{"error":"busy"}"#)]).await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        assert!(subject_episode_titles_at(&client, &server.base_url(), 7, 5)
+            .await
+            .is_err());
+
+        let server = MockHttpServer::start(vec![respond_json(200, "not json")]).await;
+        assert!(subject_episode_titles_at(&client, &server.base_url(), 7, 5)
+            .await
+            .is_err());
     }
 }
 

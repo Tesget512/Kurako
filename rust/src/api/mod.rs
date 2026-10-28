@@ -1688,17 +1688,18 @@ async fn refresh_one(anime_id: i64, subject_id: i64, corrected: bool) -> anyhow:
         corrected,
     )?;
     // Enrich on-disk episodes with Bangumi episode titles (only fills NULL
-    // titles; never overwrites user-visible data).
-    if let Ok(titles) = bangumi::subject_episode_titles(subject_id, 500).await {
-        for t in titles {
-            let title = if !t.name_cn.is_empty() {
-                &t.name_cn
-            } else {
-                &t.name
-            };
-            if !title.is_empty() {
-                db::set_episode_title(anime_id, t.ep, title)?;
-            }
+    // titles; never overwrites user-visible data). A failed request is an
+    // error, not an empty list: callers record "looked up, no title" only
+    // after a refresh that really reached Bangumi.
+    let titles = bangumi::subject_episode_titles(subject_id, 500).await?;
+    for t in titles {
+        let title = if !t.name_cn.is_empty() {
+            &t.name_cn
+        } else {
+            &t.name
+        };
+        if !title.is_empty() {
+            db::set_episode_title(anime_id, t.ep, title)?;
         }
     }
     Ok(())

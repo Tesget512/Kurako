@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:crypto/crypto.dart';
@@ -2129,6 +2130,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
   MaterialVideoControlsThemeData _mobileTheme() {
     final appearance = ref.watch(playerAppearanceProvider);
     final keys = ref.watch(keyboardPreferencesProvider);
+    // The controls library only adds the safe area in system fullscreen, so
+    // the button bars would sit under a landscape camera cutout. Keep them a
+    // little clear of it; the seek bar sits above the cutout and stays put.
+    final inset = MediaQuery.paddingOf(context);
+    double clearOf(double systemInset, double base) =>
+        systemInset > 0 ? math.max(base, systemInset + 8) : base;
+    final barLeft = clearOf(inset.left, 20);
+    final barRight = clearOf(inset.right, 20);
     return MaterialVideoControlsThemeData(
       // The visual controls stay unified across touch and desktop, but a real
       // mouse follows desktop conventions: leaving the whole video hides the
@@ -2183,10 +2192,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage>
       seekBarContainerHeight: 40,
       buttonBarHeight: 52,
       buttonBarButtonSize: 26,
-      topButtonBarMargin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-      bottomButtonBarMargin: const EdgeInsets.only(
-        left: 20,
-        right: 20,
+      topButtonBarMargin: EdgeInsets.fromLTRB(
+        clearOf(inset.left, 16),
+        8,
+        clearOf(inset.right, 16),
+        0,
+      ),
+      bottomButtonBarMargin: EdgeInsets.only(
+        left: barLeft,
+        right: barRight,
         bottom: 12,
       ),
       bufferingIndicatorBuilder: (_) => PlayerBufferingIndicator(

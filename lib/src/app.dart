@@ -264,6 +264,7 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
     final theme = ref.watch(themeProvider);
     final scalePercent = ref.watch(uiScaleProvider);
     final systemFont = ref.watch(useSystemFontProvider);
+    final predictiveBack = ref.watch(predictiveBackProvider);
     return DynamicColorBuilder(
       builder: (lightDynamic, darkDynamic) {
         // Follow-system (Monet) is an Android-only concept here. dynamic_color
@@ -294,8 +295,16 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
           navigatorKey: updateNavigatorKey,
           title: 'Kurako',
           debugShowCheckedModeBanner: false,
-          theme: buildKurakoTheme(light, systemFont: systemFont),
-          darkTheme: buildKurakoTheme(dark, systemFont: systemFont),
+          theme: buildKurakoTheme(
+            light,
+            systemFont: systemFont,
+            predictiveBack: predictiveBack,
+          ),
+          darkTheme: buildKurakoTheme(
+            dark,
+            systemFont: systemFont,
+            predictiveBack: predictiveBack,
+          ),
           themeMode: theme.mode.flutterThemeMode,
           home: const _StartupGate(),
           builder: (context, child) {

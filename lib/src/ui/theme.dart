@@ -6,11 +6,17 @@ import 'shapes.dart';
 import 'surfaces.dart';
 import 'transitions.dart';
 
-ThemeData buildKurakoTheme(ColorScheme scheme, {required bool systemFont}) {
+ThemeData buildKurakoTheme(
+  ColorScheme scheme, {
+  required bool systemFont,
+  bool predictiveBack = false,
+}) {
   final base = ThemeData(
     colorScheme: scheme,
     scaffoldBackgroundColor: KurakoSurfaces.page(scheme),
-    pageTransitionsTheme: kPageTransitionsTheme,
+    pageTransitionsTheme: buildPageTransitionsTheme(
+      predictiveBack: predictiveBack,
+    ),
     // Bundled LXGW WenKai Screen: consistent, screen-tuned CJK rendering
     // instead of the system fallback chain. When the user opts into the
     // system font on Windows, use ONE real system font — 'Microsoft YaHei

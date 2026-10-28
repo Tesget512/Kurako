@@ -11,6 +11,18 @@ const bangumiMirrorProbeSubjectId = 541285;
 const bangumiMirrorApiProbe =
     'https://$bangumiMirrorApiHost/v0/subjects/$bangumiMirrorProbeSubjectId';
 const bangumiMirrorImageHost = 'lain.bangumi.lat';
+
+/// Browsable site of the reverse proxy. Only used for links the user opens in
+/// their own browser; the app never sends API requests or credentials here.
+const bangumiMirrorSiteHost = 'bangumi.lat';
+
+/// Subject page the user opens in a browser. Follows the reverse proxy switch
+/// so a user who cannot reach the official site is not sent back to it.
+Uri bangumiSubjectUri(int subjectId, {required bool mirror}) => Uri(
+  scheme: 'https',
+  host: mirror ? bangumiMirrorSiteHost : 'bgm.tv',
+  path: '/subject/$subjectId',
+);
 const bangumiMirrorFailureMessage =
     '反向代理验证已失效或请求被拦截。请重新验证，或关闭反向代理回退官方；'
     '请确保 WebView 与应用使用相同网络和代理出口，网络/IP 或 User-Agent 改变会使验证失效。'
