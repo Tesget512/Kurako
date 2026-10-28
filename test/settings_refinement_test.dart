@@ -7,6 +7,7 @@ import 'package:kurako/src/pages/appearance_settings_page.dart';
 import 'package:kurako/src/pages/decoder_settings_page.dart';
 import 'package:kurako/src/pages/onboarding_page.dart';
 import 'package:kurako/src/pages/preferences_page.dart';
+import 'package:kurako/src/services/decoder_policy.dart';
 import 'package:kurako/src/services/scan_coordinator.dart';
 import 'package:kurako/src/state/providers.dart';
 import 'package:kurako/src/ui/theme.dart';
@@ -73,11 +74,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byType(DecoderSettingsPage), findsOneWidget);
     expect(find.text('自动选择（推荐）'), findsWidgets);
-    expect(find.text('VideoToolbox'), findsOneWidget);
+    final platform = currentDecoderPlatform();
+    final choices = availableDecoderChoices(platform, runtimeHwdec: null);
+    final platformChoice = choices.entries.firstWhere(
+      (entry) => !isAutomaticDecoder(entry.key) && entry.key != 'sw',
+      orElse: () => const MapEntry('sw', '软件解码（FFmpeg）'),
+    );
+    expect(find.text(platformChoice.value), findsOneWidget);
     expect(find.textContaining('仅显示'), findsOneWidget);
-    DecoderSettingsPage.runtimeHwdec.value = 'videotoolbox';
+    final runtime = platformChoice.key == 'sw' ? 'no' : platformChoice.key;
+    final runtimeLabel = decoderRuntimeLabel(runtime)!;
+    DecoderSettingsPage.runtimeHwdec.value = runtime;
     await tester.pump();
-    expect(find.text('自动：「VideoToolbox」'), findsOneWidget);
+    expect(find.text('自动：「$runtimeLabel」'), findsOneWidget);
     DecoderSettingsPage.runtimeHwdec.value = null;
   });
 
