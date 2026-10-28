@@ -1088,45 +1088,46 @@ class _EpisodeList extends StatelessWidget {
   }
 }
 
-/// Title and secondary lines of one episode row.
+/// Title, one secondary line and the resume flag of one episode row.
+///
+/// Every row is a single title line plus at most one small secondary line, so
+/// cards keep one height. "Can resume" is a flag rendered as an icon rather
+/// than text, which would not fit beside a long release string on a phone.
 @visibleForTesting
 class EpisodeRowLabel {
-  const EpisodeRowLabel(this.title, this.subtitle);
+  const EpisodeRowLabel(this.title, this.subtitle, {this.resumable = false});
   final String title;
-  final List<String> subtitle;
+  final String subtitle;
+  final bool resumable;
 }
 
 /// Resolves what an episode row shows for the chosen [EpisodeNaming].
 ///
-/// [EpisodeNaming.releaseInfo] leads with `1080p · 字幕组` (the part that tells
-/// versions apart) and moves the file name to a second line. When neither is
-/// known it falls back to the file name rather than showing an empty title.
-/// [EpisodeNaming.fileName] keeps the earlier layout.
+/// The episode's own title is always the primary line. [EpisodeNaming.releaseInfo]
+/// puts `1080p · 字幕组` (the part that tells versions apart) on the second line
+/// and leaves the file name out. Without an episode title, the release info
+/// becomes the title, and without either the file name is shown rather than an
+/// empty row. [EpisodeNaming.fileName] shows the file name on the second line
+/// and falls back to the release info beneath it when there is no title.
 @visibleForTesting
 EpisodeRowLabel episodeRowLabel(Episode episode, EpisodeNaming naming) {
-  final resumed = episode.lastPositionMs > 0 && !episode.watched ? '（可续播）' : '';
+  final resumable = episode.lastPositionMs > 0 && !episode.watched;
   final release = [
     if (episode.resolution?.isNotEmpty == true) episode.resolution!,
     if (episode.releaseGroup?.isNotEmpty == true) episode.releaseGroup!,
   ].join(' · ');
   final episodeTitle = episode.title?.trim() ?? '';
-  final withResume = [
-    if (release.isNotEmpty) release,
-    if (resumed.isNotEmpty) resumed,
-  ].join(' · ');
 
   if (naming == EpisodeNaming.releaseInfo && release.isNotEmpty) {
-    return EpisodeRowLabel(release, [
-      if (episodeTitle.isNotEmpty) episodeTitle,
-      if (resumed.isNotEmpty) resumed,
-    ]);
+    if (episodeTitle.isEmpty) {
+      return EpisodeRowLabel(release, '', resumable: resumable);
+    }
+    return EpisodeRowLabel(episodeTitle, release, resumable: resumable);
   }
   return EpisodeRowLabel(
     episodeTitle.isNotEmpty ? episodeTitle : episode.fileName,
-    [
-      if (episodeTitle.isNotEmpty) episode.fileName,
-      if (withResume.isNotEmpty) withResume,
-    ],
+    episodeTitle.isNotEmpty ? episode.fileName : release,
+    resumable: resumable,
   );
 }
 
@@ -1172,56 +1173,73 @@ class _EpisodeTile extends ConsumerWidget {
       enabled: episode.isNewFile,
       child: GestureDetector(
         onSecondaryTapDown: (d) => _showMenu(context, ref, d.globalPosition),
-        child: ListTile(
-          leading: CircleAvatar(
-            // 4-digit episode numbers (or any manual value) must shrink to one
-            // line inside the 40px circle instead of soft-wrapping.
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Text(
-                episode.episodeNo?.toString() ?? '?',
-                maxLines: 1,
-                softWrap: false,
+        // Episode rows sit inside the page's own landscape inset already; the
+        // ListTile would otherwise apply the cutout padding a second time.
+        child: MediaQuery.removePadding(
+          context: context,
+          removeLeft: true,
+          removeRight: true,
+          child: ListTile(
+            // One height for every row, whether or not a subtitle is present.
+            minTileHeight: 72,
+            leading: CircleAvatar(
+              // 4-digit episode numbers (or any manual value) must shrink to one
+              // line inside the 40px circle instead of soft-wrapping.
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  episode.episodeNo?.toString() ?? '?',
+                  maxLines: 1,
+                  softWrap: false,
+                ),
               ),
             ),
-          ),
-          title: Text(
-            label.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: label.subtitle.isEmpty
-              ? null
-              : Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final line in label.subtitle)
-                      Text(line, maxLines: 2, overflow: TextOverflow.ellipsis),
-                  ],
-                ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (episode.isDownloaded)
-                Tooltip(
-                  message: '已下载到本地',
-                  child: Icon(
-                    Icons.download_done,
-                    color: theme.colorScheme.outline,
+            title: Text(
+              label.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: label.subtitle.isEmpty
+                ? null
+                : Text(
+                    label.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (label.resumable)
+                  Tooltip(
+                    message: '可续播',
+                    child: Icon(
+                      Icons.history_rounded,
+                      color: theme.colorScheme.tertiary,
+                    ),
+                  ),
+                if (episode.isDownloaded)
+                  Tooltip(
+                    message: '已下载到本地',
+                    child: Icon(
+                      Icons.download_done,
+                      color: theme.colorScheme.outline,
+                    ),
+                  ),
+                if (episode.watched)
+                  Icon(Icons.check_circle, color: theme.colorScheme.primary),
+                IconButton.filledTonal(
+                  tooltip: '播放',
+                  icon: const Icon(Icons.play_arrow_rounded),
+                  onPressed: onPlay,
                 ),
-              if (episode.watched)
-                Icon(Icons.check_circle, color: theme.colorScheme.primary),
-              IconButton.filledTonal(
-                tooltip: '播放',
-                icon: const Icon(Icons.play_arrow_rounded),
-                onPressed: onPlay,
-              ),
-            ],
+              ],
+            ),
+            onTap: onPlay,
+            onLongPress: () => _showMenuCentered(context, ref),
           ),
-          onTap: onPlay,
-          onLongPress: () => _showMenuCentered(context, ref),
         ),
       ),
     );

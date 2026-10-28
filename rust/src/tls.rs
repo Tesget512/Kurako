@@ -42,9 +42,11 @@ pub(crate) fn bundled_roots_config() -> rustls::ClientConfig {
     .expect("aws-lc-rs supports the default TLS versions")
     .with_root_certificates(roots)
     .with_no_client_auth();
-    // reqwest would set the same list for its own rustls backend; a
-    // preconfigured config is used as-is, so HTTP/2 negotiation is set here.
-    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    // A preconfigured config is used as-is, so ALPN must match what this build
+    // of reqwest can speak. The `http2` feature is off (no `h2` crate in the
+    // tree); offering "h2" lets the server pick it and hyper-util then panics
+    // with "http2 feature is not enabled", failing every request.
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
     config
 }
 
@@ -53,12 +55,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bundled_config_negotiates_http2_then_http1() {
+    fn bundled_config_offers_only_http1() {
         let config = bundled_roots_config();
-        assert_eq!(
-            config.alpn_protocols,
-            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
-        );
+        assert_eq!(config.alpn_protocols, vec![b"http/1.1".to_vec()]);
     }
 
     #[test]

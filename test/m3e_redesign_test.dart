@@ -161,6 +161,7 @@ Future<void> _mount(
   bool delayedEpisodes = false,
   bool resumeFixture = false,
   int libraryCount = 2,
+  bool releaseDetails = false,
   EdgeInsets safePadding = EdgeInsets.zero,
 }) async {
   tester.view.physicalSize = size;
@@ -299,7 +300,9 @@ Future<void> _mount(
                   : null,
               episodeNo: index + 1,
               watched: index == 0,
-              lastPositionMs: 0,
+              resolution: releaseDetails ? '1080P' : null,
+              releaseGroup: releaseDetails ? 'TSDM' : null,
+              lastPositionMs: releaseDetails && index == 1 ? 340000 : 0,
               durationMs: 0,
               sourceType: 'local',
               isNewFile: false,
@@ -471,6 +474,67 @@ void main() {
     );
     expect(tile.left, greaterThanOrEqualTo(59));
     expect(tile.right, lessThanOrEqualTo(844));
+    expect(tester.takeException(), isNull);
+    await _unmount(tester);
+  });
+
+  testWidgets('episode rows do not apply the landscape cutout inset twice', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const DetailPage(animeId: 1, initialAnime: _first),
+      size: const Size(844, 390),
+      safePadding: const EdgeInsets.only(left: 59, right: 59, bottom: 21),
+    );
+    final tile = find.byKey(const ValueKey('episode-1'), skipOffstage: false);
+    await tester.ensureVisible(tile);
+    await tester.pumpAndSettle();
+    final row = tester.getRect(tile);
+    final avatar = tester.getRect(find.byType(CircleAvatar).first);
+    final play = tester.getRect(find.byTooltip('播放').first);
+    // The page already insets the list by the cutout. Inside the card the
+    // number badge and play button sit at the normal tile padding rather than
+    // another 59px further in.
+    expect(avatar.left - row.left, lessThan(24));
+    expect(row.right - play.right, lessThan(32));
+    await _unmount(tester);
+  });
+
+  testWidgets('episode rows share one height and never wrap', (tester) async {
+    await _mount(
+      tester,
+      const DetailPage(animeId: 1, initialAnime: _first),
+      size: const Size(360, 800),
+      releaseDetails: true,
+      episodeCount: 4,
+    );
+    final heights = <double>[];
+    for (var id = 1; id <= 4; id++) {
+      final tile = find.byKey(ValueKey('episode-$id'), skipOffstage: false);
+      await tester.ensureVisible(tile);
+      await tester.pumpAndSettle();
+      heights.add(tester.getSize(tile).height);
+    }
+    // Titled, resumable, untitled and watched rows are all the same height.
+    expect(heights.toSet().length, 1, reason: '$heights');
+    // "可续播" is an icon with a tooltip, not text that wraps the subtitle.
+    expect(find.text('（可续播）'), findsNothing);
+    expect(find.byTooltip('可续播'), findsOneWidget);
+    await _unmount(tester);
+  });
+
+  testWidgets('landscape empty collection sits below the bars', (tester) async {
+    await _mount(
+      tester,
+      const CollectionPage(),
+      size: const Size(844, 390),
+      safePadding: const EdgeInsets.only(left: 47, top: 24, bottom: 21),
+      libraryCount: 0,
+    );
+    final bar = tester.getRect(find.byType(TabBar));
+    final icon = tester.getRect(find.byIcon(Icons.bookmarks_outlined));
+    expect(icon.top, greaterThanOrEqualTo(bar.bottom));
     expect(tester.takeException(), isNull);
     await _unmount(tester);
   });

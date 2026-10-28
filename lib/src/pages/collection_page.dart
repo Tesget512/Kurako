@@ -100,10 +100,16 @@ class _CollectionTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final appearance = ref.watch(interfacePreferencesProvider);
     if (items.isEmpty) {
-      return const KurakoEmptyState(
-        icon: Icons.bookmarks_outlined,
-        title: '这里还没有番剧',
-        description: '在番剧详情中设置收藏状态，喜欢的故事就会出现在这里。',
+      // The body extends behind the app bar and tab bar, so a centred empty
+      // state would slide under them in landscape. The scaffold already folds
+      // the bar height into the top padding; start below it.
+      return Padding(
+        padding: EdgeInsets.only(top: MediaQuery.paddingOf(context).top),
+        child: const KurakoEmptyState(
+          icon: Icons.bookmarks_outlined,
+          title: '这里还没有番剧',
+          description: '在番剧详情中设置收藏状态，喜欢的故事就会出现在这里。',
+        ),
       );
     }
     final inset = adaptiveContentInset(context);

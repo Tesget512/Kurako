@@ -30,19 +30,17 @@ Episode _episode({
 void main() {
   const fileName = '[Nix-Raws] Kimi ga Shinu made Koi wo Shitai S01E02.mkv';
 
-  test(
-    'release info leads with resolution and group, file name is dropped',
-    () {
-      final label = episodeRowLabel(
-        _episode(resolution: '1080p', releaseGroup: 'Nix-Raws'),
-        EpisodeNaming.releaseInfo,
-      );
-      expect(label.title, '1080p · Nix-Raws');
-      expect(label.subtitle, isNot(contains(fileName)));
-    },
-  );
+  test('without an episode title, release info becomes the title', () {
+    final label = episodeRowLabel(
+      _episode(resolution: '1080p', releaseGroup: 'Nix-Raws'),
+      EpisodeNaming.releaseInfo,
+    );
+    expect(label.title, '1080p · Nix-Raws');
+    expect(label.subtitle, isEmpty);
+    expect(label.resumable, isFalse);
+  });
 
-  test('release info keeps the episode title and resume hint beneath', () {
+  test('the episode title is always the primary line', () {
     final label = episodeRowLabel(
       _episode(
         title: '真的很痛喔',
@@ -52,8 +50,11 @@ void main() {
       ),
       EpisodeNaming.releaseInfo,
     );
-    expect(label.title, '1080p · Nix-Raws');
-    expect(label.subtitle, ['真的很痛喔', '（可续播）']);
+    expect(label.title, '真的很痛喔');
+    // Resume is a flag for an icon, not text competing for the same line.
+    expect(label.subtitle, '1080p · Nix-Raws');
+    expect(label.resumable, isTrue);
+    expect(label.subtitle, isNot(contains(fileName)));
   });
 
   test('release info falls back to the file name when nothing is known', () {
@@ -80,11 +81,20 @@ void main() {
       EpisodeNaming.fileName,
     );
     expect(label.title, '真的很痛喔');
-    expect(label.subtitle, [fileName, '1080p · Nix-Raws · （可续播）']);
+    expect(label.subtitle, fileName);
+    expect(label.resumable, isTrue);
 
     final bare = episodeRowLabel(_episode(), EpisodeNaming.fileName);
     expect(bare.title, fileName);
     expect(bare.subtitle, isEmpty);
+
+    // No episode title: the file name leads and release info sits beneath.
+    final untitled = episodeRowLabel(
+      _episode(resolution: '1080p', releaseGroup: 'Nix-Raws'),
+      EpisodeNaming.fileName,
+    );
+    expect(untitled.title, fileName);
+    expect(untitled.subtitle, '1080p · Nix-Raws');
   });
 
   test('a watched episode shows no resume hint', () {
@@ -99,5 +109,6 @@ void main() {
     );
     expect(label.title, '1080p · TSDM');
     expect(label.subtitle, isEmpty);
+    expect(label.resumable, isFalse);
   });
 }

@@ -48,6 +48,10 @@ class _HomePageState extends ConsumerState<HomePage> {
       final n = await rust.refreshAllMetadata();
       if (!mounted || n <= 0) return;
       ref.invalidate(animeListProvider);
+      // Episode titles are filled by the same refresh. The resume module keeps
+      // every episode list it read before the refresh alive, so without this a
+      // detail page opened later still shows the empty titles until restart.
+      ref.invalidate(episodesProvider);
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('已自动更新 $n 部番剧的 Bangumi 元数据')));
     } catch (_) {
