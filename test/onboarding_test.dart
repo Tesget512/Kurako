@@ -109,6 +109,36 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byType(MediaSourceOnboardingPanel), findsOneWidget);
+    // The logo and title share one compact row instead of stacking a large
+    // centred logo above the title.
+    final header = tester.getRect(
+      find.byKey(const ValueKey('onboarding-header')),
+    );
+    expect(header.height, lessThan(80));
+    final headerFinder = find.byKey(const ValueKey('onboarding-header'));
+    expect(
+      tester
+          .getCenter(
+            find.descendant(of: headerFinder, matching: find.byType(Image)),
+          )
+          .dy,
+      closeTo(
+        tester
+            .getCenter(
+              find.descendant(
+                of: headerFinder,
+                matching: find.text('欢迎使用 Kurako'),
+              ),
+            )
+            .dy,
+        2,
+      ),
+    );
+    // One card explains and adds sources; the old extra "add a source" card
+    // repeated the same message above it.
+    expect(find.text('添加番剧媒体来源'), findsNothing);
+    expect(find.text('还没有媒体来源'), findsOneWidget);
+    expect(find.text('添加媒体来源'), findsOneWidget);
     final sources = tester.getTopLeft(find.text('媒体来源').first).dy;
     final downloads = tester.getTopLeft(find.text('下载位置')).dy;
     expect(sources, lessThan(downloads));

@@ -40,8 +40,23 @@ getrandom = "0.2"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
 
+# Android only. reqwest 0.13 verifies TLS through rustls-platform-verifier, which
+# on Android needs JNI initialisation plus a bundled Kotlin helper that this app
+# does not ship; without it every HTTPS request fails. 1.1.1 (reqwest 0.12) used
+# the bundled Mozilla roots, so Android keeps doing that. Other platforms keep
+# the OS verifier. `rustls` is the same 0.23 line reqwest already links.
+[target.'cfg(target_os = "android")'.dependencies]
+webpki-roots = "=1.0.9"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }
+
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 core-foundation-sys = "0.8"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }
+
+[dev-dependencies]
+# Host-side tests build the Android trust configuration without an Android
+# target; test code is never part of a shipped library.
+webpki-roots = "=1.0.9"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "aws-lc-rs"] }

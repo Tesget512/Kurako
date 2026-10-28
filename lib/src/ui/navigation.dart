@@ -33,6 +33,8 @@ class KurakoNavigation extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       right: false,
+      top: false,
+      bottom: false,
       child: LayoutBuilder(
         builder: (context, constraints) {
           final compact = constraints.maxHeight < 480;
@@ -63,12 +65,28 @@ class KurakoNavigation extends StatelessWidget {
                   ),
                 ),
                 Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    children: [
-                      for (var i = 0; i < items.length - (compact ? 0 : 1); i++)
-                        _destination(context, i, compact: compact),
-                    ],
+                  // Centred while it fits, so a short rail is not a draggable
+                  // list pinned to the top. It only scrolls when the
+                  // destinations genuinely exceed the available height.
+                  child: LayoutBuilder(
+                    builder: (context, area) => SingleChildScrollView(
+                      physics: const ClampingScrollPhysics(),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(minHeight: area.maxHeight),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            for (
+                              var i = 0;
+                              i < items.length - (compact ? 0 : 1);
+                              i++
+                            )
+                              _destination(context, i, compact: compact),
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
                 ),
                 if (!compact)

@@ -22,13 +22,32 @@ enum PosterSize {
   final double extent;
 }
 
+/// How an episode row is titled on the detail page.
+///
+/// A phone row has little width, so a long release file name truncates to
+/// nothing useful. [releaseInfo] shows the resolution and release group
+/// instead, which is what tells two copies of one episode apart.
+enum EpisodeNaming {
+  releaseInfo,
+  fileName;
+
+  static EpisodeNaming parse(Object? value) => EpisodeNaming.values.firstWhere(
+    (naming) => naming.name == value,
+    orElse: () => EpisodeNaming.releaseInfo,
+  );
+}
+
+const episodeNamingKey = 'interface_episode_naming';
+
 class InterfacePreferences {
   const InterfacePreferences({
     this.values = const {},
     this.posterSize = PosterSize.standard,
+    this.episodeNaming = EpisodeNaming.releaseInfo,
   });
   final Map<InterfaceOption, bool> values;
   final PosterSize posterSize;
+  final EpisodeNaming episodeNaming;
   bool enabled(InterfaceOption option) => values[option] ?? option.defaultValue;
 }
 
@@ -60,6 +79,7 @@ class InterfacePreferencesNotifier extends Notifier<InterfacePreferences> {
         (value) => value.name == size,
         orElse: () => PosterSize.standard,
       ),
+      episodeNaming: EpisodeNaming.parse(prefs.getString(episodeNamingKey)),
     );
   }
 
@@ -80,12 +100,27 @@ class InterfacePreferencesNotifier extends Notifier<InterfacePreferences> {
         state = InterfacePreferences(
           values: {...state.values, option: value},
           posterSize: state.posterSize,
+          episodeNaming: state.episodeNaming,
         );
       });
 
   Future<void> setPosterSize(PosterSize size) => _write((prefs) async {
     await prefs.setString('interface_poster_size', size.name);
     if (!ref.mounted) return;
-    state = InterfacePreferences(values: state.values, posterSize: size);
+    state = InterfacePreferences(
+      values: state.values,
+      posterSize: size,
+      episodeNaming: state.episodeNaming,
+    );
+  });
+
+  Future<void> setEpisodeNaming(EpisodeNaming naming) => _write((prefs) async {
+    await prefs.setString(episodeNamingKey, naming.name);
+    if (!ref.mounted) return;
+    state = InterfacePreferences(
+      values: state.values,
+      posterSize: state.posterSize,
+      episodeNaming: naming,
+    );
   });
 }

@@ -573,6 +573,74 @@ void main() {
     await _unmount(tester);
   });
 
+  testWidgets('landscape rail and panel both sit below the status bar', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const HomePage(),
+      size: const Size(844, 390),
+      safePadding: const EdgeInsets.only(top: 24, left: 47, bottom: 21),
+    );
+    // The rail's rounded card sits inside its own margin; compare the visible
+    // card with the visible panel.
+    final railCard = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(KurakoNavigation),
+            matching: find.byType(DecoratedBox),
+          )
+          .first,
+    );
+    final panel = tester.getRect(find.byType(ClipRRect).first);
+    // Neither may reach into the 24px status bar...
+    expect(railCard.top, greaterThanOrEqualTo(24));
+    expect(panel.top, greaterThanOrEqualTo(24));
+    // ...and the two cards start at the same height.
+    expect((railCard.top - panel.top).abs(), lessThan(1));
+    // The bottom inset is respected by both as well.
+    expect(railCard.bottom, lessThanOrEqualTo(390 - 21));
+    expect(panel.bottom, lessThanOrEqualTo(390 - 21));
+    await _unmount(tester);
+  });
+
+  testWidgets('phone landscape rail is centred and not draggable', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const HomePage(),
+      size: const Size(844, 390),
+      safePadding: const EdgeInsets.only(left: 47, bottom: 21),
+    );
+    final rail = find.byType(KurakoNavigation);
+    final scroll = find.descendant(
+      of: rail,
+      matching: find.byType(SingleChildScrollView),
+    );
+    expect(scroll, findsOneWidget);
+    final position = tester
+        .state<ScrollableState>(
+          find.descendant(of: scroll, matching: find.byType(Scrollable)),
+        )
+        .position;
+    // Everything fits, so there is nothing to drag.
+    expect(position.maxScrollExtent, 0);
+    final before = tester.getTopLeft(find.byTooltip('设置')).dy;
+    await tester.drag(scroll, const Offset(0, -80));
+    await tester.pumpAndSettle();
+    expect(tester.getTopLeft(find.byTooltip('设置')).dy, before);
+    // The destinations sit in the middle of the scrollable area itself.
+    final area = tester.getRect(scroll);
+    final first = tester.getRect(find.byTooltip('首页'));
+    final last = tester.getRect(find.byTooltip('设置'));
+    final gapAbove = first.top - area.top;
+    final gapBelow = area.bottom - last.bottom;
+    expect((gapAbove - gapBelow).abs(), lessThan(8));
+    expect(gapAbove, greaterThan(0));
+    await _unmount(tester);
+  });
+
   for (final rightCutout in [false, true]) {
     testWidgets(
       'landscape navigation handles cutout $rightCutout and large text',

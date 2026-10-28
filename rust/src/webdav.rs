@@ -130,12 +130,14 @@ fn client() -> Result<(WebDavCreds, Client)> {
 }
 
 fn build_client(creds: &WebDavCreds) -> Result<Client> {
-    let agent = reqwest::ClientBuilder::new()
-        .connect_timeout(SETUP_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .danger_accept_invalid_certs(creds.allow_insecure_tls)
-        .build()
-        .context("创建 WebDAV HTTP 客户端")?;
+    let agent = crate::tls::configure(
+        reqwest::ClientBuilder::new()
+            .connect_timeout(SETUP_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .danger_accept_invalid_certs(creds.allow_insecure_tls),
+    )
+    .build()
+    .context("创建 WebDAV HTTP 客户端")?;
     let auth = match creds.auth_mode.as_str() {
         "anonymous" => Auth::Anonymous,
         _ => Auth::Basic(creds.user.clone(), creds.password.clone()),

@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:kurako/src/state/interface_preferences.dart'
+    show episodeNamingKey;
 import 'package:kurako/src/services/decoder_policy.dart';
 import 'package:kurako/src/services/playback_metadata.dart';
 import 'package:kurako/src/services/configuration_backup.dart';
@@ -218,6 +220,8 @@ void main() {
       final old = jsonDecode(source) as Map<String, dynamic>;
       old['schemaVersion'] = 8;
       (old['settings'] as Map).remove(keyboardPreferencesKey);
+      // A v8 file predates every later key, including the episode naming one.
+      (old['settings'] as Map).remove(episodeNamingKey);
       await ConfigurationBackupDocument.parse(jsonEncode(old)).apply();
       expect(prefs.getString(keyboardPreferencesKey), custom.encode());
     },

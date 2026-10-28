@@ -406,4 +406,41 @@ void main() {
       );
     },
   );
+
+  test('a completed tap releases a lingering level indicator at once', () {
+    // Showing after an adjustment, finger lifted: a tap dismisses it.
+    expect(
+      shouldQuickDismissLevelIndicator(
+        dragging: false,
+        volumeIndicator: true,
+        brightnessIndicator: false,
+      ),
+      isTrue,
+    );
+    expect(
+      shouldQuickDismissLevelIndicator(
+        dragging: false,
+        volumeIndicator: false,
+        brightnessIndicator: true,
+      ),
+      isTrue,
+    );
+    // A drag in progress must keep the indicator; nothing showing, nothing to do.
+    expect(
+      shouldQuickDismissLevelIndicator(
+        dragging: true,
+        volumeIndicator: true,
+        brightnessIndicator: false,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldQuickDismissLevelIndicator(
+        dragging: false,
+        volumeIndicator: false,
+        brightnessIndicator: false,
+      ),
+      isFalse,
+    );
+  });
 }

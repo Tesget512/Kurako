@@ -28,48 +28,16 @@ class MediaSourceManager extends ConsumerStatefulWidget {
   ConsumerState<MediaSourceManager> createState() => _MediaSourceManagerState();
 }
 
-/// Empty guide shown on first run without taking away the ability to add a
-/// source. The regular settings page uses the same manager and action.
+/// First-run source setup: the same manager used by Preferences.
+///
+/// It used to put a separate "add a source" card above the manager, which then
+/// showed its own "no sources yet" row saying the same thing. One card is
+/// enough; the manager's empty state already explains what to add.
 class MediaSourceOnboardingPanel extends StatelessWidget {
   const MediaSourceOnboardingPanel({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Card(
-          margin: EdgeInsets.zero,
-          color: KurakoSurfaces.card(theme.colorScheme),
-          elevation: 0,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Icon(Icons.video_library_outlined, size: 28),
-                const SizedBox(height: 16),
-                Text('添加番剧媒体来源', style: theme.textTheme.titleMedium),
-                const SizedBox(height: 6),
-                Text(
-                  '连接本地文件夹、SMB 或 WebDAV。添加后即可扫描番剧。',
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: theme.colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        const MediaSourceManager(title: '媒体来源'),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => const MediaSourceManager(title: '媒体来源');
 }
 
 class _MediaSourceManagerState extends ConsumerState<MediaSourceManager> {

@@ -135,10 +135,13 @@ class _HomePageState extends ConsumerState<HomePage> {
           children: [
             const WindowCaption(title: 'Kurako'),
             Expanded(
+              // Top and bottom are applied once for the rail and the panel
+              // together. The panel used to skip the top inset while the rail
+              // applied it, so on a phone in landscape the panel slid under the
+              // status bar and the two edges no longer lined up. The left side
+              // stays with the rail so its cutout padding is unchanged.
               child: SafeArea(
                 left: false,
-                top: false,
-                bottom: false,
                 child: Row(
                   children: [
                     KurakoNavigation(

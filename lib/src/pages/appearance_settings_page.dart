@@ -153,6 +153,44 @@ class AppearanceSettingsPage extends ConsumerWidget {
                   ],
                 ),
               ),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const Text('剧集标题'),
+                    const SizedBox(height: 4),
+                    Text(
+                      '手机上文件名常被截断；清晰度与字幕组更容易区分各个版本',
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    KurakoSegmentedControl<EpisodeNaming>(
+                      value: ref
+                          .watch(interfacePreferencesProvider)
+                          .episodeNaming,
+                      segments: const [
+                        KurakoSegment(
+                          value: EpisodeNaming.releaseInfo,
+                          label: '清晰度 · 来源',
+                        ),
+                        KurakoSegment(
+                          value: EpisodeNaming.fileName,
+                          label: '文件名',
+                        ),
+                      ],
+                      onChanged: (naming) => ref
+                          .read(interfacePreferencesProvider.notifier)
+                          .setEpisodeNaming(naming),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
           SettingsGroupCard(

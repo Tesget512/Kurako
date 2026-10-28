@@ -16,6 +16,7 @@ pub mod smb;
 pub mod subtitle;
 #[cfg(test)]
 pub(crate) mod test_http;
+pub(crate) mod tls;
 pub mod update;
 pub mod watch_history;
 pub mod webdav;

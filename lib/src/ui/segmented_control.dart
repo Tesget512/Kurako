@@ -36,6 +36,7 @@ class KurakoSegmentedControl<T> extends StatelessWidget {
         ? Duration.zero
         : KurakoSprings.snappy.settleDuration;
     final motionCurve = KurakoSprings.effects.curve;
+    final selectedIndex = segments.indexWhere((s) => s.value == value);
 
     return Semantics(
       container: true,
@@ -49,26 +50,57 @@ class KurakoSegmentedControl<T> extends StatelessWidget {
               side: BorderSide(color: scheme.outlineVariant),
             ),
           ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          child: Stack(
             children: [
-              for (final segment in segments)
-                Expanded(
-                  child: _SegmentButton<T>(
-                    segment: segment,
-                    selected: segment.value == value,
-                    enabled: onChanged != null,
+              // One shared pill slides between options. Per-option fills
+              // cross-faded, so the outgoing pill dimmed while the incoming one
+              // was still forming and the two overlapped.
+              if (selectedIndex >= 0)
+                Positioned.fill(
+                  child: AnimatedAlign(
                     duration: motionDuration,
                     curve: motionCurve,
-                    onTap: onChanged == null
-                        ? null
-                        : () {
-                            if (segment.value != value) {
-                              onChanged!(segment.value);
-                            }
-                          },
+                    alignment: segments.length < 2
+                        ? Alignment.center
+                        : Alignment(
+                            -1 + 2 * selectedIndex / (segments.length - 1),
+                            0,
+                          ),
+                    child: FractionallySizedBox(
+                      widthFactor: 1 / segments.length,
+                      heightFactor: 1,
+                      child: DecoratedBox(
+                        key: const ValueKey('segmented-selection-pill'),
+                        decoration: ShapeDecoration(
+                          color: scheme.secondaryContainer,
+                          shape: const StadiumBorder(),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final segment in segments)
+                    Expanded(
+                      child: _SegmentButton<T>(
+                        segment: segment,
+                        selected: segment.value == value,
+                        enabled: onChanged != null,
+                        duration: motionDuration,
+                        curve: motionCurve,
+                        onTap: onChanged == null
+                            ? null
+                            : () {
+                                if (segment.value != value) {
+                                  onChanged!(segment.value);
+                                }
+                              },
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
         ),
@@ -109,12 +141,10 @@ class _SegmentButton<T> extends StatelessWidget {
       child: Tooltip(
         message: segment.label,
         excludeFromSemantics: true,
-        child: AnimatedContainer(
-          duration: duration,
-          curve: curve,
-          decoration: ShapeDecoration(
-            color: selected ? scheme.secondaryContainer : Colors.transparent,
-            shape: const StadiumBorder(),
+        child: DecoratedBox(
+          decoration: const ShapeDecoration(
+            color: Colors.transparent,
+            shape: StadiumBorder(),
           ),
           child: Material(
             type: MaterialType.transparency,
@@ -154,14 +184,15 @@ class _SegmentButton<T> extends StatelessWidget {
                       const SizedBox(width: 6),
                     ],
                     Flexible(
-                      child: Text(
-                        segment.label,
+                      child: AnimatedDefaultTextStyle(
+                        duration: duration,
+                        curve: curve,
+                        style: (theme.textTheme.labelLarge ?? const TextStyle())
+                            .copyWith(color: foreground),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         textAlign: TextAlign.center,
-                        style: theme.textTheme.labelLarge?.copyWith(
-                          color: foreground,
-                        ),
+                        child: Text(segment.label),
                       ),
                     ),
                   ],

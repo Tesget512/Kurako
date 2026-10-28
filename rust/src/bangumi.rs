@@ -434,6 +434,7 @@ fn client() -> Result<reqwest::Client> {
         .timeout(std::time::Duration::from_secs(30))
         // Keep idle connections warm across the burst of scan requests.
         .pool_idle_timeout(std::time::Duration::from_secs(90));
+    builder = crate::tls::configure(builder);
 
     // Bangumi (api.bgm.tv / lain.bgm.tv) is frequently DNS-poisoned in mainland
     // China, so a direct connection times out. Auto-detect the system HTTP proxy
@@ -1711,6 +1712,7 @@ impl MirrorChallengeSession {
             .cookie_store(true)
             .connect_timeout(std::time::Duration::from_secs(15))
             .timeout(std::time::Duration::from_secs(30));
+        builder = crate::tls::configure(builder);
         // Loopback bases only exist in tests; the system proxy must not sit
         // between the session and its scripted endpoint.
         let is_loopback =
@@ -1880,6 +1882,7 @@ async fn oauth_post(endpoint: &str, params: &[(&str, &str)]) -> Result<serde_jso
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(std::time::Duration::from_secs(15))
         .timeout(std::time::Duration::from_secs(30));
+    builder = crate::tls::configure(builder);
     if let Some(proxy) = detect_system_proxy() {
         builder = builder.proxy(reqwest::Proxy::all(proxy).context("oauth proxy configuration")?);
     }
@@ -2895,6 +2898,7 @@ pub(crate) async fn validate_personal_access_token_via(
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(timeouts.connect)
         .timeout(timeouts.total);
+    builder = crate::tls::configure(builder);
     let is_loopback = base.starts_with("http://127.0.0.1") || base.starts_with("http://localhost");
     if !is_loopback {
         if let Some(proxy) = detect_system_proxy() {

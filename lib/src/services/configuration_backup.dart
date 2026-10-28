@@ -4,12 +4,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../state/player_appearance.dart';
 import '../state/home_preferences.dart';
+import '../state/interface_preferences.dart' show episodeNamingKey;
 import '../state/appearance_presets.dart';
 import '../state/keyboard_preferences.dart';
 import 'decoder_policy.dart';
 
 const configurationBackupKind = 'kurako.configuration';
-const configurationBackupSchemaVersion = 9;
+const configurationBackupSchemaVersion = 10;
 const _legacyConfigurationBackupSchemaVersion = 1;
 const _accountAndSmbSchemaVersion = 2;
 const _webDavSchemaVersion = 4;
@@ -92,9 +93,14 @@ const _portableSettingsV8 = <String, _SettingDefinition>{
   appearancePresetsKey: _SettingDefinition('[]', validAppearancePresets),
 };
 
-const _portableSettings = <String, _SettingDefinition>{
+const _portableSettingsV9 = <String, _SettingDefinition>{
   ..._portableSettingsV8,
   keyboardPreferencesKey: _SettingDefinition('{}', validKeyboardPreferences),
+};
+
+const _portableSettings = <String, _SettingDefinition>{
+  ..._portableSettingsV9,
+  episodeNamingKey: _SettingDefinition('releaseInfo', _episodeNamingValidator),
 };
 
 const _accountFields = <String, _SettingDefinition>{
@@ -141,6 +147,8 @@ const _webDavPreferenceKeys = <String, String>{
 
 bool _playerColorValidator(Object value) =>
     _isIntInRange(value, 0xFF000000, 0xFFFFFFFF);
+bool _episodeNamingValidator(Object value) =>
+    _isOneOf(value, const {'releaseInfo', 'fileName'});
 bool _posterSizeValidator(Object value) =>
     _isOneOf(value, const {'compact', 'standard', 'large'});
 bool _librarySortValidator(Object value) => _isIntInRange(value, 0, 5);
@@ -273,6 +281,7 @@ class ConfigurationBackupDocument {
         schemaVersion != 6 &&
         schemaVersion != 7 &&
         schemaVersion != 8 &&
+        schemaVersion != 9 &&
         schemaVersion != configurationBackupSchemaVersion) {
       throw const FormatException('不支持此配置文件版本');
     }
@@ -285,6 +294,7 @@ class ConfigurationBackupDocument {
       decoded['settings'],
       definitions: switch (schemaVersion) {
         configurationBackupSchemaVersion => _portableSettings,
+        9 => _portableSettingsV9,
         8 => _portableSettingsV8,
         7 => _portableSettingsV7,
         6 => _portableSettingsV6,

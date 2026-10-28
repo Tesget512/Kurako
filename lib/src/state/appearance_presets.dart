@@ -13,6 +13,7 @@ const appearanceDefaults = <String, Object>{
   'theme_follow_system': true,
   'theme_mode': 'system',
   'interface_poster_size': 'standard',
+  episodeNamingKey: 'releaseInfo',
   'interface_searchExpanded': false,
   'interface_posterProgress': true,
   'interface_posterRating': true,
@@ -37,6 +38,7 @@ bool _validValue(String key, Object? value) {
     'ui_scale_percent' => value is int && value >= 75 && value <= 150,
     'theme_mode' => ['system', 'light', 'dark'].contains(value),
     'interface_poster_size' => ['compact', 'standard', 'large'].contains(value),
+    episodeNamingKey => ['releaseInfo', 'fileName'].contains(value),
     playerBrightnessColorKey || playerVolumeColorKey =>
       value is int && value >= 0xFF000000 && value <= 0xFFFFFFFF,
     _ => false,

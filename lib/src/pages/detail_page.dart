@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../rust/api.dart' as rust;
 import '../rust/models.dart';
+import '../state/interface_preferences.dart';
 import '../state/providers.dart';
 import '../ui/responsive_spacing.dart';
 import '../ui/page_components.dart';
@@ -1087,6 +1088,48 @@ class _EpisodeList extends StatelessWidget {
   }
 }
 
+/// Title and secondary lines of one episode row.
+@visibleForTesting
+class EpisodeRowLabel {
+  const EpisodeRowLabel(this.title, this.subtitle);
+  final String title;
+  final List<String> subtitle;
+}
+
+/// Resolves what an episode row shows for the chosen [EpisodeNaming].
+///
+/// [EpisodeNaming.releaseInfo] leads with `1080p · 字幕组` (the part that tells
+/// versions apart) and moves the file name to a second line. When neither is
+/// known it falls back to the file name rather than showing an empty title.
+/// [EpisodeNaming.fileName] keeps the earlier layout.
+@visibleForTesting
+EpisodeRowLabel episodeRowLabel(Episode episode, EpisodeNaming naming) {
+  final resumed = episode.lastPositionMs > 0 && !episode.watched ? '（可续播）' : '';
+  final release = [
+    if (episode.resolution?.isNotEmpty == true) episode.resolution!,
+    if (episode.releaseGroup?.isNotEmpty == true) episode.releaseGroup!,
+  ].join(' · ');
+  final episodeTitle = episode.title?.trim() ?? '';
+  final withResume = [
+    if (release.isNotEmpty) release,
+    if (resumed.isNotEmpty) resumed,
+  ].join(' · ');
+
+  if (naming == EpisodeNaming.releaseInfo && release.isNotEmpty) {
+    return EpisodeRowLabel(release, [
+      if (episodeTitle.isNotEmpty) episodeTitle,
+      if (resumed.isNotEmpty) resumed,
+    ]);
+  }
+  return EpisodeRowLabel(
+    episodeTitle.isNotEmpty ? episodeTitle : episode.fileName,
+    [
+      if (episodeTitle.isNotEmpty) episode.fileName,
+      if (withResume.isNotEmpty) withResume,
+    ],
+  );
+}
+
 class _EpisodeTile extends ConsumerWidget {
   final Episode episode;
   final VoidCallback onPlay;
@@ -1118,14 +1161,10 @@ class _EpisodeTile extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final resumed = episode.lastPositionMs > 0 && !episode.watched
-        ? '（可续播）'
-        : '';
-    final metadata = [
-      if (episode.resolution?.isNotEmpty == true) episode.resolution!,
-      if (episode.releaseGroup?.isNotEmpty == true) episode.releaseGroup!,
-      if (resumed.isNotEmpty) resumed,
-    ].join(' · ');
+    final naming = ref.watch(
+      interfacePreferencesProvider.select((value) => value.episodeNaming),
+    );
+    final label = episodeRowLabel(episode, naming);
     // Long-press (touch) and right-click (desktop) both open the context menu:
     // choose a player, download (SMB), or block the file. The gestures live on
     // a wrapping GestureDetector because ListTile has no onSecondaryTap.
@@ -1147,25 +1186,20 @@ class _EpisodeTile extends ConsumerWidget {
             ),
           ),
           title: Text(
-            episode.title?.trim().isNotEmpty == true
-                ? episode.title!.trim()
-                : episode.fileName,
+            label.title,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          subtitle: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (episode.title?.trim().isNotEmpty == true)
-                Text(
-                  episode.fileName,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+          subtitle: label.subtitle.isEmpty
+              ? null
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final line in label.subtitle)
+                      Text(line, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  ],
                 ),
-              if (metadata.isNotEmpty) Text(metadata),
-            ],
-          ),
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

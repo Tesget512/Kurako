@@ -52,4 +52,60 @@ void main() {
     await ConfigurationBackupDocument.parse(jsonEncode(old)).apply();
     expect(prefs.getString('interface_poster_size'), 'large');
   });
+
+  test('episode naming defaults to release info and persists', () async {
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final notifier = container.read(interfacePreferencesProvider.notifier);
+    await notifier.ready;
+    expect(
+      container.read(interfacePreferencesProvider).episodeNaming,
+      EpisodeNaming.releaseInfo,
+    );
+    await notifier.setEpisodeNaming(EpisodeNaming.fileName);
+    // Other settings written afterwards must not reset it.
+    await notifier.setPosterSize(PosterSize.large);
+    await notifier.setOption(InterfaceOption.posterRating, false);
+    expect(
+      container.read(interfacePreferencesProvider).episodeNaming,
+      EpisodeNaming.fileName,
+    );
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString(episodeNamingKey), 'fileName');
+    expect(EpisodeNaming.parse('garbage'), EpisodeNaming.releaseInfo);
+    expect(EpisodeNaming.parse(null), EpisodeNaming.releaseInfo);
+  });
+
+  test(
+    'backup carries episode naming; v9 files without it still import',
+    () async {
+      SharedPreferences.setMockInitialValues({episodeNamingKey: 'fileName'});
+      final source = await ConfigurationBackupDocument.exportJson();
+      final root = jsonDecode(source) as Map<String, dynamic>;
+      expect(root['schemaVersion'], 10);
+      expect(
+        (root['settings'] as Map<String, dynamic>)[episodeNamingKey],
+        'fileName',
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(episodeNamingKey, 'releaseInfo');
+      await ConfigurationBackupDocument.parse(source).apply();
+      expect(prefs.getString(episodeNamingKey), 'fileName');
+
+      final v9 = jsonDecode(source) as Map<String, dynamic>;
+      v9['schemaVersion'] = 9;
+      (v9['settings'] as Map<String, dynamic>).remove(episodeNamingKey);
+      await prefs.setString(episodeNamingKey, 'releaseInfo');
+      await ConfigurationBackupDocument.parse(jsonEncode(v9)).apply();
+      // Not part of a v9 file, so the current choice is left alone.
+      expect(prefs.getString(episodeNamingKey), 'releaseInfo');
+
+      final bad = jsonDecode(source) as Map<String, dynamic>;
+      (bad['settings'] as Map<String, dynamic>)[episodeNamingKey] = 'nonsense';
+      expect(
+        () => ConfigurationBackupDocument.parse(jsonEncode(bad)),
+        throwsFormatException,
+      );
+    },
+  );
 }

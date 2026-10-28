@@ -327,6 +327,7 @@ void main() {
       (old['settings'] as Map).remove(homePreferencesKey);
       (old['settings'] as Map).remove(appearancePresetsKey);
       (old['settings'] as Map).remove('player_keyboard_shortcuts');
+      (old['settings'] as Map).remove(episodeNamingKey);
       await ConfigurationBackupDocument.parse(jsonEncode(old)).apply();
       expect(
         HomePreferences.decode(prefs.getString(homePreferencesKey)!).initial,

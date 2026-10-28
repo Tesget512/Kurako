@@ -118,6 +118,7 @@ fn update_client() -> Result<reqwest::Client> {
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
         .redirect(Policy::none());
+    builder = crate::tls::configure(builder);
     if let Some(proxy) = crate::bangumi::detect_system_proxy() {
         builder = builder.proxy(reqwest::Proxy::all(proxy).context("invalid system proxy")?);
     }

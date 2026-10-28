@@ -211,25 +211,33 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     final content = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Center(
-          child: Image(
-            image: AssetImage('assets/images/kurako_icon.png'),
-            width: 96,
-            height: 96,
-          ),
+        // Icon and title share one row: stacked and centred they spent a third
+        // of a phone screen on a logo before any setup step appeared.
+        Row(
+          key: const ValueKey('onboarding-header'),
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(16),
+              child: const Image(
+                image: AssetImage('assets/images/kurako_icon.png'),
+                width: 56,
+                height: 56,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                widget.standalone ? '初始设置' : '欢迎使用 Kurako',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        Text(
-          widget.standalone ? '初始设置' : '欢迎使用 Kurako',
-          textAlign: TextAlign.center,
-          style: theme.textTheme.headlineLarge?.copyWith(
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 12),
         Text(
           copy.intro,
-          textAlign: TextAlign.center,
           style: theme.textTheme.bodyMedium?.copyWith(
             color: theme.colorScheme.onSurfaceVariant,
           ),

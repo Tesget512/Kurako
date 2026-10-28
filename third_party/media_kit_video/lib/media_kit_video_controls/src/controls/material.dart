@@ -123,6 +123,20 @@ double resolveVerticalGestureValue({
 
 enum MaterialVerticalGestureKind { brightness, volume }
 
+/// Whether a completed tap should release a lingering brightness/volume
+/// indicator right away.
+///
+/// `GestureDetector.onTap` only fires for a short press with no drag and no
+/// long press, so reaching it already proves the touch was a quick tap rather
+/// than the start of another adjustment. While a drag is still active the
+/// indicator must stay; with nothing showing there is nothing to dismiss.
+bool shouldQuickDismissLevelIndicator({
+  required bool dragging,
+  required bool volumeIndicator,
+  required bool brightnessIndicator,
+}) =>
+    !dragging && (volumeIndicator || brightnessIndicator);
+
 /// Resolves which OSD a vertical gesture should show.
 ///
 /// The OSD widget stays mounted while `AnimatedOpacity` fades it out, and by
@@ -879,7 +893,32 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
     }
   }
 
+  /// Fade used when a quick tap dismisses a lingering level indicator.
+  static const Duration _quickDismissDuration = Duration(milliseconds: 120);
+  bool _indicatorQuickDismiss = false;
+
+  /// A completed tap (GestureDetector.onTap only fires for a short press with
+  /// no drag and no long press) means the user is done adjusting: release the
+  /// brightness/volume indicator immediately instead of waiting out the hold.
+  void _dismissLevelIndicatorQuickly() {
+    if (!shouldQuickDismissLevelIndicator(
+      dragging: _verticalDragging,
+      volumeIndicator: _volumeIndicator,
+      brightnessIndicator: _brightnessIndicator,
+    )) {
+      return;
+    }
+    _volumeTimer?.cancel();
+    _brightnessTimer?.cancel();
+    setState(() {
+      _indicatorQuickDismiss = true;
+      _volumeIndicator = false;
+      _brightnessIndicator = false;
+    });
+  }
+
   void onTap() {
+    _dismissLevelIndicatorQuickly();
     if (!visible) {
       showControls();
     } else {
@@ -1809,8 +1848,12 @@ class _MaterialVideoControlsState extends State<_MaterialVideoControls> {
                                     _volumeIndicator)
                             ? 1
                             : 0,
-                        duration: _theme(context).controlsTransitionDuration,
+                        duration:
+                            _indicatorQuickDismiss && !verticalIndicatorVisible
+                                ? _quickDismissDuration
+                                : _theme(context).controlsTransitionDuration,
                         onEnd: () {
+                          _indicatorQuickDismiss = false;
                           // A fade-in may finish after the hold timer fires.
                           // Only the completed fade-out may release the anchor.
                           if (!verticalIndicatorVisible &&
