@@ -8,6 +8,21 @@ double adaptiveContentInset(BuildContext context) {
   return 16;
 }
 
+/// Wide mobile landscape layouts already lose vertical room to system bars
+/// and the Home Indicator. Keep the real safe area, but avoid adding a
+/// desktop-sized margin below the last row.
+bool usesWideMobileLandscape(BuildContext context) {
+  final platform = Theme.of(context).platform;
+  final size = MediaQuery.sizeOf(context);
+  return (platform == TargetPlatform.android ||
+          platform == TargetPlatform.iOS) &&
+      size.width > size.height &&
+      size.shortestSide >= 600;
+}
+
+double adaptiveBottomContentPadding(BuildContext context) =>
+    usesWideMobileLandscape(context) ? 8 : 32;
+
 /// Width available to page content after the horizontal page inset and the
 /// left/right safe area (landscape notch, cutout or Dynamic Island).
 double adaptiveContentWidth(BuildContext context) {

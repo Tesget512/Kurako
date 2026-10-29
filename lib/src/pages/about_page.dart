@@ -272,7 +272,7 @@ class _AcknowledgementGroup extends StatelessWidget {
     children: [
       for (final entry in entries)
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
           child: Text(entry),
         ),
     ],

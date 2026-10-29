@@ -16,6 +16,8 @@ String _titleOf(Anime a) {
   return a.titleRaw;
 }
 
+const detailBackdropCoverKey = ValueKey<String>('detail-backdrop-cover');
+
 /// Responsive expanded extent for the detail header. The bounds leave room for
 /// large text without turning the fixed header into a full-screen surface.
 double coverHeaderExpandedHeight(BuildContext context, Anime anime) {
@@ -297,12 +299,15 @@ class _Backdrop extends StatelessWidget {
                 ),
                 child: Opacity(
                   opacity: _opacity,
-                  // cacheWidth downsamples the decode — the blur hides the loss
-                  // and the per-frame cost drops sharply during transitions.
+                  // cacheWidth downsamples the decode; the blur hides the
+                  // loss and keeps transition frames inexpensive.
                   child: CoverImage(
+                    key: detailBackdropCoverKey,
                     url: url,
                     fit: BoxFit.cover,
                     cacheWidth: 64,
+                    fadeIn: true,
+                    waitForRouteTransition: true,
                   ),
                 ),
               ),

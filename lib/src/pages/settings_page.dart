@@ -142,7 +142,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               );
             },
           ),
-          const SizedBox(height: 20),
+          // Keep the account summary visually connected to the settings
+          // cards; the page list already provides its outer breathing room.
+          const SizedBox(height: 8),
           KurakoCardGrid(
             children: [
               SettingsNavCard(

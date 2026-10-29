@@ -230,6 +230,64 @@ void main() {
     );
   });
 
+  test(
+    'published v1.2.0 asset names are selected on every desktop/mobile target',
+    () {
+      final release = releaseWithAssets([
+        asset('Kurako-Android-1.2.0-arm64-v8a-release.apk'),
+        asset('Kurako-iOS-1.2.0-no_sign-release.ipa'),
+        asset('Kurako-macOS-1.2.0-universal.dmg'),
+        asset('Kurako-Setup-1.2.0.exe'),
+        asset('Kurako-Windows-x64-release.zip'),
+        asset('Kurako-Linux-1.2.0+6-x86_64.deb'),
+      ]);
+
+      expect(
+        compatibleUpdateAssets(
+          release,
+          platform: 'android',
+          architecture: 'arm64-v8a',
+        ).single.name,
+        'Kurako-Android-1.2.0-arm64-v8a-release.apk',
+      );
+      expect(
+        compatibleUpdateAssets(
+          release,
+          platform: 'ios',
+          architecture: 'other',
+        ).single.name,
+        'Kurako-iOS-1.2.0-no_sign-release.ipa',
+      );
+      expect(
+        compatibleUpdateAssets(
+          release,
+          platform: 'macos',
+          architecture: 'other',
+        ).single.name,
+        'Kurako-macOS-1.2.0-universal.dmg',
+      );
+      expect(
+        compatibleUpdateAssets(
+          release,
+          platform: 'linux',
+          architecture: 'x86_64',
+        ).single.name,
+        'Kurako-Linux-1.2.0+6-x86_64.deb',
+      );
+      expect(
+        compatibleUpdateAssets(
+          release,
+          platform: 'windows',
+          architecture: 'x86_64',
+        ).map((asset) => asset.name),
+        containsAll(<String>[
+          'Kurako-Setup-1.2.0.exe',
+          'Kurako-Windows-x64-release.zip',
+        ]),
+      );
+    },
+  );
+
   test('an older Windows Setup-only release still offers the installer', () {
     final release = releaseWithAssets([asset('Kurako-Setup-1.2.0.exe')]);
     expect(

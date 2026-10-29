@@ -8,6 +8,9 @@ const int kCoverDecodeWidth = 400;
 
 Object heroTagForAnime(int animeId) => 'anime-cover-$animeId';
 
+@visibleForTesting
+bool coverHeroViewportChanged(Size initial, Size current) => initial != current;
+
 /// Pinned toolbar boundary in the detail route's coordinates. Hero flights
 /// paint in the Navigator overlay, outside the SliverAppBar's normal clip.
 class CoverHeroDetailBoundary extends InheritedWidget {
@@ -116,6 +119,7 @@ Widget coverHeroFlightShuttleBuilder(
   final detailRoute = ModalRoute.of(fromHeroContext);
   var lastValue = animation.value;
   double? releaseProgress;
+  var viewportChanged = false;
 
   // Reparents (not remounts) the cover when switching to the retarget layer.
   final coverKey = GlobalKey();
@@ -124,6 +128,17 @@ Widget coverHeroFlightShuttleBuilder(
     child: KeyedSubtree(key: coverKey, child: flightCover),
     builder: (context, child) {
       final rawValue = animation.value;
+      final liveViewport = _viewportRectInRoute(listHeroContext);
+      if (liveViewport != null &&
+          coverHeroViewportChanged(viewportRect.size, liveViewport.size)) {
+        viewportChanged = true;
+      }
+      // A device rotation changes every route coordinate while a flight is in
+      // progress. The framework's Hero overlay remains valid, but our custom
+      // clip/retarget rectangles are from the old orientation. Let the native
+      // flight finish from its current position instead of applying stale
+      // geometry for another frame.
+      if (viewportChanged) return child!;
       if (gesturePop &&
           releaseProgress == null &&
           rawValue > lastValue &&

@@ -4,13 +4,13 @@ Kurako 的 iOS、iPadOS 与 macOS 界面使用 Flutter，跨平台核心由 Rust
 
 ## 支持版本
 
-- iOS / iPadOS：13.0 及以上。
+- iOS / iPadOS：15.0 及以上。
 - macOS：12.0 及以上。
 - iOS、iPadOS 与 macOS 的 Bundle ID 均使用 `com.tesget.kurako`。
 
 ## 环境
 
-1. 安装 Xcode、CocoaPods、Flutter 3.44.8 stable 和 Rust stable。
+1. 安装 Xcode、CocoaPods、Flutter 3.47.8 stable 和 Rust stable。
 2. 确保 `cargo` 与 `rustc` 位于 `~/.cargo/bin`、Homebrew rustup 目录，或通过 `RUSTUP_BIN` 指定目录。
 3. 使用项目要求的依赖镜像：
 

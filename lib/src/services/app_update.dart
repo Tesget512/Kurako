@@ -113,16 +113,23 @@ List<AppUpdateAsset> compatibleUpdateAssets(
     if (!isProjectAssetUrl(release, asset)) return false;
     final name = asset.name;
     return switch (platform) {
-      'android' => name == 'Kurako-Android-$architecture-$version-release.apk',
+      'android' =>
+        architecture != 'other' &&
+            (name == 'Kurako-Android-$version-$architecture-release.apk' ||
+                // Releases before 1.2.1 put the architecture before version.
+                name == 'Kurako-Android-$architecture-$version-release.apk'),
       'ios' => name == 'Kurako-iOS-$version-no_sign-release.ipa',
-      'macos' => name == 'Kurako-macOS-$version-universal-adhoc-release.dmg',
-      // Both the older `Kurako-Setup-*.exe` and the current unsigned setup or
-      // portable ZIP are accepted, so an update is offered across the rename.
+      'macos' =>
+        name == 'Kurako-macOS-$version-universal.dmg' ||
+            name == 'Kurako-macOS-$version-universal-adhoc-release.dmg',
+      // Accept the published names as well as older versioned names, so an
+      // update remains available across the Windows packaging rename.
       'windows' =>
         architecture == 'x86_64' &&
             (name == 'Kurako-Setup-$version.exe' ||
                 name == 'Kurako-Windows-x64-$version-unsigned-setup.exe' ||
-                name == 'Kurako-Windows-x64-$version-release.zip'),
+                name == 'Kurako-Windows-x64-$version-release.zip' ||
+                name == 'Kurako-Windows-x64-release.zip'),
       // The Linux package name carries the pubspec build suffix.
       'linux' =>
         architecture == 'x86_64' &&

@@ -44,13 +44,13 @@ script/Build-KurakoLinuxDeb.sh
 
 Windows 的便携版与 Inno Setup 安装包可在安装了 Inno Setup 6 的环境中运行 `script/Build-Kurako.cmd` 生成。
 
-镜像验证使用 `flutter_inappwebview`。Windows 构建机还需要在 `PATH` 中提供 NuGet CLI；插件通过 NuGet 获取 WebView2 SDK、Windows Implementation Library 与 nlohmann.json。Windows 用户使用镜像验证时需要 Microsoft Edge WebView2 Runtime；缺少该运行时应保留官方源并按应用提示安装运行时后再验证。它不改变视频播放器的渲染或安装包签名策略。Android 使用系统 WebView，iOS/iPadOS 与 macOS 使用 WKWebView，最低系统版本仍为 iOS 13.0 / macOS 12.0。
+镜像验证使用 `flutter_inappwebview`。Windows 构建机还需要在 `PATH` 中提供 NuGet CLI；插件通过 NuGet 获取 WebView2 SDK、Windows Implementation Library 与 nlohmann.json。Windows 用户使用镜像验证时需要 Microsoft Edge WebView2 Runtime；缺少该运行时应保留官方源并按应用提示安装运行时后再验证。它不改变视频播放器的渲染或安装包签名策略。Android 使用系统 WebView，iOS/iPadOS 与 macOS 使用 WKWebView，最低系统版本为 iOS/iPadOS 15.0 / macOS 12.0。
 
 Android 平台实现固定使用本地 `third_party/flutter_inappwebview_android` 1.1.3，并通过 `dependency_overrides` 引用。该副本仅将两处默认 ProGuard 配置改为 `proguard-android-optimize.txt`，以兼容项目的 Android Gradle Plugin 9；上游许可证随副本保留。请勿改写 Pub 缓存或降级项目工具链来绕过此问题。补丁详情见 [KURAKO_PATCH.md](../third_party/flutter_inappwebview_android/KURAKO_PATCH.md)。
 
 ### Linux（实验性，仅 DEB）
 
-Linux 版本当前处于实验阶段，只提供 x86_64 Debian `.deb` 测试包；不提供 AppImage、Arch 包或 Linux arm64。Linux 构建必须在 x86_64 Linux 主机上运行，不能在 macOS/Windows 上交叉打包。Debian/Ubuntu 的基础构建依赖包括 Flutter 官方要求的 CMake、Ninja、Clang、`pkg-config` 与 GTK3，以及 Kurako 当前 Linux 插件图所需的 libmpv、libepoxy、WebKitGTK 4.1、libsoup 3 和 ALSA 开发包。在 Linux Mint 22.3 / Ubuntu 24.04 上对应的首轮安装候选为：
+Linux 版本当前处于实验阶段，发行包只提供 x86_64 Debian `.deb` 测试包；暂不提供 AppImage、Arch 包或 Linux arm64。当前构建脚本要求在 x86_64 Linux 环境中运行，虚拟机或容器也可以；仓库尚未提供从 macOS/Windows 交叉构建 Linux 包的入口。Debian/Ubuntu 的基础构建依赖包括 Flutter 官方要求的 CMake、Ninja、Clang、`pkg-config` 与 GTK3，以及 Kurako 当前 Linux 插件图所需的 libmpv、libepoxy、WebKitGTK 4.1、libsoup 3 和 ALSA 开发包。在 Linux Mint 22.3 / Ubuntu 24.04 上对应的首轮安装候选为：
 
 ```sh
 sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev \
@@ -64,12 +64,11 @@ Linux 上的 Bangumi HTTP/OAuth 请求优先读取 `HTTPS_PROXY`、`HTTP_PROXY`�
 
 `script/Build-KurakoLinuxRelease.sh` 会：
 
-- 拒绝非 x86_64 Linux 构建机；
 - 写入 `KURAKO_BUILD_TIME` 并构建 Release；
 - 检查完整 Flutter bundle、ELF 架构和 bundle 内 ELF 的缺失共享库；
 - 将已验证的核心 bundle 留在 `build/linux/x64/release/bundle/`，供 DEB 打包复用，不额外生成其他 Linux 分发包。
 
-`script/Build-KurakoLinuxDeb.sh` 复用同架构已构建的 Release bundle，不重新编译应用。脚本将 bundle 安装到 `/opt/kurako/`，创建 `/usr/bin/kurako` 命令入口，安装 desktop、AppStream 与 hicolor 图标元数据，并对包根中的全部 ELF 使用 `dpkg-shlibdeps` 推导实际运行时依赖；任何外部共享库无法解析都会使打包失败。Flutter 插件若携带构建机绝对 RUNPATH，脚本只在包副本中修正为 `$ORIGIN`，不会污染原始 Release bundle；成包后再次扫描，任何残留绝对 ELF RPATH/RUNPATH 都会使打包失败。输出为 `dist/out/Kurako-Linux-<version>-<arch>.deb`。在 Debian/Ubuntu 系统中可使用 `sudo apt install ./dist/out/Kurako-Linux-<version>-<arch>.deb` 安装，使 APT 同时验证并补齐依赖。
+`script/Build-KurakoLinuxDeb.sh` 复用同架构已构建的 Release bundle，不重新编译应用。脚本将 bundle 安装到 `/opt/kurako/`，创建 `/usr/bin/kurako` 命令入口，安装 desktop、AppStream 与 hicolor 图标元数据，并对包根中的全部 ELF 使用 `dpkg-shlibdeps` 推导实际运行时依赖；存在无法解析的外部共享库时，脚本会停止打包。Flutter 插件若携带构建机绝对 RUNPATH，脚本只在包副本中修正为 `$ORIGIN`，不会污染原始 Release bundle；成包后若仍有绝对 ELF RPATH/RUNPATH，也会停止打包。输出为 `dist/out/Kurako-Linux-<version>-<arch>.deb`。在 Debian/Ubuntu 系统中可使用 `sudo apt install ./dist/out/Kurako-Linux-<version>-<arch>.deb` 安装，使 APT 同时验证并补齐依赖。
 
 DEB 显式依赖 `desktop-file-utils`，以便安装时刷新
 `x-scheme-handler/kurako` 的 MIME handler 数据库。Bangumi 登录使用系统默认
@@ -96,11 +95,11 @@ KURAKO_WSL_INSTALL=1 KURAKO_WSL_GUI=1 \
   dist/out/Kurako-Linux-<version>-<arch>.deb
 ```
 
-WSLg GUI 模式要求 `/tmp/.X11-unix/X0`、`/mnt/wslg/PulseServer`、Linux 默认 HTTP/HTTPS 浏览器和 `x-scheme-handler/kurako` 均已配置。SSH 会话不一定继承 WSLg 变量，脚本会回退到 `DISPLAY=:0`、`PULSE_SERVER=unix:/mnt/wslg/PulseServer` 并以 X11 后端做可自动化的窗口检查；这只影响测试进程，不改变产品默认后端。若 WSL 宿主代理是仅监听 Windows 的本地端口，浏览器与 Kurako 还需使用 WSL 可访问的宿主地址配置代理，不能关闭 TLS 校验或固定 Bangumi IP。
+WSLg GUI 模式要求 `/tmp/.X11-unix/X0`、`/mnt/wslg/PulseServer`、Linux 默认 HTTP/HTTPS 浏览器和 `x-scheme-handler/kurako` 均已配置。SSH 会话不一定继承 WSLg 变量，脚本会回退到 `DISPLAY=:0`、`PULSE_SERVER=unix:/mnt/wslg/PulseServer` 并以 X11 后端做可自动化的窗口检查；这只影响测试进程，不改变产品默认后端。若 WSL 宿主代理只监听 Windows 的本地端口，浏览器与 Kurako 需要改用 WSL 可访问的宿主地址；不建议通过关闭 TLS 校验或固定 Bangumi IP 绕过网络问题。
 
 WSL2/WSLg 可以补充包结构、安装、窗口、Linux URI handler、音频桥接和较新 Ubuntu 的向前兼容验证，但不能代表实体 Linux 的 GPU、播放器硬件解码和桌面环境差异。当前实验性 x86_64 DEB 以 Mint 22.3 / Ubuntu 24.04 同代环境为构建与验证基线；这不能据此声称兼容所有 Linux 发行版、桌面环境或 GPU/驱动组合。
 
-AppImage、Arch、Flatpak/Flathub 与 Linux arm64 当前均不在提供范围。除非后续重新立项并完成对应原生构建与设备矩阵验证，不应恢复这些产物或在发布说明中列出。
+AppImage、Arch、Flatpak/Flathub 与 Linux arm64 当前均不在提供范围。若后续恢复这些产物，需要重新完成对应原生构建与设备矩阵验证，并在发布说明中单独标注支持范围。
 
 ## 签名与分发
 

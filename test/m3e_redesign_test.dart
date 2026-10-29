@@ -164,6 +164,7 @@ Future<void> _mount(
   bool releaseDetails = false,
   bool longTitles = false,
   EdgeInsets safePadding = EdgeInsets.zero,
+  TargetPlatform? platform,
 }) async {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1;
@@ -314,13 +315,16 @@ Future<void> _mount(
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        theme: buildKurakoTheme(
-          ColorScheme.fromSeed(
-            seedColor: const Color(0xFF6750A4),
-            brightness: brightness,
-          ),
-          systemFont: false,
-        ),
+        theme: () {
+          final theme = buildKurakoTheme(
+            ColorScheme.fromSeed(
+              seedColor: const Color(0xFF6750A4),
+              brightness: brightness,
+            ),
+            systemFont: false,
+          );
+          return platform == null ? theme : theme.copyWith(platform: platform);
+        }(),
         builder: (context, child) => MediaQuery(
           data: MediaQuery.of(context).copyWith(
             textScaler: TextScaler.linear(textScale),
@@ -721,6 +725,33 @@ void main() {
     expect(panel.top, closeTo(caption + 24 + 4, 0.5));
     expect(railCard.bottom, closeTo(390 - 21 - 6, 0.5));
     expect(panel.bottom, closeTo(390 - 21 - 6, 0.5));
+    await _unmount(tester);
+  });
+
+  testWidgets('tablet landscape keeps safe area but trims extra bottom gap', (
+    tester,
+  ) async {
+    await _mount(
+      tester,
+      const HomePage(),
+      size: const Size(1180, 820),
+      safePadding: const EdgeInsets.only(top: 24, bottom: 20),
+      platform: TargetPlatform.iOS,
+    );
+    final railCard = tester.getRect(
+      find
+          .descendant(
+            of: find.byType(KurakoNavigation),
+            matching: find.byType(DecoratedBox),
+          )
+          .first,
+    );
+    final panel = tester.getRect(find.byType(ClipRRect).first);
+    final caption = tester.getSize(find.byType(WindowCaption)).height;
+    expect(railCard.top, closeTo(caption + 24 + 4, 0.5));
+    expect(panel.top, closeTo(caption + 24 + 4, 0.5));
+    expect(railCard.bottom, closeTo(820 - 20 - 2, 0.5));
+    expect(panel.bottom, closeTo(820 - 20 - 2, 0.5));
     await _unmount(tester);
   });
 

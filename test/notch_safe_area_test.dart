@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:kurako/src/ui/notch_safe_area.dart';
+import 'package:kurako/src/ui/responsive_spacing.dart';
 
 void main() {
   const symmetric = EdgeInsets.only(left: 59, right: 59, bottom: 21);
@@ -95,5 +96,32 @@ void main() {
       ),
     );
     expect(seen, symmetric);
+  });
+
+  testWidgets('wide mobile landscape trims only the extra content margin', (
+    tester,
+  ) async {
+    late double padding;
+    late double safeBottom;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.iOS),
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: Size(1180, 820),
+            padding: EdgeInsets.only(top: 24, bottom: 20),
+          ),
+          child: Builder(
+            builder: (context) {
+              padding = adaptiveBottomContentPadding(context);
+              safeBottom = MediaQuery.paddingOf(context).bottom;
+              return const SizedBox();
+            },
+          ),
+        ),
+      ),
+    );
+    expect(padding, 8);
+    expect(safeBottom, 20);
   });
 }

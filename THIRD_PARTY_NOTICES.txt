@@ -26,8 +26,8 @@ Services and design references
 
 - Bangumi API and metadata service
   https://bangumi.github.io/api/
-- bangumi-proxy by Soyorin
-  https://github.com/Yuri-NagaSaki/bangumi-proxy
+- Mirrox by sakurairo - MIT License; community-maintained Bangumi reverse proxy
+  https://bangumi.lat
 - Kazumi - GPL-3.0 License; detail-page layout reference
   https://github.com/Predidit/Kazumi
 

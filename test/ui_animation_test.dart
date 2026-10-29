@@ -333,6 +333,17 @@ void main() {
     expect(heroTagForAnime(42), isNot(heroTagForAnime(43)));
   });
 
+  test('cover hero detects a viewport rotation during flight', () {
+    expect(
+      coverHeroViewportChanged(const Size(1024, 768), const Size(768, 1024)),
+      isTrue,
+    );
+    expect(
+      coverHeroViewportChanged(const Size(1024, 768), const Size(1024, 768)),
+      isFalse,
+    );
+  });
+
   testWidgets('new episodes are marked on the library cover', (tester) async {
     const newAnime = Anime(
       id: 43,

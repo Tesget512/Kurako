@@ -102,10 +102,15 @@ class _HomePageState extends ConsumerState<HomePage> {
         size.width > size.height &&
         size.shortestSide < 600;
     final isWide = size.width >= 640;
+    final tabletLandscape =
+        platform == TargetPlatform.iOS &&
+        size.width > size.height &&
+        size.shortestSide >= 600;
     // Phone landscape is short and the system bars already take most of it, so
     // the margin the app adds itself is halved there.
-    final topGap = phoneLandscape ? 4.0 : 8.0;
-    final bottomGap = phoneLandscape ? 6.0 : 12.0;
+    final topGap = phoneLandscape || tabletLandscape ? 4.0 : 8.0;
+    final bottomGap = phoneLandscape ? 6.0 : (tabletLandscape ? 2.0 : 12.0);
+    final bottomContentGap = tabletLandscape ? 4.0 : 20.0;
     // Android's back gesture and button: away from the start page they return
     // to it first, and only from there do they leave the app.
     final backToStart =
@@ -179,6 +184,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                         expanded: _navigationExpanded,
                         topGap: topGap,
                         bottomGap: bottomGap,
+                        bottomContentGap: bottomContentGap,
                         onToggle: () => setState(
                           () => _navigationExpanded = !_navigationExpanded,
                         ),

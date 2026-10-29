@@ -116,7 +116,12 @@ class _CollectionTab extends ConsumerWidget {
     // The body extends behind the app bar, so the first row has to clear it.
     final top = MediaQuery.paddingOf(context).top;
     return GridView.builder(
-      padding: EdgeInsets.fromLTRB(inset, top + 16, inset, 24),
+      padding: EdgeInsets.fromLTRB(
+        inset,
+        top + 16,
+        inset,
+        adaptiveBottomContentPadding(context),
+      ),
       gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
         maxCrossAxisExtent: appearance.posterSize.extent,
         childAspectRatio: 0.60,

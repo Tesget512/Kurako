@@ -344,7 +344,12 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
             ),
           ),
         SliverPadding(
-          padding: EdgeInsets.fromLTRB(inset, 0, inset, 32),
+          padding: EdgeInsets.fromLTRB(
+            inset,
+            0,
+            inset,
+            adaptiveBottomContentPadding(context),
+          ),
           sliver: SliverGrid(
             gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
               maxCrossAxisExtent: ref
@@ -463,7 +468,9 @@ class _LibraryPageState extends ConsumerState<LibraryPage> {
             ),
           ),
         ],
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        SliverToBoxAdapter(
+          child: SizedBox(height: adaptiveBottomContentPadding(context)),
+        ),
       ],
     );
   }
