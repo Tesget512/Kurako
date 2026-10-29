@@ -10,10 +10,30 @@ abstract final class KurakoShapes {
   static const double dialogRadius = 28;
   static const double smallRadius = 12;
 
+  /// Corner radius between two neighbouring segments of a segmented list.
+  static const double segmentInnerRadius = 4;
+
+  /// Vertical gap that separates the segments of a segmented list.
+  static const double segmentGap = 2;
+
   /// Shape for grouped setting cards, maintenance groups and list cards.
   static final OutlinedBorder card = RoundedRectangleBorder(
     borderRadius: BorderRadius.circular(cardRadius),
   );
+
+  /// Shape of the [index]-th of [count] segments in an M3E segmented list: the
+  /// outer corners of the first and last segment are large, every corner that
+  /// faces a neighbour is small. A single segment is a plain card.
+  static OutlinedBorder segment(int index, int count) {
+    const outer = Radius.circular(cardRadius);
+    const inner = Radius.circular(segmentInnerRadius);
+    return RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(
+        top: index == 0 ? outer : inner,
+        bottom: index == count - 1 ? outer : inner,
+      ),
+    );
+  }
 
   /// Shape for a card nested inside another surface.
   static final OutlinedBorder nestedCard = RoundedRectangleBorder(

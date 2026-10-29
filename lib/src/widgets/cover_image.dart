@@ -102,6 +102,11 @@ class _RepositoryCoverState extends State<_RepositoryCover> {
   bool _revealed = true;
   bool _hasShownLoadedImage = false;
   int _generation = 0;
+  // Held while the page-push transition is still running. FadeForwards
+  // snapshots the incoming route, so a fade played during the push is frozen
+  // and the image appears abruptly when the snapshot is released.
+  bool _heldByRoute = false;
+  Animation<double>? _heldAnimation;
 
   @override
   void initState() {
@@ -118,6 +123,40 @@ class _RepositoryCoverState extends State<_RepositoryCover> {
         oldWidget.fadeIn != widget.fadeIn) {
       _load();
     }
+  }
+
+  @override
+  void dispose() {
+    _releaseRouteHold(notify: false);
+    super.dispose();
+  }
+
+  void _releaseRouteHold({required bool notify}) {
+    _heldAnimation?.removeStatusListener(_onHeldRouteStatus);
+    _heldAnimation = null;
+    if (_heldByRoute && notify && mounted) {
+      setState(() => _heldByRoute = false);
+    } else {
+      _heldByRoute = false;
+    }
+  }
+
+  void _onHeldRouteStatus(AnimationStatus status) {
+    if (status.isAnimating) return;
+    _releaseRouteHold(notify: true);
+  }
+
+  /// Called when a frame that was not available synchronously has just been
+  /// decoded. If the route is still animating, keep the image transparent until
+  /// the transition ends so the fade is actually visible.
+  void _holdForRouteIfAnimating() {
+    if (!widget.waitForRouteTransition || _heldAnimation != null) return;
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || !animation.isAnimating) return;
+    _heldAnimation = animation;
+    animation.addStatusListener(_onHeldRouteStatus);
+    // The frame builder runs during build, so apply the hold on the next tick.
+    _heldByRoute = true;
   }
 
   void _load() {
@@ -202,18 +241,33 @@ class _RepositoryCoverState extends State<_RepositoryCover> {
               color: Theme.of(context).colorScheme.surfaceContainerHighest,
             );
     }
-    return AnimatedOpacity(
-      opacity: widget.fadeIn && !_revealed ? 0 : 1,
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOutCubic,
-      child: Image.memory(
-        bytes,
-        fit: widget.fit,
-        cacheWidth: widget.cacheWidth,
-        gaplessPlayback: true,
-        errorBuilder: (context, _, _) =>
-            _fallback(context, Icons.broken_image_outlined),
-      ),
+    return Image.memory(
+      bytes,
+      fit: widget.fit,
+      cacheWidth: widget.cacheWidth,
+      gaplessPlayback: true,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        // Bytes already in memory still go through an asynchronous decode when
+        // the resized image is not in Flutter's ImageCache. Hold the image
+        // transparent until the first decoded frame exists, then fade it in;
+        // a synchronously available frame is painted at once.
+        final decoded = frame != null || wasSynchronouslyLoaded;
+        if (frame != null && !wasSynchronouslyLoaded && widget.fadeIn) {
+          _holdForRouteIfAnimating();
+        }
+        return AnimatedOpacity(
+          opacity: widget.fadeIn && (!_revealed || !decoded || _heldByRoute)
+              ? 0
+              : 1,
+          // The detail backdrop is a dim, blurred image, so a short
+          // ease-out reads as a pop. A longer, even ramp is visible.
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.easeInOutCubic,
+          child: child,
+        );
+      },
+      errorBuilder: (context, _, _) =>
+          _fallback(context, Icons.broken_image_outlined),
     );
   }
 }

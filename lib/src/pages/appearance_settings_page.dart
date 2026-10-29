@@ -56,7 +56,7 @@ class AppearanceSettingsPage extends ConsumerWidget {
           ),
           SettingsGroupCard(
             title: '显示模式',
-            dividers: false,
+            segmented: false,
             children: [
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
@@ -195,7 +195,7 @@ class AppearanceSettingsPage extends ConsumerWidget {
           ),
           SettingsGroupCard(
             title: '播放器指示条颜色',
-            dividers: false,
+            segmented: false,
             children: [
               _option(
                 ref,
