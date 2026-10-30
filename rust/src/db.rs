@@ -1230,6 +1230,72 @@ pub fn set_episode_title(anime_id: i64, ep: i64, title: &str) -> Result<()> {
     })
 }
 
+/// Align stored episode numbers with the numbers Bangumi actually uses, once
+/// the subject's episode list is known.
+///
+/// - A bracketed `A_B` pair (`[01_49]`) was stored as `B`; if Bangumi knows `A`
+///   but not `B`, the pair is really "episode A of N" and `A` wins.
+/// - A single-episode subject (a movie) has exactly one valid number. A file
+///   with no number that does not look like bonus content is that episode.
+///
+/// Returns how many rows changed. Never touches rows whose number Bangumi
+/// already recognises.
+pub fn reconcile_episode_numbers(anime_id: i64, valid: &HashSet<i64>) -> Result<usize> {
+    with_conn(|c| reconcile_episode_numbers_on(c, anime_id, valid))
+}
+
+fn reconcile_episode_numbers_on(
+    c: &Connection,
+    anime_id: i64,
+    valid: &HashSet<i64>,
+) -> Result<usize> {
+    if valid.is_empty() {
+        return Ok(0);
+    }
+    let rows = {
+        let mut stmt = c.prepare(
+            "SELECT id, file_path, file_name, episode_no FROM episodes WHERE anime_id=?1",
+        )?;
+        let rows = stmt
+            .query_map(params![anime_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        rows
+    };
+    let sole = (valid.len() == 1).then(|| *valid.iter().next().unwrap());
+    let mut changed = 0;
+    for (id, path, name, current) in rows {
+        let target = match current {
+            Some(n) if valid.contains(&n) => None,
+            Some(n) => {
+                // Only a pair-derived number is swapped, never a plain one.
+                let parsed = crate::recognize::parse_filename(&name);
+                parsed
+                    .episode_alt
+                    .filter(|a| valid.contains(a) && parsed.episode_no == Some(n))
+            }
+            None => sole.filter(|_| {
+                let parent = path.rsplit(['/', '\\']).nth(1).unwrap_or_default();
+                !crate::recognize::looks_special(&name) && !crate::recognize::looks_special(parent)
+            }),
+        };
+        if let Some(n) = target {
+            c.execute(
+                "UPDATE episodes SET episode_no=?2 WHERE id=?1",
+                params![id, n],
+            )?;
+            changed += 1;
+        }
+    }
+    Ok(changed)
+}
+
 /// Anime rows that still need a Bangumi match (no binding yet).
 pub fn unmatched_anime() -> Result<Vec<(i64, String)>> {
     with_conn(|c| {
@@ -2191,6 +2257,124 @@ mod download_tests {
         assert_eq!(episodes.len(), 2);
         assert!(episodes[0].is_downloaded);
         assert!(!episodes[1].is_downloaded);
+    }
+
+    fn insert_episode(c: &Connection, id: i64, path: &str, name: &str, episode_no: Option<i64>) {
+        c.execute(
+            "INSERT INTO episodes(id, anime_id, file_path, file_name, file_name_key, episode_no)
+             VALUES (?1, 7, ?2, ?3, ?3, ?4)",
+            params![id, path, name, episode_no],
+        )
+        .unwrap();
+    }
+
+    fn episode_no_of(c: &Connection, id: i64) -> Option<i64> {
+        c.query_row("SELECT episode_no FROM episodes WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn single_episode_subject_claims_an_unnumbered_movie_file() {
+        let c = connection();
+        c.execute("INSERT INTO anime(id, title_raw) VALUES (7, 'Kaguya')", [])
+            .unwrap();
+        let movie = "Cosmic.Princess.Kaguya.2026.1080p.NF.WEB-DL.DUAL.DDP5.1.H.264-VARYG";
+        insert_episode(
+            &c,
+            1,
+            &format!("/m/{movie}.mkv"),
+            &format!("{movie}.mkv"),
+            None,
+        );
+        insert_episode(
+            &c,
+            2,
+            &format!("/m/{movie} (1).mkv"),
+            &format!("{movie} (1).mkv"),
+            None,
+        );
+        insert_episode(&c, 3, "/m/Kaguya NCOP.mkv", "Kaguya NCOP.mkv", None);
+        insert_episode(&c, 4, "/m/特典/extra.mkv", "extra.mkv", None);
+
+        let valid = HashSet::from([1]);
+        assert_eq!(reconcile_episode_numbers_on(&c, 7, &valid).unwrap(), 2);
+        assert_eq!(episode_no_of(&c, 1), Some(1));
+        assert_eq!(episode_no_of(&c, 2), Some(1));
+        assert_eq!(episode_no_of(&c, 3), None, "NCOP stays a special");
+        assert_eq!(
+            episode_no_of(&c, 4),
+            None,
+            "files in a 特典 folder stay specials"
+        );
+    }
+
+    #[test]
+    fn multi_episode_subject_never_numbers_unnumbered_files() {
+        let c = connection();
+        c.execute("INSERT INTO anime(id, title_raw) VALUES (7, 'Show')", [])
+            .unwrap();
+        insert_episode(&c, 1, "/s/Show.mkv", "Show.mkv", None);
+        let valid: HashSet<i64> = (1..=12).collect();
+        assert_eq!(reconcile_episode_numbers_on(&c, 7, &valid).unwrap(), 0);
+        assert_eq!(episode_no_of(&c, 1), None);
+    }
+
+    #[test]
+    fn pair_falls_back_to_season_number_only_when_bangumi_lacks_the_absolute_one() {
+        let c = connection();
+        c.execute("INSERT INTO anime(id, title_raw) VALUES (7, 'Show')", [])
+            .unwrap();
+        // "[01_12]" stored as 12; a 12-episode subject numbers 1..12, so 12 is
+        // valid and stays. "[01_49]" stored as 49 against a 1..12-only list
+        // means "episode 1".
+        insert_episode(
+            &c,
+            1,
+            "/s/[G][Show][01_12][1080P].mkv",
+            "[G][Show][01_12][1080P].mkv",
+            Some(12),
+        );
+        insert_episode(
+            &c,
+            2,
+            "/s/[G][Show][02_49][1080P].mkv",
+            "[G][Show][02_49][1080P].mkv",
+            Some(49),
+        );
+        insert_episode(
+            &c,
+            3,
+            "/s/[G][Show][07][1080P].mkv",
+            "[G][Show][07][1080P].mkv",
+            Some(70),
+        );
+
+        let valid: HashSet<i64> = (1..=12).collect();
+        assert_eq!(reconcile_episode_numbers_on(&c, 7, &valid).unwrap(), 1);
+        assert_eq!(episode_no_of(&c, 1), Some(12));
+        assert_eq!(episode_no_of(&c, 2), Some(2));
+        assert_eq!(
+            episode_no_of(&c, 3),
+            Some(70),
+            "plain numbers are never swapped"
+        );
+
+        // Later season: Bangumi knows 49..60 (ep and sort), so 49 stays.
+        let c2 = connection();
+        c2.execute("INSERT INTO anime(id, title_raw) VALUES (7, 'Show')", [])
+            .unwrap();
+        insert_episode(
+            &c2,
+            1,
+            "/s/[G][Show][01_49][1080P].mkv",
+            "[G][Show][01_49][1080P].mkv",
+            Some(49),
+        );
+        let valid: HashSet<i64> = (1..=12).chain(49..=60).collect();
+        assert_eq!(reconcile_episode_numbers_on(&c2, 7, &valid).unwrap(), 0);
+        assert_eq!(episode_no_of(&c2, 1), Some(49));
     }
 
     #[test]

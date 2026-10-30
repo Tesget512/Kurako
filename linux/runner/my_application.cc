@@ -115,6 +115,13 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_set_size_request(GTK_WIDGET(window), 960, 640);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
+  // Flutter 3.47 enables Impeller on Linux by default. Its GLES backend has
+  // asserted in BlitPassGLES on NVIDIA drivers at startup, so fall back to the
+  // Skia renderer. KURAKO_IMPELLER=1 turns Impeller back on, and an explicit
+  // --enable-impeller in FLUTTER_ENGINE_SWITCHES still takes precedence.
+  const gchar* impeller_override = g_getenv("KURAKO_IMPELLER");
+  fl_dart_project_set_enable_impeller(
+      project, g_strcmp0(impeller_override, "1") == 0);
 
   FlView* view = fl_view_new(project);
   GdkRGBA background_color;

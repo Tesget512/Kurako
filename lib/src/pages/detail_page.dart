@@ -67,6 +67,11 @@ class _DetailPageState extends ConsumerState<DetailPage> {
       for (final e in episodes)
         if (e.episodeNo != null && (e.title?.trim().isEmpty ?? true))
           EpisodeTitleMarks.keyFor(widget.animeId, e.episodeNo!.toInt()),
+      // A single-episode work (a movie) whose file carries no number: the
+      // refresh numbers it, so it needs the same one-time lookup. Number 0 is
+      // not a real episode and only serves as this lookup's mark.
+      if (anime.totalEps == 1 && episodes.any((e) => e.episodeNo == null))
+        EpisodeTitleMarks.keyFor(widget.animeId, 0),
     };
     if (missing.isEmpty || !_titleBackfillTried.add(widget.animeId)) return;
     WidgetsBinding.instance.addPostFrameCallback((_) async {

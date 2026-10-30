@@ -1692,14 +1692,28 @@ async fn refresh_one(anime_id: i64, subject_id: i64, corrected: bool) -> anyhow:
     // error, not an empty list: callers record "looked up, no title" only
     // after a refresh that really reached Bangumi.
     let titles = bangumi::subject_episode_titles(subject_id, 500).await?;
-    for t in titles {
+    // Reconcile stored episode numbers against what Bangumi knows before
+    // titles are filed: "[01_49]" pairs and unnumbered single-episode movies
+    // resolve here, from the same list that supplies the titles.
+    let valid: std::collections::HashSet<i64> = bangumi::episode_title_numbers(&titles)
+        .iter()
+        .map(|(number, _)| *number)
+        .collect();
+    // A movie has one episode; its absolute number is not a second episode.
+    let sole_episode = (titles.len() == 1).then(|| titles[0].ep);
+    let reconcile_set: std::collections::HashSet<i64> = match sole_episode {
+        Some(ep) => std::iter::once(ep).collect(),
+        None => valid,
+    };
+    db::reconcile_episode_numbers(anime_id, &reconcile_set)?;
+    for (number, t) in bangumi::episode_title_numbers(&titles) {
         let title = if !t.name_cn.is_empty() {
             &t.name_cn
         } else {
             &t.name
         };
         if !title.is_empty() {
-            db::set_episode_title(anime_id, t.ep, title)?;
+            db::set_episode_title(anime_id, number, title)?;
         }
     }
     Ok(())

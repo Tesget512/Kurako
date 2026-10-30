@@ -115,14 +115,46 @@ chmod 0755 "$PACKAGE_ROOT/opt/kurako/kurako"
 # Flutter plugin CMake targets may preserve an absolute RUNPATH to the build
 # tree. Rewrite only the package copy so the verified Release bundle remains
 # untouched and installed plugins resolve the colocated Flutter engine.
+#
+# System JDK directories are not build-tree paths: libdartjni.so locates
+# libjvm.so through /usr/lib/jvm/..., so those entries must survive. Every other
+# absolute entry is dropped and $ORIGIN is always kept first.
+is_system_jvm_dir() {
+  case "$1" in
+    /usr/lib/jvm/*|/usr/lib64/jvm/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+rewrite_rpath() {
+  local current="$1" kept='$ORIGIN' entry
+  local IFS=':'
+  for entry in $current; do
+    if is_system_jvm_dir "$entry"; then
+      kept="$kept:$entry"
+    fi
+  done
+  printf '%s' "$kept"
+}
+
+# True when an RPATH still holds an absolute entry that is not a JDK path.
+has_build_tree_rpath() {
+  local entry
+  local IFS=':'
+  for entry in $1; do
+    case "$entry" in
+      /*) is_system_jvm_dir "$entry" || return 0 ;;
+    esac
+  done
+  return 1
+}
+
 while IFS= read -r -d '' elf_file; do
   if file -Lb "$elf_file" | grep -q '^ELF '; then
     elf_rpath="$(patchelf --print-rpath "$elf_file" 2>/dev/null || true)"
-    case "$elf_rpath" in
-      /*)
-        patchelf --set-rpath '$ORIGIN' "$elf_file"
-        ;;
-    esac
+    if has_build_tree_rpath "$elf_rpath"; then
+      patchelf --set-rpath "$(rewrite_rpath "$elf_rpath")" "$elf_file"
+    fi
   fi
 done < <(find "$PACKAGE_ROOT/opt/kurako" -type f -print0)
 
@@ -216,12 +248,10 @@ dpkg-deb --extract "$PACKAGE_PATH" "$AUDIT_DIR"
 while IFS= read -r -d '' elf_file; do
   if file -Lb "$elf_file" | grep -q '^ELF '; then
     elf_rpath="$(patchelf --print-rpath "$elf_file" 2>/dev/null || true)"
-    case "$elf_rpath" in
-      /*)
-        echo "Absolute ELF RPATH/RUNPATH in Debian package: $elf_file: $elf_rpath" >&2
-        exit 1
-        ;;
-    esac
+    if has_build_tree_rpath "$elf_rpath"; then
+      echo "Absolute ELF RPATH/RUNPATH in Debian package: $elf_file: $elf_rpath" >&2
+      exit 1
+    fi
   fi
 done < <(find "$AUDIT_DIR" -type f -print0)
 

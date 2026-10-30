@@ -2115,8 +2115,32 @@ struct RawEpisode {
 
 pub struct EpisodeTitle {
     pub ep: i64,
+    /// Absolute number across seasons when Bangumi reports one (`sort`). A
+    /// later season restarts `ep` at 1 while releases keep counting on.
+    pub sort: Option<i64>,
     pub name: String,
     pub name_cn: String,
+}
+
+fn whole_number(v: f64) -> Option<i64> {
+    (v.is_finite() && v > 0.0 && v.fract() == 0.0 && v < i64::MAX as f64).then_some(v as i64)
+}
+
+/// Numbers a title should be filed under: every `ep` first, then each `sort`
+/// that no `ep` already claims. Both numbering schemes name real files, but an
+/// `ep` match must never be displaced by another episode's `sort`.
+pub fn episode_title_numbers(titles: &[EpisodeTitle]) -> Vec<(i64, &EpisodeTitle)> {
+    let claimed: std::collections::HashSet<i64> = titles.iter().map(|t| t.ep).collect();
+    let mut out: Vec<(i64, &EpisodeTitle)> = titles.iter().map(|t| (t.ep, t)).collect();
+    let mut seen = claimed.clone();
+    for t in titles {
+        if let Some(s) = t.sort.filter(|s| *s != t.ep && !claimed.contains(s)) {
+            if seen.insert(s) {
+                out.push((s, t));
+            }
+        }
+    }
+    out
 }
 
 /// Fetch episode titles for a subject's main episodes (type=0).
@@ -2153,15 +2177,10 @@ async fn subject_episode_titles_at(
                 .filter_map(|e| {
                     let number = e.ep.filter(|n| *n > 0.0).or(e.sort)?;
                     // Never turn episode 12.5 into episode 12's title.
-                    if !number.is_finite()
-                        || number <= 0.0
-                        || number.fract() != 0.0
-                        || number >= i64::MAX as f64
-                    {
-                        return None;
-                    }
+                    let number = whole_number(number)?;
                     Some(EpisodeTitle {
-                        ep: number as i64,
+                        ep: number,
+                        sort: e.sort.and_then(whole_number),
                         name: e.name.trim().to_owned(),
                         name_cn: e.name_cn.trim().to_owned(),
                     })
@@ -2221,6 +2240,51 @@ mod episode_title_tests {
             .unwrap();
         assert_eq!(titles.iter().map(|t| t.ep).collect::<Vec<_>>(), [2, 3]);
         assert_eq!(server.requests().len(), 1);
+    }
+
+    fn title(ep: i64, sort: Option<i64>, name: &str) -> EpisodeTitle {
+        EpisodeTitle {
+            ep,
+            sort,
+            name: name.into(),
+            name_cn: String::new(),
+        }
+    }
+
+    #[test]
+    fn later_season_titles_are_filed_under_ep_and_absolute_numbers() {
+        // Subject 568244: ep 1..12 carries sort 49..60.
+        let titles: Vec<_> = (1..=12)
+            .map(|n| title(n, Some(n + 48), &format!("t{n}")))
+            .collect();
+        let numbers = episode_title_numbers(&titles);
+        assert_eq!(numbers.len(), 24);
+        let find = |n: i64| {
+            numbers
+                .iter()
+                .find(|(k, _)| *k == n)
+                .unwrap()
+                .1
+                .name
+                .clone()
+        };
+        assert_eq!(find(1), "t1");
+        assert_eq!(find(49), "t1");
+        assert_eq!(find(60), "t12");
+    }
+
+    #[test]
+    fn sort_never_displaces_another_episodes_ep() {
+        // Episode 2 has sort 1 while episode 1 owns ep 1.
+        let titles = vec![title(1, Some(1), "a"), title(2, Some(1), "b")];
+        let numbers = episode_title_numbers(&titles);
+        assert_eq!(numbers.len(), 2);
+        assert_eq!(numbers.iter().find(|(k, _)| *k == 1).unwrap().1.name, "a");
+        // Two episodes sharing one sort: the first wins, no duplicate keys.
+        let titles = vec![title(1, Some(9), "a"), title(2, Some(9), "b")];
+        let numbers = episode_title_numbers(&titles);
+        assert_eq!(numbers.iter().filter(|(k, _)| *k == 9).count(), 1);
+        assert_eq!(numbers.iter().find(|(k, _)| *k == 9).unwrap().1.name, "a");
     }
 
     #[tokio::test]

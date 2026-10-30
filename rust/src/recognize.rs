@@ -8,6 +8,10 @@ use unicode_normalization::UnicodeNormalization;
 pub struct ParsedName {
     pub title: String,
     pub episode_no: Option<i64>,
+    /// The other number of a bracketed `A_B` pair (season-relative `A`) when
+    /// `episode_no` took `B`. Lets metadata refresh fall back to `A` if
+    /// Bangumi does not know `B`.
+    pub episode_alt: Option<i64>,
     pub resolution: Option<String>,
     pub release_group: Option<String>,
 }
@@ -123,6 +127,31 @@ static RE_AMBIGUOUS_EPISODE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)(?:^|[^0-9])(?:ep(?:isode)?\s*)?\d{1,4}\s*(?:[-~～]|\.)\s*\d{1,4}(?:[^0-9]|$)")
         .unwrap()
 });
+// A bracket holding exactly two short numbers joined by an underscore, as in
+// "[01_49]" (season-relative number, then absolute number).
+static RE_EPISODE_PAIR: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[(\d{1,4})_(\d{1,4})\]").unwrap());
+
+// Whole-token markers (after trailing digits are removed) for bonus content.
+const SPECIAL_TOKENS: &[&str] = &[
+    "nc", "ncop", "nced", "op", "ed", "sp", "sps", "ova", "oad", "oav", "pv", "cm", "menu",
+    "preview", "trailer", "special", "specials", "extra", "extras", "bonus", "scan", "scans",
+];
+const SPECIAL_CJK: &[&str] = &[
+    "特典", "特別", "特别", "预告", "預告", "花絮", "番外", "片头", "片尾", "菜单", "菜單",
+];
+
+/// Whether a file name (or folder segment) names bonus content rather than a
+/// main episode: creditless OP/ED, PV, menus, OVA, specials and so on.
+pub fn looks_special(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    if SPECIAL_CJK.iter().any(|m| lower.contains(m)) {
+        return true;
+    }
+    lower
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|t| t.trim_end_matches(|c: char| c.is_ascii_digit()))
+        .any(|t| !t.is_empty() && SPECIAL_TOKENS.contains(&t))
+}
 
 const WEAK_SUBTITLE_TITLES: &[&str] = &["ep", "episode", "video", "subtitle", "sub"];
 
@@ -281,9 +310,24 @@ pub fn parse_stem(input: &str) -> ParsedName {
         episode = None;
     }
 
+    // "[01_49]": anitomy reads no episode from an underscore pair. Take the
+    // absolute number (what Bangumi shows) and keep the first as a fallback.
+    let mut episode_alt = None;
+    if episode.is_none() && !RE_SPECIAL_MARK.is_match(&input) {
+        if let Some(c) = RE_EPISODE_PAIR.captures(&input) {
+            let a: i64 = c[1].parse().unwrap_or(0);
+            let b: i64 = c[2].parse().unwrap_or(0);
+            if a >= 1 && b > a && !(1900..=2100).contains(&b) {
+                episode = Some(b);
+                episode_alt = Some(a);
+            }
+        }
+    }
+
     ParsedName {
         title: clean_title,
         episode_no: episode,
+        episode_alt,
         resolution,
         release_group,
     }
@@ -544,6 +588,61 @@ pub fn group_key(title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paired_season_and_absolute_episode_takes_the_absolute_number() {
+        // BeanSub tags season-relative and absolute numbers as "[01_49]".
+        // anitomy reads no episode from it, which dumped the file into the
+        // specials bucket.
+        let p =
+            parse_filename("[BeanSub][Kusuriya no Hitorigoto S3][01_49][CHS][1080P][x264_AAC].mp4");
+        assert_eq!(p.episode_no, Some(49), "{p:?}");
+        assert_eq!(p.episode_alt, Some(1), "{p:?}");
+        let p =
+            parse_filename("[BeanSub][Kusuriya no Hitorigoto S3][01_52][CHS][1080P][x264_AAC].mp4");
+        assert_eq!(p.episode_no, Some(52), "{p:?}");
+        // Same grouping key as the plain form, so both land in one entry.
+        let plain =
+            parse_filename("[BeanSub][Kusuriya no Hitorigoto S3][49][CHS][1080P][x264_AAC].mp4");
+        assert_eq!(group_key(&p.title), group_key(&plain.title));
+        assert_eq!(plain.episode_no, Some(49));
+        assert_eq!(plain.episode_alt, None);
+    }
+
+    #[test]
+    fn bracketed_pairs_that_are_not_episode_pairs_are_left_alone() {
+        // Codec/audio tags use underscores too; only a bracket holding two
+        // short numbers counts.
+        let p = parse_filename("[Grp][Show][1080P][x264_AAC].mkv");
+        assert_eq!(p.episode_no, None, "{p:?}");
+        // A descending pair is not "season then absolute".
+        let p = parse_filename("[Grp][Show][12_01][1080P].mkv");
+        assert_eq!(p.episode_no, None, "{p:?}");
+        // A pair never overrides an episode anitomy already found.
+        let p = parse_filename("[Grp] Show - 07 [01_49][1080P].mkv");
+        assert_eq!(p.episode_no, Some(7), "{p:?}");
+    }
+
+    #[test]
+    fn special_name_detection_covers_bonus_content() {
+        for name in [
+            "[Grp][Show][NCOP][1080P].mkv",
+            "Show NCED 1080p.mkv",
+            "Show.PV.1080p.mkv",
+            "Show OVA 1080p.mkv",
+            "Show 特典映像.mkv",
+            "Show Menu.mkv",
+        ] {
+            assert!(looks_special(name), "{name}");
+        }
+        for name in [
+            "Cosmic.Princess.Kaguya.2026.1080p.NF.WEB-DL.DUAL.DDP5.1.H.264-VARYG.mkv",
+            "Cosmic.Princess.Kaguya.2026.1080p.NF.WEB-DL.DUAL.DDP5.1.H.264-VARYG (1).mkv",
+            "[Grp] Opening Night Movie [1080p].mkv",
+        ] {
+            assert!(!looks_special(name), "{name}");
+        }
+    }
 
     #[test]
     fn year_in_movie_filename_is_not_episode() {

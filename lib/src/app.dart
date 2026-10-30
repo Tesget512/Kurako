@@ -18,6 +18,7 @@ import 'widgets/update_banner.dart';
 import 'ui/theme.dart';
 import 'ui/app_viewport.dart';
 import 'ui/notch_safe_area.dart';
+import 'ui/window_resize_border.dart';
 
 /// Dev-only acceptance switch: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
 const kMirrorOAuthAcceptanceEnabled = bool.fromEnvironment(
@@ -59,6 +60,7 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
     with WidgetsBindingObserver, WindowListener {
   Timer? _windowSizeSaveDebounce;
   bool _windowMaximized = false;
+  bool _windowFullScreen = false;
   bool _windowShown = false;
 
   @override
@@ -167,15 +169,21 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
 
   @override
   void onWindowMaximize() {
-    _windowMaximized = true;
+    setState(() => _windowMaximized = true);
     unawaited(_saveMaximizedFlag(true));
   }
 
   @override
   void onWindowUnmaximize() {
-    _windowMaximized = false;
+    setState(() => _windowMaximized = false);
     unawaited(_saveMaximizedFlag(false));
   }
+
+  @override
+  void onWindowEnterFullScreen() => setState(() => _windowFullScreen = true);
+
+  @override
+  void onWindowLeaveFullScreen() => setState(() => _windowFullScreen = false);
 
   /// Dev-only acceptance driver: `--dart-define=KURAKO_MIRROR_OAUTH_ACCEPTANCE=true`.
   ///
@@ -326,13 +334,22 @@ class _AnimeBdAppState extends ConsumerState<AnimeBdApp>
             // once third_party/media_kit_video moves to material_ui (stage D).
             // ignore: deprecated_member_use
             content = MaterialUiCompatibilityBridge(child: content);
-            return NotchSafeArea(
+            Widget app = NotchSafeArea(
               child: AppViewport(
                 desktop: _isDesktopPlatform,
                 scalePercent: scalePercent,
                 child: content,
               ),
             );
+            // GTK drops the native resize edges with the title bar, so the
+            // undecorated Linux window needs its own border handles.
+            if (Platform.isLinux) {
+              app = WindowResizeBorder(
+                enabled: !_windowMaximized && !_windowFullScreen,
+                child: app,
+              );
+            }
+            return app;
           },
         );
       },
