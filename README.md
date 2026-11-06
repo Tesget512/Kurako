@@ -97,4 +97,6 @@ Kurako 离不开以下开源项目与公共服务，感谢它们的维护者和�
 
 同时感谢项目依赖的其他 Flutter packages、Rust crates 和各平台开源组件。完整第三方许可与来源见 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。
 
+感谢 [LINUX DO](https://linux.do/) 社区的支持。
+
 开发过程中使用了 Claude Sonnet 5.5、OpenAI Codex 等 AI 编程工具辅助实现与审查；相关提交保留实际参与工具的 `Co-authored-by` 记录。
